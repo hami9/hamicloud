@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hamicloud.dev/schemas/events/workload.reconciliation.requested.v1.json",
+  "title": "WorkloadReconciliationRequestedV1",
+  "type": "object",
+  "required": [
+    "event_id",
+    "timestamp",
+    "workspace_id",
+    "resource_type",
+    "resource_id",
+    "target_generation"
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "workspace_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "resource_type": {
+      "type": "string",
+      "enum": ["JOB_ATTEMPT", "SERVICE_RELEASE"]
+    },
+    "resource_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "target_generation": {
+      "type": "integer",
+      "minimum": 1
+    }
+  },
+  "additionalProperties": false
+}

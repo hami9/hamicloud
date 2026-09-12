@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hamicloud.dev/schemas/events/job.submitted.v1.json",
+  "title": "JobSubmittedV1",
+  "type": "object",
+  "required": [
+    "event_id",
+    "timestamp",
+    "workspace_id",
+    "job_id",
+    "name",
+    "image_digest"
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "workspace_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "job_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "name": {
+      "type": "string"
+    },
+    "image_digest": {
+      "type": "string"
+    },
+    "command_args": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "timeout_seconds": {
+      "type": "integer",
+      "default": 600
+    },
+    "max_retries": {
+      "type": "integer",
+      "default": 3
+    }
+  },
+  "additionalProperties": false
+}

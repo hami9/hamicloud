@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  python-checks:
+    name: Python Lint & Tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: hamicloud
+          POSTGRES_PASSWORD: hamicloud_secret
+          POSTGRES_DB: hamicloud
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e "./apps/api[dev]"
+
+      - name: Run Ruff Lint
+        run: |
+          ruff check apps/api
+
+      - name: Run Alembic Migrations
+        env:
+          DATABASE_URL_SYNC: postgresql://hamicloud:hamicloud_secret@localhost:5432/hamicloud
+        run: |
+          alembic -c migrations/alembic.ini upgrade head
+
+      - name: Run Pytest
+        env:
+          DATABASE_URL: postgresql+asyncpg://hamicloud:hamicloud_secret@localhost:5432/hamicloud
+          DATABASE_URL_SYNC: postgresql://hamicloud:hamicloud_secret@localhost:5432/hamicloud
+        run: |
+          pytest apps/api/tests/ -v
+
+  go-checks:
+    name: Go Build & Concurrency Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go 1.23
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache-dependency-path: runtime/go.sum
+
+      - name: Verify Go format and vet
+        run: |
+          cd runtime
+          go vet ./...
+
+      - name: Run Go tests with race detector
+        run: |
+          cd runtime
+          go test -v -race ./...
+
+      - name: Build Go binaries
+        run: |
+          cd runtime
+          CGO_ENABLED=0 go build -o ../bin/hamicloud-scheduler ./cmd/hamicloud-scheduler
+          CGO_ENABLED=0 go build -o ../bin/hamicloud-executor ./cmd/hamicloud-executor

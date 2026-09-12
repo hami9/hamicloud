@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hamicloud.dev/schemas/events/app.deployment.requested.v1.json",
+  "title": "AppDeploymentRequestedV1",
+  "type": "object",
+  "required": [
+    "event_id",
+    "timestamp",
+    "workspace_id",
+    "application_id",
+    "release_id",
+    "generation",
+    "image_digest"
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "workspace_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "application_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "release_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "generation": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "image_digest": {
+      "type": "string"
+    },
+    "port": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535,
+      "default": 8080
+    },
+    "health_path": {
+      "type": "string",
+      "default": "/healthz"
+    }
+  },
+  "additionalProperties": false
+}

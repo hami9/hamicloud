@@ -1,0 +1,540 @@
+openapi: 3.1.0
+info:
+  title: HamiCloud Control Plane API
+  description: Authoritative public API contract for HamiCloud distributed application runtime.
+  version: 1.0.0
+servers:
+  - url: /v1
+    description: Control Plane API v1
+
+paths:
+  /healthz:
+    get:
+      summary: Liveness probe
+      operationId: getHealth
+      responses:
+        '200':
+          description: Control API is alive
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /readyz:
+    get:
+      summary: Readiness probe
+      operationId: getReadiness
+      responses:
+        '200':
+          description: Control API is ready to accept requests
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessResponse'
+        '503':
+          description: Dependencies not ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /workspaces:
+    post:
+      summary: Create a new workspace
+      operationId: createWorkspace
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateWorkspaceRequest'
+      responses:
+        '201':
+          description: Workspace created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '409':
+          $ref: '#/components/responses/409Conflict'
+
+  /workspaces/{workspace_id}/apps:
+    post:
+      summary: Create an application in workspace
+      operationId: createApplication
+      parameters:
+        - name: workspace_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateApplicationRequest'
+      responses:
+        '201':
+          description: Application registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApplicationResponse'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /apps/{app_id}/deployments:
+    post:
+      summary: Deploy a new release for an application
+      operationId: deployRelease
+      parameters:
+        - name: app_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeployReleaseRequest'
+      responses:
+        '202':
+          description: Deployment accepted for reconciliation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AcceptedOperationResponse'
+        '409':
+          $ref: '#/components/responses/409Conflict'
+
+  /apps/{app_id}/rollbacks:
+    post:
+      summary: Roll back application to a previous healthy release
+      operationId: rollbackRelease
+      parameters:
+        - name: app_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RollbackRequest'
+      responses:
+        '202':
+          description: Rollback accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AcceptedOperationResponse'
+
+  /workspaces/{workspace_id}/jobs:
+    post:
+      summary: Submit a finite background job
+      operationId: submitJob
+      parameters:
+        - name: workspace_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmitJobRequest'
+      responses:
+        '202':
+          description: Job accepted and queued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AcceptedOperationResponse'
+        '409':
+          $ref: '#/components/responses/409Conflict'
+        '429':
+          $ref: '#/components/responses/429RateLimited'
+
+  /jobs/{job_id}:
+    get:
+      summary: Inspect job status and attempt history
+      operationId: getJob
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Job details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobDetailsResponse'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /jobs/{job_id}/cancel:
+    post:
+      summary: Request graceful cancellation of an active job
+      operationId: cancelJob
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '202':
+          description: Cancellation requested
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AcceptedOperationResponse'
+
+  /jobs/{job_id}/reruns:
+    post:
+      summary: Re-run a failed job as a new linked logical job
+      operationId: rerunJob
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '202':
+          description: New re-run job created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AcceptedOperationResponse'
+
+  /operations/{operation_id}/events:
+    get:
+      summary: Server-Sent Events (SSE) stream for operation logs and events
+      operationId: streamOperationEvents
+      parameters:
+        - name: operation_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: Last-Event-ID
+          in: header
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Real-time event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+
+components:
+  responses:
+    400BadRequest:
+      description: Invalid request payload
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    404NotFound:
+      description: Resource not found or not in workspace
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    409Conflict:
+      description: State conflict or idempotency key mismatch
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    429RateLimited:
+      description: Workspace quota or rate limit exceeded
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  schemas:
+    HealthResponse:
+      type: object
+      required: [status, version, timestamp]
+      properties:
+        status:
+          type: string
+          example: ok
+        version:
+          type: string
+          example: 0.1.0
+        timestamp:
+          type: string
+          format: date-time
+
+    ReadinessResponse:
+      type: object
+      required: [ready, database, redis, timestamp]
+      properties:
+        ready:
+          type: boolean
+          example: true
+        database:
+          type: boolean
+          example: true
+        redis:
+          type: boolean
+          example: true
+        timestamp:
+          type: string
+          format: date-time
+
+    ErrorResponse:
+      type: object
+      required: [error_code, message, correlation_id]
+      properties:
+        error_code:
+          type: string
+          example: WORKSPACE_QUOTA_EXCEEDED
+        message:
+          type: string
+          example: Concurrent job quota limit reached for workspace.
+        correlation_id:
+          type: string
+          example: req_01HVG...
+        details:
+          type: object
+          additionalProperties: true
+
+    CreateWorkspaceRequest:
+      type: object
+      required: [name, slug]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        slug:
+          type: string
+          pattern: '^[a-z0-9-]+$'
+          minLength: 3
+          maxLength: 100
+
+    WorkspaceResponse:
+      type: object
+      required: [id, name, slug, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        slug:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    CreateApplicationRequest:
+      type: object
+      required: [name, slug, workload_type]
+      properties:
+        name:
+          type: string
+          maxLength: 100
+        slug:
+          type: string
+          pattern: '^[a-z0-9-]+$'
+        workload_type:
+          type: string
+          enum: [HTTP_SERVICE]
+
+    ApplicationResponse:
+      type: object
+      required: [id, workspace_id, name, slug, workload_type, desired_generation, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        workspace_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        slug:
+          type: string
+        workload_type:
+          type: string
+        desired_generation:
+          type: integer
+        current_release_id:
+          type: string
+          format: uuid
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    DeployReleaseRequest:
+      type: object
+      required: [image_digest, port]
+      properties:
+        image_digest:
+          type: string
+          example: "registry.example.com/app@sha256:7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069"
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+          example: 8080
+        health_path:
+          type: string
+          default: "/healthz"
+          example: "/healthz"
+        env_vars:
+          type: object
+          additionalProperties:
+            type: string
+        cpu_limit:
+          type: string
+          default: "500m"
+        memory_limit:
+          type: string
+          default: "512Mi"
+
+    AcceptedOperationResponse:
+      type: object
+      required: [operation_id, status, status_url]
+      properties:
+        operation_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [ACCEPTED]
+          example: ACCEPTED
+        status_url:
+          type: string
+          example: "/v1/operations/01HVG89..."
+
+    RollbackRequest:
+      type: object
+      required: [target_release_id]
+      properties:
+        target_release_id:
+          type: string
+          format: uuid
+
+    SubmitJobRequest:
+      type: object
+      required: [name, image_digest]
+      properties:
+        name:
+          type: string
+          maxLength: 100
+        image_digest:
+          type: string
+          example: "registry.example.com/worker@sha256:4b227777d4dd1fc61c6f884f48641d02b4d121d3fd328cb08b5531fcacdabf8a"
+        command_args:
+          type: array
+          items:
+            type: string
+          default: []
+        env_vars:
+          type: object
+          additionalProperties:
+            type: string
+          default: {}
+        timeout_seconds:
+          type: integer
+          default: 600
+          maximum: 3600
+        max_retries:
+          type: integer
+          default: 3
+          maximum: 5
+
+    JobAttemptItem:
+      type: object
+      required: [attempt_number, state, lease_epoch]
+      properties:
+        attempt_number:
+          type: integer
+        state:
+          type: string
+          enum: [QUEUED, ADMITTED, STARTING, RUNNING, SUCCEEDED, RETRY_WAIT, FAILED, CANCEL_REQUESTED, CANCELLED]
+        resource_uid:
+          type: string
+          nullable: true
+        lease_epoch:
+          type: integer
+        exit_code:
+          type: integer
+          nullable: true
+        failure_reason:
+          type: string
+          nullable: true
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+        finished_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    JobDetailsResponse:
+      type: object
+      required: [id, workspace_id, name, state, current_attempt_number, attempts, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        workspace_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        state:
+          type: string
+          enum: [QUEUED, ADMITTED, STARTING, RUNNING, SUCCEEDED, RETRY_WAIT, FAILED, CANCEL_REQUESTED, CANCELLED]
+        current_attempt_number:
+          type: integer
+        attempts:
+          type: array
+          items:
+            $ref: '#/components/schemas/JobAttemptItem'
+        created_at:
+          type: string
+          format: date-time

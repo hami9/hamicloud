@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hamicloud.dev/schemas/events/job.attempt.succeeded.v1.json",
+  "title": "JobAttemptSucceededV1",
+  "type": "object",
+  "required": [
+    "event_id",
+    "timestamp",
+    "workspace_id",
+    "job_id",
+    "attempt_id",
+    "attempt_number",
+    "exit_code"
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "workspace_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "job_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "attempt_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "attempt_number": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "exit_code": {
+      "type": "integer",
+      "const": 0
+    },
+    "artifact_url": {
+      "type": "string",
+      "format": "uri"
+    }
+  },
+  "additionalProperties": false
+}

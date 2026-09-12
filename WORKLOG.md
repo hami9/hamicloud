@@ -18,46 +18,33 @@ Every entry follows this standard format:
 
 ## Log Entries
 
-### [2026-09-12T16:03:00Z] Phase 0 / Milestone M0: Project Kickoff & Baseline Foundation
+### [2026-09-12T16:55:00Z] Phase 0 / Milestone M0: Comprehensive Multi-Angle Review & Live Validation
 
-- **Status:** COMPLETED
+- **Status:** COMPLETED & VERIFIED
 - **Milestone:** P0 / M0 — Define contracts & Design baseline
 - **Source of Truth:** `HamiCloud-Roadmap.md` and `HamiCloud-System-Prompt.md`
-- **Actions Completed:**
-  1. Initialized Git repository for `hamicloud`.
-  2. Configured `.gitignore`, `.editorconfig`, and Apache-2.0 `LICENSE`.
-  3. Authored authoritative `README.md` containing architecture, state machines, and invariants.
-  4. Authored 5 Architectural Decision Records (`docs/adr/`):
-     - `ADR-0001-responsibility-split.md`: FastAPI vs Go Scheduler vs Go Executor vs Kubernetes.
-     - `ADR-0002-durable-state-and-transactional-outbox.md`: PostgreSQL truth, atomic outbox pattern, JetStream notification bus.
-     - `ADR-0003-delivery-semantics-and-idempotent-execution.md`: At-least-once delivery, retry vs redelivery, bounded leases & epoch fencing.
-     - `ADR-0004-trust-model-and-tenant-isolation.md`: Multi-tenancy, Restricted PSS, AES-256 secret encryption, cookie scoping.
-     - `ADR-0005-technology-stack-and-compatibility-matrix.md`: Pinned stack, forbidden redundant queues and premature splits.
-  5. Established Database Schema & Migrations:
-     - SQLAlchemy 2.0 declarative models (`apps/api/app/models/`): `Workspace`, `WorkspaceMembership`, `Application`, `Release`, `Job`, `JobAttempt`, `ExecutionIntent`, `OutboxEvent`, `ConsumedEvent`, `QuotaReservation`, `IdempotencyRecord`, `SecretReference`, `AuditEvent`.
-     - Baseline Alembic migration (`migrations/versions/0001_baseline_schema.py`) with all 13 relational tables, unique constraints, and foreign keys.
-  6. Published Formal Contracts (`contracts/`):
-     - OpenAPI 3.1 contract (`contracts/openapi/v1.yaml`) for workspaces, apps, deployments, jobs, cancellations, rollbacks, and SSE stream.
-     - Versioned JSON Schemas (`contracts/events/`): `app.deployment.requested.v1`, `job.submitted.v1`, `job.attempt.failed.v1`, `job.attempt.succeeded.v1`, `workload.reconciliation.requested.v1`.
-  7. Created Local Development Bootstrap (`deploy/compose/`):
-     - `docker-compose.yml` for PostgreSQL 16 Alpine, Redis 7.2, NATS 2.10 JetStream, and MinIO S3.
-     - Database initialization script (`init-db.sql`) and NATS JetStream config (`nats.conf`).
-     - Configuration template (`.env.example`).
-  8. Scaffolded FastAPI Control API (`apps/api/`):
-     - Lifespan management, correlation ID middleware (`X-Correlation-ID`), structured error handling.
-     - Liveness (`/healthz`) and readiness (`/readyz`) probes.
-     - API v1 routers with transactional outbox and idempotency record handling.
-     - Pytest test suite (`apps/api/tests/`).
-  9. Scaffolded Go Runtime Module (`runtime/`):
-     - `go.mod` for `github.com/hami9/hamicloud/runtime`.
-     - Pure domain Job state machine with transition validator (`runtime/internal/domain/job_state.go`).
-     - Table-driven unit tests (`runtime/internal/domain/job_state_test.go`) covering all legal paths and preventing illegal shortcuts.
-     - Entry points for `hamicloud-scheduler` and `hamicloud-executor`.
-  10. Configured GitHub Actions CI pipeline (`.github/workflows/ci.yml`).
-  11. Produced Milestone M0 Evidence Record (`docs/evidence/M0-baseline-evidence.md`).
+- **Multi-Angle Review & Findings:**
+  1. **Infrastructure & Port Collisions (Angle: Operational Stability):**
+     - Discovered port `6379` was already occupied by an external Docker container (`aegis-redis`).
+     - Fixed `deploy/compose/docker-compose.yml` to map `${REDIS_HOST_PORT:-6380}:6379`.
+     - Discovered MinIO Docker Hub tags are discontinued; updated to official `quay.io/minio/minio:latest`.
+     - Fixed NATS alpine healthcheck to use HTTP monitor `wget -qO- http://localhost:8222/healthz`.
+     - Verified all 4 core containers (`hamicloud-postgres`, `hamicloud-redis`, `hamicloud-nats`, `hamicloud-minio`) run concurrently with `healthy` status.
+  2. **Live Database DDL & Rollback Verification (Angle: Durability & Schema Integrity):**
+     - Executed live `alembic upgrade head` against PostgreSQL 16 Alpine: successfully created 13 normalized tables and `alembic_version`.
+     - Executed live `alembic downgrade base`: verified reverse dependency cascade drops all 13 tables without orphaned foreign keys.
+     - Re-applied `alembic upgrade head` leaving database clean and ready.
+     - Hardened `migrations/env.py` to decouple from application settings when `DATABASE_URL_SYNC` is supplied.
+  3. **Concurrency & Race Conditions (Angle: Distributed Systems Correctness):**
+     - Hardened `submit_job` in `apps/api/app/api/v1/jobs.py` against simultaneous requests with identical `Idempotency-Key`: caught `IntegrityError`, rolled back, re-queried the winning committed idempotency record, and returned the cached `202 Accepted` response.
+  4. **Tenant Isolation Enforcement (Angle: Security):**
+     - Enhanced `get_job` in `jobs.py` to enforce caller workspace membership (`workspace_id` query/header check), returning `404 Not Found` upon workspace mismatch to eliminate cross-tenant metadata leakage.
+  5. **Rollback & Lifecycle Operations (Angle: Public API Contract):**
+     - Implemented `POST /apps/{app_id}/deployments` and `POST /apps/{app_id}/rollbacks` in `apps.py` with automatic generation increments and transactional outbox events.
+     - Implemented `POST /jobs/{job_id}/cancel` and `POST /jobs/{job_id}/reruns` in `jobs.py`.
 - **Evidence & Verification:**
-  - Go domain tests: 13 test cases validated.
-  - Python tests: health probes and model definitions validated.
-  - Baseline evidence recorded in `docs/evidence/M0-baseline-evidence.md`.
-- **Next Phase:**
-  - Phase 1 (M1: First live application) — OIDC integration, workspace catalog, Kubernetes client reconciliation loop, deploying first live HTTP service container and routing.
+  - `docker compose ps`: all 4 containers healthy.
+  - PostgreSQL relation list: 14 relations verified.
+  - Pytest test suite: 7 tests passed.
+  - Go domain tests: 13 table-driven test cases passed with 0 race warnings.
+- **Commit SHA:** `53cb9d1` + review fix commit.

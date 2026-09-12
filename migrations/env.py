@@ -10,7 +10,6 @@ api_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "apps", 
 if api_dir not in sys.path:
     sys.path.insert(0, api_dir)
 
-from app.core.config import settings
 from app.models import Base
 
 # this is the Alembic Config object, which provides
@@ -26,7 +25,13 @@ target_metadata = Base.metadata
 
 
 def get_url() -> str:
-    return os.getenv("DATABASE_URL_SYNC", settings.DATABASE_URL_SYNC)
+    if "DATABASE_URL_SYNC" in os.environ and os.environ["DATABASE_URL_SYNC"]:
+        return os.environ["DATABASE_URL_SYNC"]
+    try:
+        from app.core.config import settings
+        return settings.DATABASE_URL_SYNC
+    except Exception:
+        return "postgresql://hamicloud:hamicloud_secret@localhost:5432/hamicloud"
 
 
 def run_migrations_offline() -> None:

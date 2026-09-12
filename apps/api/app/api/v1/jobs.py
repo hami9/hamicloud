@@ -3,8 +3,9 @@ import json
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
@@ -44,14 +45,12 @@ async def submit_job(
     existing_idemp = (await db.execute(idemp_stmt)).scalar_one_or_none()
     if existing_idemp:
         if existing_idemp.request_hash == payload_hash:
-            # Same request: return stored idempotent response
             return AcceptedOperationResponse(
                 operation_id=uuid.UUID(existing_idemp.response_body["operation_id"]),
                 status=existing_idemp.response_body["status"],
                 status_url=existing_idemp.response_body["status_url"],
             )
         else:
-            # Reused key with different payload: 409 Conflict
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Idempotency key reused with different request payload",
@@ -121,8 +120,23 @@ async def submit_job(
     )
     db.add(idemp_record)
 
-    # Commit single atomic transaction
-    await db.commit()
+    # Commit single atomic transaction with race condition handling
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        # Handle concurrent submission with the exact same idempotency key
+        concurrent_idemp = (await db.execute(idemp_stmt)).scalar_one_or_none()
+        if concurrent_idemp and concurrent_idemp.request_hash == payload_hash:
+            return AcceptedOperationResponse(
+                operation_id=uuid.UUID(concurrent_idemp.response_body["operation_id"]),
+                status=concurrent_idemp.response_body["status"],
+                status_url=concurrent_idemp.response_body["status_url"],
+            )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Concurrent idempotency conflict detected",
+        )
 
     return AcceptedOperationResponse(
         operation_id=job_id,
@@ -138,6 +152,8 @@ async def submit_job(
 )
 async def get_job(
     job_id: uuid.UUID,
+    workspace_id: Optional[uuid.UUID] = Query(None, description="Workspace ID for tenant isolation"),
+    x_workspace_id: Optional[str] = Header(None, alias="X-Workspace-ID"),
     db: AsyncSession = Depends(get_db),
 ) -> JobDetailsResponse:
     stmt = select(Job).where(Job.id == job_id)
@@ -147,6 +163,24 @@ async def get_job(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Job not found",
+        )
+
+    # Tenant isolation check
+    expected_ws_id = workspace_id
+    if not expected_ws_id and x_workspace_id:
+        try:
+            expected_ws_id = uuid.UUID(x_workspace_id)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid X-Workspace-ID header format",
+            )
+
+    if expected_ws_id and job.workspace_id != expected_ws_id:
+        # Prevent cross-tenant information leakage (return 404 per security guidelines)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job not found in specified workspace",
         )
 
     # Load attempts
@@ -178,4 +212,122 @@ async def get_job(
             for att in attempts
         ],
         created_at=job.created_at,
+    )
+
+
+@router.post(
+    "/jobs/{job_id}/cancel",
+    response_model=AcceptedOperationResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def cancel_job(
+    job_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+) -> AcceptedOperationResponse:
+    stmt = select(Job).where(Job.id == job_id)
+    job = (await db.execute(stmt)).scalar_one_or_none()
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job not found",
+        )
+
+    # Terminal jobs cannot be cancelled
+    if job.state in (JobState.SUCCEEDED, JobState.FAILED, JobState.CANCELLED):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Cannot cancel job in terminal state '{job.state.value}'",
+        )
+
+    job.state = JobState.CANCEL_REQUESTED
+
+    # Insert outbox event for cancellation
+    event_id = uuid.uuid4()
+    outbox_event = OutboxEvent(
+        event_id=event_id,
+        topic="job.cancellation.requested.v1",
+        payload_json={
+            "event_id": str(event_id),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "workspace_id": str(job.workspace_id),
+            "job_id": str(job.id),
+        },
+        headers_json={},
+        status=OutboxStatus.PENDING,
+    )
+    db.add(outbox_event)
+    await db.commit()
+
+    return AcceptedOperationResponse(
+        operation_id=job.id,
+        status="ACCEPTED",
+        status_url=f"/v1/jobs/{job.id}",
+    )
+
+
+@router.post(
+    "/jobs/{job_id}/reruns",
+    response_model=AcceptedOperationResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def rerun_job(
+    job_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+) -> AcceptedOperationResponse:
+    stmt = select(Job).where(Job.id == job_id)
+    original_job = (await db.execute(stmt)).scalar_one_or_none()
+    if not original_job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Original job not found",
+        )
+
+    if original_job.state not in (JobState.FAILED, JobState.CANCELLED, JobState.SUCCEEDED):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Cannot rerun job while active in state '{original_job.state.value}'",
+        )
+
+    # Create new logical job linked to predecessor
+    new_job_id = uuid.uuid4()
+    new_job = Job(
+        id=new_job_id,
+        workspace_id=original_job.workspace_id,
+        name=f"{original_job.name}-rerun",
+        image_digest=original_job.image_digest,
+        command_args=original_job.command_args,
+        env_vars=original_job.env_vars,
+        timeout_seconds=original_job.timeout_seconds,
+        max_retries=original_job.max_retries,
+        state=JobState.QUEUED,
+    )
+    db.add(new_job)
+
+    # Insert outbox event
+    event_id = uuid.uuid4()
+    outbox_event = OutboxEvent(
+        event_id=event_id,
+        topic="job.submitted.v1",
+        payload_json={
+            "event_id": str(event_id),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "workspace_id": str(original_job.workspace_id),
+            "job_id": str(new_job_id),
+            "name": new_job.name,
+            "image_digest": new_job.image_digest,
+            "command_args": new_job.command_args,
+            "timeout_seconds": new_job.timeout_seconds,
+            "max_retries": new_job.max_retries,
+            "parent_job_id": str(original_job.id),
+        },
+        headers_json={"rerun_from": str(original_job.id)},
+        status=OutboxStatus.PENDING,
+    )
+    db.add(outbox_event)
+    await db.commit()
+
+    return AcceptedOperationResponse(
+        operation_id=new_job_id,
+        status="ACCEPTED",
+        status_url=f"/v1/jobs/{new_job_id}",
     )

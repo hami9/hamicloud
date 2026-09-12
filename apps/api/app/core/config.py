@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     )
 
     # Redis
-    REDIS_URL: str = Field(default="redis://localhost:6379/0")
+    REDIS_URL: str = Field(default="redis://localhost:6380/0")
 
     # NATS JetStream
     NATS_URL: str = Field(default="nats://localhost:4222")

@@ -1,12 +1,11 @@
 from dataclasses import dataclass
 from typing import Optional
 import uuid
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Header, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.db.session import get_db
 from app.models.workspace import WorkspaceMembership, WorkspaceRole
 
 
@@ -30,9 +29,11 @@ async def get_caller(
 
     NOTE: This is a development seam, NOT a security control.
     """
-    subject = x_actor_subject or x_dev_subject
-    if settings.ENVIRONMENT == "development" and subject and subject.strip():
-        return Caller(subject=subject.strip())
+    actor = x_actor_subject.strip() if x_actor_subject else None
+    dev = x_dev_subject.strip() if x_dev_subject else None
+    subject = actor or dev
+    if settings.ENVIRONMENT == "development" and subject:
+        return Caller(subject=subject)
 
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,

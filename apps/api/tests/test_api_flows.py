@@ -225,6 +225,14 @@ def test_tenant_isolation_two_workspaces_and_subjects(client: TestClient):
     assert ws2_resp.status_code == 201
     ws2_id = ws2_resp.json()["id"]
 
+    # Bob succeeds in creating an application in his own workspace (ws2)
+    bob_own_app = client.post(
+        f"/v1/workspaces/{ws2_id}/apps",
+        json={"name": "Bob App", "slug": f"bob-app-{uuid.uuid4().hex[:6]}", "workload_type": "HTTP_SERVICE"},
+        headers=headers_bob,
+    )
+    assert bob_own_app.status_code == 201
+
     # 3. Add Charlie as VIEWER in Workspace 1 directly into workspace_memberships
     now = datetime.now(timezone.utc)
     conn = psycopg2.connect(TEST_DATABASE_URL_SYNC)

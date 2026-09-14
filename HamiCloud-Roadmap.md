@@ -179,9 +179,12 @@ Use foreign keys and unique constraints for correctness. Python migrations own t
 | Deploy a release | `POST /v1/apps/{app}/deployments` | Return `202` and operation ID after durable acceptance |
 | Submit a job | `POST /v1/workspaces/{ws}/jobs` | Require idempotency key; return job ID and status URL |
 | Inspect or cancel job | `GET /v1/jobs/{job}`; `POST /v1/jobs/{job}/cancel` | Show attempts; cancellation is a tracked operation |
+| Inspect operation status¹ | `GET /v1/operations/{op}` | Return the current status, kind and status URL of an accepted asynchronous operation |
 | Read logs/events | `GET /v1/operations/{op}/events` | Authorized SSE stream with reconnect cursor and bounded retention |
 | Roll back | `POST /v1/apps/{app}/rollbacks` | Create a new release referencing an older image/configuration |
 | Re-run failed work | `POST /v1/jobs/{job}/reruns` | Create a new audited logical job linked to its predecessor |
+
+¹ Added on 2026-09-14 with owner approval. The endpoint was already in the code and in `contracts/openapi/v1.yaml` as of commit `dc0db7c`; this row brings the Roadmap in line with them.
 
 All ID-based lookups must check workspace ownership. Pagination, structured error codes, a correlation ID, and OpenAPI documentation are required. Reusing an idempotency key with a different request body returns a conflict; identical retries return the original accepted operation. Store keys for at least 24 hours and publish that retention contract.
 

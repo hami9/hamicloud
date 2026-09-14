@@ -138,5 +138,37 @@ Every entry follows this standard format:
      - Removed static `EMITTED_OUTBOX_TOPICS` from `apps/api/app/core/events.py`.
      - Updated `test_contracts.py` with `extract_producer_emitted_topics()` using Python AST to dynamically derive all emitted topics from `OutboxEvent(..., topic=...)` calls in producer code.
 
+### [2026-09-14T08:15:00Z] Phase 1 Follow-ups: OpenAPI 3.1 Union Nullable, Full Live Validation, and Strict AST Topics Guard
+
+- **Status:** PASS (Follow-up 1: PASS, Follow-up 2: PASS)
+- **Milestone:** P0 / M0 — Design baseline
+- **Governing Document:** Phase 1 review follow-ups on `M0-WORK-ORDER.md`
+- **Actions & Verification:**
+  1. **OpenAPI 3.1.0 Nullable Type Unions & Full Live Validation (PASS):**
+     - Replaced all 8 occurrences of obsolete `nullable: true` in `contracts/openapi/v1.yaml` with OpenAPI 3.1 / JSON Schema 2020-12 type unions:
+       - `ApplicationResponse.current_release_id`: `type: [string, 'null']`
+       - `OperationStatusResponse.created_at`: `type: [string, 'null']`
+       - `OperationStatusResponse.details`: `type: [object, 'null']`
+       - `ErrorResponse.details`: `type: [object, 'null']`
+       - `JobAttemptItem.resource_uid`: `type: [string, 'null']`
+       - `JobAttemptItem.exit_code`: `type: [integer, 'null']`
+       - `JobAttemptItem.failure_reason`: `type: [string, 'null']`
+       - `JobAttemptItem.started_at`: `type: [string, 'null']`
+       - `JobAttemptItem.finished_at`: `type: [string, 'null']`
+     - Added test `test_no_nullable_keyword_in_openapi_spec` in `apps/api/tests/test_contracts.py` asserting that `"nullable:"` does not appear anywhere in `contracts/openapi/v1.yaml`. Result: **PASS**.
+     - Extended live-validation test `test_all_api_responses_validate_against_openapi_schemas` in `apps/api/tests/test_api_flows.py` to validate every single response body type emitted by the API:
+       - `HealthResponse`: `GET /healthz` -> 200
+       - `WorkspaceResponse`: `POST /v1/workspaces` -> 201
+       - `ApplicationResponse`: `POST /v1/workspaces/{ws}/apps` -> 201 (`current_release_id: null` strictly validated)
+       - `AcceptedOperationResponse`: `POST /v1/workspaces/{ws}/jobs`, `POST /v1/jobs/{job}/cancel`, `POST /v1/jobs/{job}/reruns`, `POST /v1/apps/{app}/deployments`, `POST /v1/apps/{app}/rollbacks` -> 202
+       - `OperationStatusResponse`: `GET /v1/operations/{id}` for Job and Release -> 200 (`details: null` strictly validated)
+       - `JobDetailsResponse`: `GET /v1/jobs/{job}` with attempt inserted into `job_attempts` -> 200 (`JobAttemptItem` with null `exit_code`, `failure_reason`, `finished_at` strictly validated)
+       - `ErrorResponse`: 404 Not Found, 409 Conflict, 501 Not Implemented
+       Result: **PASS** (17/17 tests passing in 4.50s).
+  2. **Strict Producer Topic Derivation (PASS):**
+     - Hardened `extract_producer_emitted_topics()` / `extract_topics_from_ast_tree()` in `apps/api/tests/test_contracts.py`: any unrecognized or dynamic topic expression (e.g. f-strings, variables, dynamic function calls) or missing `topic=` argument in outbox calls raises `ValueError` immediately.
+     - Added unit tests in `test_unrecognized_topic_expression_fails` verifying that f-strings (`OutboxEvent(topic=f'...')`), variables (`topic=topic_var`), and missing topic arguments trigger `ValueError` as expected. Result: **PASS**.
+
+
 
 

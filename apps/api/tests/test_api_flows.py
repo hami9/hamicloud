@@ -171,26 +171,52 @@ def test_operations_status_and_stream(client: TestClient):
     assert stream_resp.headers.get("X-Correlation-ID") == err["correlation_id"]
 
 
-def test_all_202_and_operation_status_responses_validate_against_openapi_schemas(client: TestClient):
-    """Validate live responses from every 202 endpoint and from GET /v1/operations/{id} against OpenAPI component schemas."""
+def test_all_api_responses_validate_against_openapi_schemas(client: TestClient):
+    """Validate live responses for every response body type returned by the API against OpenAPI component schemas."""
     import yaml
     import jsonschema
     import psycopg2
+    import warnings
+    from datetime import datetime, timezone
     from tests.conftest import OPENAPI_SPEC, TEST_DATABASE_URL_SYNC
 
     with open(OPENAPI_SPEC, "r", encoding="utf-8") as f:
         spec = yaml.safe_load(f)
-    schemas = spec["components"]["schemas"]
-    accepted_schema = schemas["AcceptedOperationResponse"]
-    op_status_schema = schemas["OperationStatusResponse"]
 
-    # Create workspace
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        resolver = jsonschema.RefResolver.from_schema(spec)
+
+    def validate_body(data: dict, schema_name: str) -> None:
+        schema = spec["components"]["schemas"][schema_name]
+        jsonschema.validate(data, schema, resolver=resolver)
+
+    # 1. HealthResponse: GET /healthz -> 200
+    health_resp = client.get("/healthz")
+    assert health_resp.status_code == 200
+    validate_body(health_resp.json(), "HealthResponse")
+
+    # 2. WorkspaceResponse: POST /v1/workspaces -> 201
     unique_slug = f"ws-{uuid.uuid4().hex[:8]}"
     ws_resp = client.post("/v1/workspaces", json={"name": "Contracts WS", "slug": unique_slug})
     assert ws_resp.status_code == 201
-    ws_id = ws_resp.json()["id"]
+    ws_data = ws_resp.json()
+    validate_body(ws_data, "WorkspaceResponse")
+    ws_id = ws_data["id"]
 
-    # 1. POST /v1/workspaces/{ws}/jobs -> 202 AcceptedOperationResponse
+    # 3. ApplicationResponse: POST /v1/workspaces/{ws}/apps -> 201 (current_release_id: null vs type: [string, 'null'])
+    app_slug = f"svc-{uuid.uuid4().hex[:6]}"
+    app_resp = client.post(
+        f"/v1/workspaces/{ws_id}/apps",
+        json={"name": "Contract App", "slug": app_slug, "workload_type": "HTTP_SERVICE"},
+    )
+    assert app_resp.status_code == 201
+    app_data = app_resp.json()
+    assert app_data["current_release_id"] is None
+    validate_body(app_data, "ApplicationResponse")
+    app_id = app_data["id"]
+
+    # 4. AcceptedOperationResponse on Job Submission: POST /v1/workspaces/{ws}/jobs -> 202
     job_payload = {
         "name": "contract-job",
         "image_digest": "registry.example.com/job@sha256:1111111111111111111111111111111111111111111111111111111111111111",
@@ -202,15 +228,15 @@ def test_all_202_and_operation_status_responses_validate_against_openapi_schemas
     )
     assert job_resp.status_code == 202
     job_data = job_resp.json()
-    jsonschema.validate(job_data, accepted_schema)
+    validate_body(job_data, "AcceptedOperationResponse")
     job_id = job_data["operation_id"]
 
-    # 2. POST /v1/jobs/{job}/cancel -> 202 AcceptedOperationResponse
+    # 5. AcceptedOperationResponse on Job Cancellation: POST /v1/jobs/{job}/cancel -> 202
     cancel_resp = client.post(f"/v1/jobs/{job_id}/cancel", headers={"X-Workspace-ID": ws_id})
     assert cancel_resp.status_code == 202
-    jsonschema.validate(cancel_resp.json(), accepted_schema)
+    validate_body(cancel_resp.json(), "AcceptedOperationResponse")
 
-    # 3. POST /v1/jobs/{job}/reruns -> 202 AcceptedOperationResponse
+    # 6. AcceptedOperationResponse on Job Rerun: POST /v1/jobs/{job}/reruns -> 202
     conn = psycopg2.connect(TEST_DATABASE_URL_SYNC)
     with conn.cursor() as cur:
         cur.execute("UPDATE jobs SET state = 'FAILED' WHERE id = %s", (job_id,))
@@ -219,17 +245,9 @@ def test_all_202_and_operation_status_responses_validate_against_openapi_schemas
 
     rerun_resp = client.post(f"/v1/jobs/{job_id}/reruns", headers={"X-Workspace-ID": ws_id})
     assert rerun_resp.status_code == 202
-    jsonschema.validate(rerun_resp.json(), accepted_schema)
+    validate_body(rerun_resp.json(), "AcceptedOperationResponse")
 
-    # 4. POST /v1/apps/{app}/deployments -> 202 AcceptedOperationResponse
-    app_slug = f"svc-{uuid.uuid4().hex[:6]}"
-    app_resp = client.post(
-        f"/v1/workspaces/{ws_id}/apps",
-        json={"name": "Contract App", "slug": app_slug, "workload_type": "HTTP_SERVICE"},
-    )
-    assert app_resp.status_code == 201
-    app_id = app_resp.json()["id"]
-
+    # 7. AcceptedOperationResponse on App Deploy: POST /v1/apps/{app}/deployments -> 202
     deploy_payload = {
         "image_digest": "registry.example.com/app@sha256:2222222222222222222222222222222222222222222222222222222222222222",
         "port": 8080,
@@ -241,10 +259,10 @@ def test_all_202_and_operation_status_responses_validate_against_openapi_schemas
     )
     assert deploy_resp.status_code == 202
     deploy_data = deploy_resp.json()
-    jsonschema.validate(deploy_data, accepted_schema)
+    validate_body(deploy_data, "AcceptedOperationResponse")
     release_id = deploy_data["operation_id"]
 
-    # 5. POST /v1/apps/{app}/rollbacks -> 202 AcceptedOperationResponse
+    # 8. AcceptedOperationResponse on App Rollback: POST /v1/apps/{app}/rollbacks -> 202
     deploy2_resp = client.post(
         f"/v1/apps/{app_id}/deployments",
         json=dict(deploy_payload, port=8081),
@@ -258,21 +276,63 @@ def test_all_202_and_operation_status_responses_validate_against_openapi_schemas
         headers={"X-Workspace-ID": ws_id},
     )
     assert rollback_resp.status_code == 202
-    jsonschema.validate(rollback_resp.json(), accepted_schema)
+    validate_body(rollback_resp.json(), "AcceptedOperationResponse")
 
-    # 6. GET /v1/operations/{id} for Job -> 200 OperationStatusResponse
+    # 9. OperationStatusResponse for Job: GET /v1/operations/{id} -> 200
     job_op_resp = client.get(f"/v1/operations/{job_id}", headers={"X-Workspace-ID": ws_id})
     assert job_op_resp.status_code == 200
     job_op_data = job_op_resp.json()
     assert job_op_data["operation_kind"] == "JOB"
     assert job_op_data["details"] is None
-    jsonschema.validate(job_op_data, op_status_schema)
+    validate_body(job_op_data, "OperationStatusResponse")
 
-    # 7. GET /v1/operations/{id} for Release -> 200 OperationStatusResponse
+    # 10. OperationStatusResponse for Release: GET /v1/operations/{id} -> 200
     rel_op_resp = client.get(f"/v1/operations/{release_id}", headers={"X-Workspace-ID": ws_id})
     assert rel_op_resp.status_code == 200
     rel_op_data = rel_op_resp.json()
     assert rel_op_data["operation_kind"] == "RELEASE"
     assert rel_op_data["details"] is None
-    jsonschema.validate(rel_op_data, op_status_schema)
+    validate_body(rel_op_data, "OperationStatusResponse")
+
+    # 11. JobDetailsResponse with at least one Attempt: GET /v1/jobs/{job} -> 200
+    # Insert real attempt with nullable fields (exit_code=null, failure_reason=null, finished_at=null)
+    attempt_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc)
+    conn = psycopg2.connect(TEST_DATABASE_URL_SYNC)
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO job_attempts (
+                id, job_id, attempt_number, state, resource_uid, lease_epoch,
+                exit_code, failure_reason, started_at, finished_at, created_at, updated_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (
+            attempt_id, job_id, 1, 'RUNNING', 'pod-exec-worker-1', 1,
+            None, None, now, None, now, now
+        ))
+        cur.execute("UPDATE jobs SET current_attempt_number = 1, state = 'RUNNING' WHERE id = %s", (job_id,))
+    conn.commit()
+    conn.close()
+
+    job_details_resp = client.get(f"/v1/jobs/{job_id}", headers={"X-Workspace-ID": ws_id})
+    assert job_details_resp.status_code == 200
+    job_details_data = job_details_resp.json()
+    assert len(job_details_data["attempts"]) == 1
+    assert job_details_data["attempts"][0]["exit_code"] is None
+    validate_body(job_details_data, "JobDetailsResponse")
+
+    # 12. ErrorResponse: 404 Not Found
+    err_404_resp = client.get(f"/v1/jobs/{uuid.uuid4()}", headers={"X-Workspace-ID": ws_id})
+    assert err_404_resp.status_code == 404
+    validate_body(err_404_resp.json(), "ErrorResponse")
+
+    # 13. ErrorResponse: 409 Conflict
+    err_409_resp = client.post("/v1/workspaces", json={"name": "Dup WS", "slug": unique_slug})
+    assert err_409_resp.status_code == 409
+    validate_body(err_409_resp.json(), "ErrorResponse")
+
+    # 14. ErrorResponse: 501 Not Implemented
+    err_501_resp = client.get(f"/v1/operations/{job_id}/events", headers={"X-Workspace-ID": ws_id})
+    assert err_501_resp.status_code == 501
+    validate_body(err_501_resp.json(), "ErrorResponse")
+
 

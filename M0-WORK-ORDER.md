@@ -72,7 +72,7 @@ Each decision has a default. Unless the owner has changed one, work with the def
 | ID | Decision | Default | Blocks |
 | --- | --- | --- | --- |
 | D1 | How M0 establishes the caller's identity before OIDC arrives in M1 | A single `get_caller` dependency. With `ENVIRONMENT=development` it reads a dev-only subject header; in any other environment it returns 401. The membership lookup behind it is real. Label it in code and in ADR-0004 as a development seam, not a security control. | T7 |
-| D2 | `GET /v1/operations/{operation_id}` is not in the Roadmap's API table | Approve it and add it to the Roadmap table, since every 202 `status_url` already points at it. **OWNER** approves the Roadmap edit. | T4 |
+| D2 | `GET /v1/operations/{operation_id}` is not in the Roadmap's API table | **Approved by the owner on 2026-09-14.** Added to the Roadmap API table with a dated note. | T4 |
 | D3 | Pagination needs at least one list endpoint, and the Roadmap defines none | Add `GET /v1/workspaces/{ws}/jobs` and `GET /v1/apps/{app}/releases` to the Roadmap table. **OWNER** approves. | T12 |
 | D4 | A cancellation that races a workload finishing | The logical job ends `CANCELLED`; the attempt keeps `SUCCEEDED` and its exit code. There is no `CANCEL_REQUESTED → SUCCEEDED` edge. | T20, T21 |
 | D5 | Go transitions the Roadmap diagram does not allow: `QUEUED→CANCELLED`, `ADMITTED→CANCELLED`, `ADMITTED→FAILED`, `RETRY_WAIT→CANCELLED`, `CANCEL_REQUESTED→FAILED`, `CANCEL_REQUESTED→SUCCEEDED` | Remove them all, following the Roadmap literally. The owner may keep one only by amending the Roadmap first, with a reason. | T21 |

@@ -372,7 +372,7 @@ components:
           type: string
           example: req_01HVG...
         details:
-          type: object
+          type: [object, 'null']
           additionalProperties: true
 
     CreateWorkspaceRequest:
@@ -437,9 +437,8 @@ components:
         desired_generation:
           type: integer
         current_release_id:
-          type: string
+          type: [string, 'null']
           format: uuid
-          nullable: true
         created_at:
           type: string
           format: date-time
@@ -503,12 +502,10 @@ components:
           type: string
           example: "/v1/operations/01HVG89..."
         created_at:
-          type: string
+          type: [string, 'null']
           format: date-time
-          nullable: true
         details:
           type: [object, 'null']
-          nullable: true
           additionalProperties: true
 
     RollbackRequest:
@@ -558,24 +555,19 @@ components:
           type: string
           enum: [QUEUED, ADMITTED, STARTING, RUNNING, SUCCEEDED, RETRY_WAIT, FAILED, CANCEL_REQUESTED, CANCELLED]
         resource_uid:
-          type: string
-          nullable: true
+          type: [string, 'null']
         lease_epoch:
           type: integer
         exit_code:
-          type: integer
-          nullable: true
+          type: [integer, 'null']
         failure_reason:
-          type: string
-          nullable: true
+          type: [string, 'null']
         started_at:
-          type: string
+          type: [string, 'null']
           format: date-time
-          nullable: true
         finished_at:
-          type: string
+          type: [string, 'null']
           format: date-time
-          nullable: true
 
     JobDetailsResponse:
       type: object

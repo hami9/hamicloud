@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.events import OutboxTopic
 from app.db.session import get_db
 from app.models.idempotency import IdempotencyRecord
 from app.models.job import Job, JobAttempt, JobState
@@ -84,7 +85,7 @@ async def submit_job(
     event_id = uuid.uuid4()
     outbox_event = OutboxEvent(
         event_id=event_id,
-        topic="job.submitted.v1",
+        topic=OutboxTopic.JOB_SUBMITTED.value,
         payload_json={
             "event_id": str(event_id),
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -105,7 +106,7 @@ async def submit_job(
     response_data = {
         "operation_id": str(job_id),
         "status": "ACCEPTED",
-        "status_url": f"/v1/jobs/{job_id}",
+        "status_url": f"/v1/operations/{job_id}",
     }
 
     # Prepare idempotency record
@@ -141,7 +142,7 @@ async def submit_job(
     return AcceptedOperationResponse(
         operation_id=job_id,
         status="ACCEPTED",
-        status_url=f"/v1/jobs/{job_id}",
+        status_url=f"/v1/operations/{job_id}",
     )
 
 
@@ -222,6 +223,7 @@ async def get_job(
 )
 async def cancel_job(
     job_id: uuid.UUID,
+    x_workspace_id: Optional[str] = Header(None, alias="X-Workspace-ID"),
     db: AsyncSession = Depends(get_db),
 ) -> AcceptedOperationResponse:
     stmt = select(Job).where(Job.id == job_id)
@@ -231,6 +233,21 @@ async def cancel_job(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Job not found",
         )
+
+    # Tenant isolation check
+    if x_workspace_id:
+        try:
+            ws_id = uuid.UUID(x_workspace_id)
+            if job.workspace_id != ws_id:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Job not found in specified workspace",
+                )
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid X-Workspace-ID header format",
+            )
 
     # Terminal jobs cannot be cancelled
     if job.state in (JobState.SUCCEEDED, JobState.FAILED, JobState.CANCELLED):
@@ -245,7 +262,7 @@ async def cancel_job(
     event_id = uuid.uuid4()
     outbox_event = OutboxEvent(
         event_id=event_id,
-        topic="job.cancellation.requested.v1",
+        topic=OutboxTopic.JOB_CANCELLATION_REQUESTED.value,
         payload_json={
             "event_id": str(event_id),
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -261,7 +278,7 @@ async def cancel_job(
     return AcceptedOperationResponse(
         operation_id=job.id,
         status="ACCEPTED",
-        status_url=f"/v1/jobs/{job.id}",
+        status_url=f"/v1/operations/{job.id}",
     )
 
 
@@ -272,6 +289,7 @@ async def cancel_job(
 )
 async def rerun_job(
     job_id: uuid.UUID,
+    x_workspace_id: Optional[str] = Header(None, alias="X-Workspace-ID"),
     db: AsyncSession = Depends(get_db),
 ) -> AcceptedOperationResponse:
     stmt = select(Job).where(Job.id == job_id)
@@ -281,6 +299,21 @@ async def rerun_job(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Original job not found",
         )
+
+    # Tenant isolation check
+    if x_workspace_id:
+        try:
+            ws_id = uuid.UUID(x_workspace_id)
+            if original_job.workspace_id != ws_id:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Job not found in specified workspace",
+                )
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid X-Workspace-ID header format",
+            )
 
     if original_job.state not in (JobState.FAILED, JobState.CANCELLED, JobState.SUCCEEDED):
         raise HTTPException(
@@ -307,7 +340,7 @@ async def rerun_job(
     event_id = uuid.uuid4()
     outbox_event = OutboxEvent(
         event_id=event_id,
-        topic="job.submitted.v1",
+        topic=OutboxTopic.JOB_SUBMITTED.value,
         payload_json={
             "event_id": str(event_id),
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -329,5 +362,5 @@ async def rerun_job(
     return AcceptedOperationResponse(
         operation_id=new_job_id,
         status="ACCEPTED",
-        status_url=f"/v1/jobs/{new_job_id}",
+        status_url=f"/v1/operations/{new_job_id}",
     )

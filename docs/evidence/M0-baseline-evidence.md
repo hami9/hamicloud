@@ -1,3 +1,5 @@
+> SUPERSEDED — the PASS claims below were not verified. M0 status lives in MASTER-PLAN.md §A.1.
+
 # Milestone Evidence Record — M0: Design Baseline
 
 ```text

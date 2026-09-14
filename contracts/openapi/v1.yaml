@@ -237,9 +237,39 @@ paths:
               schema:
                 $ref: '#/components/schemas/AcceptedOperationResponse'
 
+  /operations/{operation_id}:
+    get:
+      summary: Inspect status of an asynchronous operation
+      operationId: getOperationStatus
+      parameters:
+        - name: operation_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: X-Workspace-ID
+          in: header
+          required: false
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Operation status details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationStatusResponse'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
   /operations/{operation_id}/events:
     get:
       summary: Server-Sent Events (SSE) stream for operation logs and events
+      description: >-
+        Authorized SSE stream with reconnect cursor (Last-Event-ID) and bounded event retention.
+        In M0 design baseline, this endpoint returns 501 Not Implemented until live event streaming lands in M1.
       operationId: streamOperationEvents
       parameters:
         - name: operation_id
@@ -260,6 +290,8 @@ paths:
             text/event-stream:
               schema:
                 type: string
+        '501':
+          $ref: '#/components/responses/501NotImplemented'
 
 components:
   responses:
@@ -283,6 +315,12 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
     429RateLimited:
       description: Workspace quota or rate limit exceeded
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    501NotImplemented:
+      description: Feature not implemented in this baseline
       content:
         application/json:
           schema:
@@ -447,6 +485,29 @@ components:
         status_url:
           type: string
           example: "/v1/operations/01HVG89..."
+
+    OperationStatusResponse:
+      type: object
+      required: [operation_id, operation_kind, status, status_url]
+      properties:
+        operation_id:
+          type: string
+          format: uuid
+        operation_kind:
+          type: string
+          enum: [RELEASE, JOB]
+        status:
+          type: string
+          enum: [ACCEPTED, QUEUED, ADMITTED, STARTING, RUNNING, SUCCEEDED, RETRY_WAIT, FAILED, CANCEL_REQUESTED, CANCELLED, REQUESTED, BUILDING, IMAGE_READY, DEPLOYING, HEALTHY, BUILD_FAILED, DEPLOY_FAILED]
+        status_url:
+          type: string
+          example: "/v1/operations/01HVG89..."
+        created_at:
+          type: string
+          format: date-time
+        details:
+          type: object
+          additionalProperties: true
 
     RollbackRequest:
       type: object

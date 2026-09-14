@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -20,6 +21,12 @@ type Config struct {
 // LoadFromEnv loads runtime configuration from environment variables with safe defaults.
 func LoadFromEnv() (*Config, error) {
 	dbURL := getEnv("DATABASE_URL", "postgres://hamicloud:hamicloud_secret@localhost:5432/hamicloud?sslmode=disable")
+	if strings.HasPrefix(dbURL, "postgresql+") {
+		idx := strings.Index(dbURL, "://")
+		if idx != -1 {
+			dbURL = "postgres://" + dbURL[idx+3:]
+		}
+	}
 	natsURL := getEnv("NATS_URL", "nats://localhost:4222")
 	env := getEnv("ENVIRONMENT", "development")
 	workerID := getEnv("WORKER_ID", "local-worker-1")

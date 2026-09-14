@@ -69,6 +69,12 @@ func TestValidateTransition(t *testing.T) {
 			next:        domain.StateCancelled,
 			expectError: nil,
 		},
+		{
+			name:        "CANCEL_REQUESTED to SUCCEEDED (workload finishes before cancellation finalized)",
+			current:     domain.StateCancelRequested,
+			next:        domain.StateSucceeded,
+			expectError: nil,
+		},
 
 		// Illegal transitions
 		{

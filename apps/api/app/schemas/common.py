@@ -1,3 +1,4 @@
+import enum
 import uuid
 from datetime import datetime
 from typing import Any, Dict, Optional
@@ -28,3 +29,37 @@ class AcceptedOperationResponse(BaseModel):
     operation_id: uuid.UUID
     status: str = "ACCEPTED"
     status_url: str
+
+
+class OperationKind(str, enum.Enum):
+    RELEASE = "RELEASE"
+    JOB = "JOB"
+
+
+class OperationStatus(str, enum.Enum):
+    ACCEPTED = "ACCEPTED"
+    QUEUED = "QUEUED"
+    ADMITTED = "ADMITTED"
+    STARTING = "STARTING"
+    RUNNING = "RUNNING"
+    SUCCEEDED = "SUCCEEDED"
+    RETRY_WAIT = "RETRY_WAIT"
+    FAILED = "FAILED"
+    CANCEL_REQUESTED = "CANCEL_REQUESTED"
+    CANCELLED = "CANCELLED"
+    REQUESTED = "REQUESTED"
+    BUILDING = "BUILDING"
+    IMAGE_READY = "IMAGE_READY"
+    DEPLOYING = "DEPLOYING"
+    HEALTHY = "HEALTHY"
+    BUILD_FAILED = "BUILD_FAILED"
+    DEPLOY_FAILED = "DEPLOY_FAILED"
+
+
+class OperationStatusResponse(BaseModel):
+    operation_id: uuid.UUID
+    operation_kind: OperationKind
+    status: OperationStatus
+    status_url: str
+    created_at: Optional[datetime] = None
+    details: Optional[Dict[str, Any]] = None

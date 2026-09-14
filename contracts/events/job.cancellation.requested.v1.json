@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hamicloud.dev/schemas/events/job.cancellation.requested.v1.json",
+  "title": "JobCancellationRequestedV1",
+  "type": "object",
+  "required": [
+    "event_id",
+    "timestamp",
+    "workspace_id",
+    "job_id"
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "workspace_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "job_id": {
+      "type": "string",
+      "format": "uuid"
+    }
+  },
+  "additionalProperties": false
+}

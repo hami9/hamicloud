@@ -58,6 +58,7 @@ var legalTransitions = map[JobState]map[JobState]bool{
 	StateCancelRequested: {
 		StateCancelled: true,
 		StateFailed:    true,
+		StateSucceeded: true,
 	},
 	StateSucceeded: {},
 	StateFailed:    {},

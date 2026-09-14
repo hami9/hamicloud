@@ -9,7 +9,10 @@
     "workspace_id",
     "job_id",
     "name",
-    "image_digest"
+    "image_digest",
+    "command_args",
+    "timeout_seconds",
+    "max_retries"
   ],
   "properties": {
     "event_id": {
@@ -48,6 +51,10 @@
     "max_retries": {
       "type": "integer",
       "default": 3
+    },
+    "parent_job_id": {
+      "type": "string",
+      "format": "uuid"
     }
   },
   "additionalProperties": false

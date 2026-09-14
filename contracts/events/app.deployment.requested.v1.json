@@ -10,7 +10,9 @@
     "application_id",
     "release_id",
     "generation",
-    "image_digest"
+    "image_digest",
+    "port",
+    "health_path"
   ],
   "properties": {
     "event_id": {
@@ -49,6 +51,13 @@
     "health_path": {
       "type": "string",
       "default": "/healthz"
+    },
+    "is_rollback": {
+      "type": "boolean"
+    },
+    "target_release_id": {
+      "type": "string",
+      "format": "uuid"
     }
   },
   "additionalProperties": false

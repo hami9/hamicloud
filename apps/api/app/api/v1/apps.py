@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.events import OutboxTopic
 from app.db.session import get_db
 from app.models.application import Application
 from app.models.idempotency import IdempotencyRecord
@@ -87,16 +88,32 @@ async def deploy_release(
     app_id: uuid.UUID,
     payload: DeployReleaseRequest,
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    x_workspace_id: Optional[str] = Header(None, alias="X-Workspace-ID"),
     db: AsyncSession = Depends(get_db),
 ) -> AcceptedOperationResponse:
-    # Find application
-    app_stmt = select(Application).where(Application.id == app_id)
+    # Find application with row lock for safe generation increments
+    app_stmt = select(Application).where(Application.id == app_id).with_for_update()
     app = (await db.execute(app_stmt)).scalar_one_or_none()
     if not app:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Application not found",
         )
+
+    # Tenant isolation check
+    if x_workspace_id:
+        try:
+            ws_id = uuid.UUID(x_workspace_id)
+            if app.workspace_id != ws_id:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Application not found in specified workspace",
+                )
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid X-Workspace-ID header format",
+            )
 
     endpoint = f"/v1/apps/{app_id}/deployments"
     payload_dict = payload.model_dump(mode="json")
@@ -155,7 +172,7 @@ async def deploy_release(
     event_id = uuid.uuid4()
     outbox_event = OutboxEvent(
         event_id=event_id,
-        topic="app.deployment.requested.v1",
+        topic=OutboxTopic.APP_DEPLOYMENT_REQUESTED.value,
         payload_json={
             "event_id": str(event_id),
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -220,15 +237,32 @@ async def deploy_release(
 async def rollback_release(
     app_id: uuid.UUID,
     payload: RollbackRequest,
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+    x_workspace_id: Optional[str] = Header(None, alias="X-Workspace-ID"),
     db: AsyncSession = Depends(get_db),
 ) -> AcceptedOperationResponse:
-    app_stmt = select(Application).where(Application.id == app_id)
+    app_stmt = select(Application).where(Application.id == app_id).with_for_update()
     app = (await db.execute(app_stmt)).scalar_one_or_none()
     if not app:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Application not found",
         )
+
+    # Tenant isolation check
+    if x_workspace_id:
+        try:
+            ws_id = uuid.UUID(x_workspace_id)
+            if app.workspace_id != ws_id:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Application not found in specified workspace",
+                )
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid X-Workspace-ID header format",
+            )
 
     target_rel_stmt = select(Release).where(
         Release.id == payload.target_release_id, Release.application_id == app.id
@@ -240,6 +274,33 @@ async def rollback_release(
             detail="Target release not found for this application",
         )
 
+    endpoint = f"/v1/apps/{app_id}/rollbacks"
+    payload_dict = payload.model_dump(mode="json")
+    payload_hash = hashlib.sha256(
+        json.dumps(payload_dict, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+
+    # Idempotency check if header is supplied
+    if idempotency_key:
+        idemp_stmt = select(IdempotencyRecord).where(
+            IdempotencyRecord.workspace_id == app.workspace_id,
+            IdempotencyRecord.endpoint == endpoint,
+            IdempotencyRecord.idempotency_key == idempotency_key,
+        )
+        existing_idemp = (await db.execute(idemp_stmt)).scalar_one_or_none()
+        if existing_idemp:
+            if existing_idemp.request_hash == payload_hash:
+                return AcceptedOperationResponse(
+                    operation_id=uuid.UUID(existing_idemp.response_body["operation_id"]),
+                    status=existing_idemp.response_body["status"],
+                    status_url=existing_idemp.response_body["status_url"],
+                )
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Idempotency key reused with different rollback payload",
+                )
+
     # Increment generation
     app.desired_generation += 1
 
@@ -248,7 +309,7 @@ async def rollback_release(
     next_release_number = release_count + 1
 
     new_release_id = uuid.uuid4()
-    rollback_release = Release(
+    rollback_release_obj = Release(
         id=new_release_id,
         application_id=app.id,
         workspace_id=app.workspace_id,
@@ -257,13 +318,18 @@ async def rollback_release(
         config_json=target_rel.config_json,
         status=ReleaseStatus.IMAGE_READY,
     )
-    db.add(rollback_release)
+    db.add(rollback_release_obj)
+
+    # Extract port and health_path from target release config
+    target_config = target_rel.config_json or {}
+    port = target_config.get("port", 8080)
+    health_path = target_config.get("health_path", "/healthz")
 
     # Insert outbox event
     event_id = uuid.uuid4()
     outbox_event = OutboxEvent(
         event_id=event_id,
-        topic="app.deployment.requested.v1",
+        topic=OutboxTopic.APP_DEPLOYMENT_REQUESTED.value,
         payload_json={
             "event_id": str(event_id),
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -272,6 +338,8 @@ async def rollback_release(
             "release_id": str(new_release_id),
             "generation": app.desired_generation,
             "image_digest": target_rel.image_digest,
+            "port": port,
+            "health_path": health_path,
             "is_rollback": True,
             "target_release_id": str(target_rel.id),
         },
@@ -279,6 +347,24 @@ async def rollback_release(
         status=OutboxStatus.PENDING,
     )
     db.add(outbox_event)
+
+    if idempotency_key:
+        response_data = {
+            "operation_id": str(new_release_id),
+            "status": "ACCEPTED",
+            "status_url": f"/v1/operations/{new_release_id}",
+        }
+        idemp_record = IdempotencyRecord(
+            workspace_id=app.workspace_id,
+            endpoint=endpoint,
+            idempotency_key=idempotency_key,
+            request_hash=payload_hash,
+            response_code=202,
+            response_body=response_data,
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+        )
+        db.add(idemp_record)
+
     await db.commit()
 
     return AcceptedOperationResponse(

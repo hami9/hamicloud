@@ -9,7 +9,7 @@ from sqlalchemy import text
 
 from app.api.v1.router import api_v1_router
 from app.core.config import settings
-from app.db.session import AsyncSessionLocal
+from app.db.session import AsyncSessionLocal, engine
 from app.schemas.common import ErrorResponse, HealthResponse, ReadinessResponse
 
 
@@ -18,6 +18,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Startup validation
     yield
     # Graceful shutdown cleanup
+    await engine.dispose()
 
 
 app = FastAPI(
@@ -62,14 +63,25 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
         error_code = "RATE_LIMITED"
     elif exc.status_code == 400:
         error_code = "BAD_REQUEST"
+    elif exc.status_code == 503:
+        error_code = "SERVICE_UNAVAILABLE"
+    elif exc.status_code == 501:
+        error_code = "NOT_IMPLEMENTED"
+
+    message = str(exc.detail)
+    details = None
+    if isinstance(exc.detail, dict):
+        message = str(exc.detail.get("message", "An error occurred"))
+        details = {k: v for k, v in exc.detail.items() if k != "message"}
 
     return JSONResponse(
         status_code=exc.status_code,
         content=ErrorResponse(
             error_code=error_code,
-            message=str(exc.detail),
+            message=message,
             correlation_id=correlation_id,
-        ).model_dump(),
+            details=details,
+        ).model_dump(exclude_none=True),
         headers={"X-Correlation-ID": correlation_id},
     )
 
@@ -101,7 +113,7 @@ async def healthz() -> HealthResponse:
 
 @app.get("/readyz", response_model=ReadinessResponse, tags=["Observability"])
 async def readyz() -> ReadinessResponse:
-    """Readiness probe: verifies database connectivity."""
+    """Readiness probe: verifies database and redis connectivity."""
     db_ok = False
     try:
         async with AsyncSessionLocal() as session:
@@ -110,17 +122,30 @@ async def readyz() -> ReadinessResponse:
     except Exception:
         db_ok = False
 
-    ready = db_ok
+    redis_ok = False
+    try:
+        import redis.asyncio as aioredis
+        r = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+        redis_ok = await r.ping()
+        await r.aclose()
+    except Exception:
+        redis_ok = False
+
+    ready = db_ok and redis_ok
     if not ready:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Platform dependencies are not ready",
+            detail={
+                "message": "Platform dependencies are not ready",
+                "database": db_ok,
+                "redis": redis_ok,
+            },
         )
 
     return ReadinessResponse(
         ready=True,
         database=db_ok,
-        redis=True,  # In P0 development baseline
+        redis=redis_ok,
         timestamp=datetime.now(timezone.utc),
     )
 

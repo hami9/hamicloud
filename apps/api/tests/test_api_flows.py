@@ -2,6 +2,8 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 
+pytestmark = pytest.mark.usefixtures("clean_db")
+
 
 def test_workspace_creation_and_duplicate_slug(client: TestClient):
     unique_slug = f"ws-{uuid.uuid4().hex[:8]}"
@@ -167,3 +169,110 @@ def test_operations_status_and_stream(client: TestClient):
     assert err["error_code"] == "NOT_IMPLEMENTED"
     assert "correlation_id" in err
     assert stream_resp.headers.get("X-Correlation-ID") == err["correlation_id"]
+
+
+def test_all_202_and_operation_status_responses_validate_against_openapi_schemas(client: TestClient):
+    """Validate live responses from every 202 endpoint and from GET /v1/operations/{id} against OpenAPI component schemas."""
+    import yaml
+    import jsonschema
+    import psycopg2
+    from tests.conftest import OPENAPI_SPEC, TEST_DATABASE_URL_SYNC
+
+    with open(OPENAPI_SPEC, "r", encoding="utf-8") as f:
+        spec = yaml.safe_load(f)
+    schemas = spec["components"]["schemas"]
+    accepted_schema = schemas["AcceptedOperationResponse"]
+    op_status_schema = schemas["OperationStatusResponse"]
+
+    # Create workspace
+    unique_slug = f"ws-{uuid.uuid4().hex[:8]}"
+    ws_resp = client.post("/v1/workspaces", json={"name": "Contracts WS", "slug": unique_slug})
+    assert ws_resp.status_code == 201
+    ws_id = ws_resp.json()["id"]
+
+    # 1. POST /v1/workspaces/{ws}/jobs -> 202 AcceptedOperationResponse
+    job_payload = {
+        "name": "contract-job",
+        "image_digest": "registry.example.com/job@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    }
+    job_resp = client.post(
+        f"/v1/workspaces/{ws_id}/jobs",
+        json=job_payload,
+        headers={"Idempotency-Key": f"idemp-job-{uuid.uuid4().hex[:8]}"},
+    )
+    assert job_resp.status_code == 202
+    job_data = job_resp.json()
+    jsonschema.validate(job_data, accepted_schema)
+    job_id = job_data["operation_id"]
+
+    # 2. POST /v1/jobs/{job}/cancel -> 202 AcceptedOperationResponse
+    cancel_resp = client.post(f"/v1/jobs/{job_id}/cancel", headers={"X-Workspace-ID": ws_id})
+    assert cancel_resp.status_code == 202
+    jsonschema.validate(cancel_resp.json(), accepted_schema)
+
+    # 3. POST /v1/jobs/{job}/reruns -> 202 AcceptedOperationResponse
+    conn = psycopg2.connect(TEST_DATABASE_URL_SYNC)
+    with conn.cursor() as cur:
+        cur.execute("UPDATE jobs SET state = 'FAILED' WHERE id = %s", (job_id,))
+    conn.commit()
+    conn.close()
+
+    rerun_resp = client.post(f"/v1/jobs/{job_id}/reruns", headers={"X-Workspace-ID": ws_id})
+    assert rerun_resp.status_code == 202
+    jsonschema.validate(rerun_resp.json(), accepted_schema)
+
+    # 4. POST /v1/apps/{app}/deployments -> 202 AcceptedOperationResponse
+    app_slug = f"svc-{uuid.uuid4().hex[:6]}"
+    app_resp = client.post(
+        f"/v1/workspaces/{ws_id}/apps",
+        json={"name": "Contract App", "slug": app_slug, "workload_type": "HTTP_SERVICE"},
+    )
+    assert app_resp.status_code == 201
+    app_id = app_resp.json()["id"]
+
+    deploy_payload = {
+        "image_digest": "registry.example.com/app@sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "port": 8080,
+    }
+    deploy_resp = client.post(
+        f"/v1/apps/{app_id}/deployments",
+        json=deploy_payload,
+        headers={"Idempotency-Key": f"idemp-deploy-{uuid.uuid4().hex[:8]}", "X-Workspace-ID": ws_id},
+    )
+    assert deploy_resp.status_code == 202
+    deploy_data = deploy_resp.json()
+    jsonschema.validate(deploy_data, accepted_schema)
+    release_id = deploy_data["operation_id"]
+
+    # 5. POST /v1/apps/{app}/rollbacks -> 202 AcceptedOperationResponse
+    deploy2_resp = client.post(
+        f"/v1/apps/{app_id}/deployments",
+        json=dict(deploy_payload, port=8081),
+        headers={"Idempotency-Key": f"idemp-deploy2-{uuid.uuid4().hex[:8]}", "X-Workspace-ID": ws_id},
+    )
+    assert deploy2_resp.status_code == 202
+
+    rollback_resp = client.post(
+        f"/v1/apps/{app_id}/rollbacks",
+        json={"target_release_id": release_id},
+        headers={"X-Workspace-ID": ws_id},
+    )
+    assert rollback_resp.status_code == 202
+    jsonschema.validate(rollback_resp.json(), accepted_schema)
+
+    # 6. GET /v1/operations/{id} for Job -> 200 OperationStatusResponse
+    job_op_resp = client.get(f"/v1/operations/{job_id}", headers={"X-Workspace-ID": ws_id})
+    assert job_op_resp.status_code == 200
+    job_op_data = job_op_resp.json()
+    assert job_op_data["operation_kind"] == "JOB"
+    assert job_op_data["details"] is None
+    jsonschema.validate(job_op_data, op_status_schema)
+
+    # 7. GET /v1/operations/{id} for Release -> 200 OperationStatusResponse
+    rel_op_resp = client.get(f"/v1/operations/{release_id}", headers={"X-Workspace-ID": ws_id})
+    assert rel_op_resp.status_code == 200
+    rel_op_data = rel_op_resp.json()
+    assert rel_op_data["operation_kind"] == "RELEASE"
+    assert rel_op_data["details"] is None
+    jsonschema.validate(rel_op_data, op_status_schema)
+

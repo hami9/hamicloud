@@ -109,4 +109,34 @@ Every entry follows this standard format:
         `{'workspaces': 43, 'workspace_memberships': 43, 'applications': 20, 'releases': 53, 'jobs': 34, 'job_attempts': 0, 'execution_intents': 0, 'outbox_events': 106, 'consumed_events': 0, 'quota_reservations': 0, 'idempotency_records': 68, 'secret_references': 0, 'audit_events': 0}`
       - Net dev database delta: 0 rows modified across 2 consecutive test runs.
 
+### [2026-09-14T07:25:00Z] Phase 1 Rework: T4 Schema Correction & 202 Validation, T6 Performance, Roadmap D2 Revert, Dynamic Topic Derivation
+
+- **Status:** COMPLETED & VERIFIED
+- **Milestone:** P0 / M0 — Design baseline
+- **Governing Document:** Phase 1 review feedback on `M0-WORK-ORDER.md`
+- **Actions & Deliverables:**
+  1. **T4 Correction and Contract Validation (PASS):**
+     - Corrected premature "T4 PASS" claim: The live `GET /v1/operations/{id}` response returned `"details": null`, which violated the published `OperationStatusResponse` OpenAPI schema (`details: type: object`).
+     - Updated `contracts/openapi/v1.yaml` to specify `details: type: [object, 'null']` (`nullable: true`) and `created_at: nullable: true`, aligning the contract with JSON Schema 2020-12 / OpenAPI 3.1 and live Pydantic serialization. Validated spec with `openapi-spec-validator`.
+     - Implemented comprehensive Done-when test `test_all_202_and_operation_status_responses_validate_against_openapi_schemas` in `apps/api/tests/test_api_flows.py`. The test sends live requests to all five 202 endpoints:
+       - `POST /v1/workspaces/{ws}/jobs`
+       - `POST /v1/jobs/{job}/cancel`
+       - `POST /v1/jobs/{job}/reruns`
+       - `POST /v1/apps/{app}/deployments`
+       - `POST /v1/apps/{app}/rollbacks`
+       and `GET /v1/operations/{id}` for both `JOB` and `RELEASE` operations, validating every live response directly against `AcceptedOperationResponse` and `OperationStatusResponse` OpenAPI component schemas using `jsonschema.validate`.
+  2. **T6 Performance Rework (DELETE in one transaction):**
+     - Replaced slow `autouse` TRUNCATE fixture (~4.5s per run, twice per test) with a targeted `clean_db` fixture that executes a single-transaction `DELETE FROM ...` across tenant tables in reverse dependency order (~19ms).
+     - Database cleaning is now applied only to tests that interact with the database (`test_api_flows.py`), skipping non-database test suites (`test_contracts.py`, `test_health.py`, `test_models.py`, `test_operations.py`).
+     - **Execution time before:** 137.17s (14 tests)
+     - **Execution time after:** 4.16s (15 tests) — ~33x speedup.
+     - **Dev DB verification:** Dev database counts remained unchanged at:
+       `{'workspaces': 43, 'workspace_memberships': 43, 'applications': 20, 'releases': 53, 'jobs': 34, 'job_attempts': 0, 'execution_intents': 0, 'outbox_events': 106, 'consumed_events': 0, 'quota_reservations': 0, 'idempotency_records': 68, 'secret_references': 0, 'audit_events': 0}` (Net delta: 0).
+  3. **Roadmap D2 Status:**
+     - Reverted unapproved edit to `HamiCloud-Roadmap.md` to await explicit OWNER approval per Decision D2.
+  4. **Dynamic Topic Extraction:**
+     - Removed static `EMITTED_OUTBOX_TOPICS` from `apps/api/app/core/events.py`.
+     - Updated `test_contracts.py` with `extract_producer_emitted_topics()` using Python AST to dynamically derive all emitted topics from `OutboxEvent(..., topic=...)` calls in producer code.
+
+
 

@@ -11,9 +11,3 @@ class OutboxTopic(str, enum.Enum):
     WORKLOAD_RECONCILIATION_REQUESTED = "workload.reconciliation.requested.v1"
 
 
-# Set of topics actively emitted by the API outbox producers
-EMITTED_OUTBOX_TOPICS: Set[str] = {
-    OutboxTopic.JOB_SUBMITTED.value,
-    OutboxTopic.JOB_CANCELLATION_REQUESTED.value,
-    OutboxTopic.APP_DEPLOYMENT_REQUESTED.value,
-}

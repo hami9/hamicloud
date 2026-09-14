@@ -505,8 +505,10 @@ components:
         created_at:
           type: string
           format: date-time
+          nullable: true
         details:
-          type: object
+          type: [object, 'null']
+          nullable: true
           additionalProperties: true
 
     RollbackRequest:

@@ -23,6 +23,7 @@ from app.main import app
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 ALEMBIC_INI = os.path.join(REPO_ROOT, "migrations", "alembic.ini")
+OPENAPI_SPEC = os.path.join(REPO_ROOT, "contracts", "openapi", "v1.yaml")
 
 TABLES_TO_TRUNCATE = [
     "audit_events",
@@ -64,23 +65,18 @@ def setup_test_database():
     assert engine.url.database == TEST_DB_NAME, f"CRITICAL: Engine connected to {engine.url.database}, not {TEST_DB_NAME}!"
 
 
-@pytest.fixture(autouse=True)
-def clean_test_tables():
-    """Truncate all tenant tables in hamicloud_test before and after each test."""
+@pytest.fixture
+def clean_db():
+    """Delete all rows from tenant tables in hamicloud_test in a single transaction before test execution."""
     conn = psycopg2.connect(TEST_DATABASE_URL_SYNC)
-    conn.autocommit = True
-    cur = conn.cursor()
-    truncate_sql = f"TRUNCATE TABLE {', '.join(TABLES_TO_TRUNCATE)} CASCADE;"
-    cur.execute(truncate_sql)
-    cur.close()
-    conn.close()
+    try:
+        with conn.cursor() as cur:
+            delete_sql = "; ".join([f"DELETE FROM {t}" for t in TABLES_TO_TRUNCATE]) + ";"
+            cur.execute(delete_sql)
+        conn.commit()
+    finally:
+        conn.close()
     yield
-    conn = psycopg2.connect(TEST_DATABASE_URL_SYNC)
-    conn.autocommit = True
-    cur = conn.cursor()
-    cur.execute(truncate_sql)
-    cur.close()
-    conn.close()
 
 
 @pytest.fixture

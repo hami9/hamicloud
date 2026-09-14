@@ -136,3 +136,42 @@ def test_unrecognized_topic_expression_fails():
     with pytest.raises(ValueError, match="missing required 'topic=' keyword argument"):
         extract_topics_from_ast_tree(tree_missing, "fake_producer.py")
 
+
+def test_every_tenant_operation_lists_401_and_404():
+    """Verify that every tenant operation in OpenAPI 3.1 contract declares 401 and 404 responses (T8)."""
+    with open(OPENAPI_SPEC, "r", encoding="utf-8") as f:
+        spec = yaml.safe_load(f)
+
+    paths = spec.get("paths", {})
+    non_tenant_paths = {"/healthz", "/readyz", "/workspaces"}
+
+    for path, path_item in paths.items():
+        if path in non_tenant_paths:
+            continue
+        for method in ("get", "post", "put", "delete", "patch"):
+            op = path_item.get(method)
+            if not op:
+                continue
+            op_id = op.get("operationId", f"{method.upper()} {path}")
+            responses = op.get("responses", {})
+            assert "401" in responses, (
+                f"Tenant operation '{op_id}' ({method.upper()} {path}) missing 401 response in contract"
+            )
+            assert "404" in responses, (
+                f"Tenant operation '{op_id}' ({method.upper()} {path}) missing 404 response in contract"
+            )
+
+
+def test_openapi_security_contract():
+    """Verify that OpenAPI contract publishes BearerAuth security scheme and global security (T8)."""
+    with open(OPENAPI_SPEC, "r", encoding="utf-8") as f:
+        spec = yaml.safe_load(f)
+
+    assert "security" in spec, "OpenAPI spec missing top-level security"
+    assert {"BearerAuth": []} in spec["security"], "OpenAPI spec missing BearerAuth in top-level security"
+    schemes = spec.get("components", {}).get("securitySchemes", {})
+    assert "BearerAuth" in schemes, "OpenAPI spec missing BearerAuth security scheme in components"
+    assert schemes["BearerAuth"]["type"] == "http"
+    assert schemes["BearerAuth"]["scheme"] == "bearer"
+
+

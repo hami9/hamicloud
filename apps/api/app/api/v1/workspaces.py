@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.auth import Caller, get_caller
 from app.db.session import get_db
 from app.models.workspace import Workspace, WorkspaceMembership, WorkspaceRole
 from app.schemas.workspace import CreateWorkspaceRequest, WorkspaceResponse
@@ -14,6 +15,7 @@ router = APIRouter(prefix="/workspaces", tags=["Workspaces"])
 @router.post("", response_model=WorkspaceResponse, status_code=status.HTTP_201_CREATED)
 async def create_workspace(
     payload: CreateWorkspaceRequest,
+    caller: Caller = Depends(get_caller),
     db: AsyncSession = Depends(get_db),
 ) -> WorkspaceResponse:
     # Check if slug exists
@@ -29,10 +31,10 @@ async def create_workspace(
     db.add(workspace)
     await db.flush()
 
-    # Add default owner membership (mock subject for baseline)
+    # Record caller as OWNER
     membership = WorkspaceMembership(
         workspace_id=workspace.id,
-        user_subject="default-admin",
+        user_subject=caller.subject,
         role=WorkspaceRole.OWNER,
     )
     db.add(membership)

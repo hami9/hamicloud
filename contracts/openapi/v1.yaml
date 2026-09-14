@@ -1,17 +1,24 @@
 openapi: 3.1.0
 info:
   title: HamiCloud Control Plane API
-  description: Authoritative public API contract for HamiCloud distributed application runtime.
+  description: >-
+    Authoritative public API contract for HamiCloud distributed application runtime.
+    All tenant endpoints require authentication via OIDC bearer token. Workspace access
+    and permissions are derived strictly from the authenticated subject's workspace membership;
+    clients never supply the workspace ID for authorization.
   version: 1.0.0
 servers:
   - url: /v1
     description: Control Plane API v1
+security:
+  - BearerAuth: []
 
 paths:
   /healthz:
     get:
       summary: Liveness probe
       operationId: getHealth
+      security: []
       responses:
         '200':
           description: Control API is alive
@@ -24,6 +31,7 @@ paths:
     get:
       summary: Readiness probe
       operationId: getReadiness
+      security: []
       responses:
         '200':
           description: Control API is ready to accept requests
@@ -57,6 +65,8 @@ paths:
                 $ref: '#/components/schemas/WorkspaceResponse'
         '400':
           $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
         '409':
           $ref: '#/components/responses/409Conflict'
 
@@ -84,8 +94,16 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApplicationResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
         '404':
           $ref: '#/components/responses/404NotFound'
+        '409':
+          $ref: '#/components/responses/409Conflict'
 
   /apps/{app_id}/deployments:
     post:
@@ -116,6 +134,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AcceptedOperationResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
         '409':
           $ref: '#/components/responses/409Conflict'
 
@@ -143,6 +169,16 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AcceptedOperationResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '409':
+          $ref: '#/components/responses/409Conflict'
 
   /workspaces/{workspace_id}/jobs:
     post:
@@ -173,6 +209,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AcceptedOperationResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
         '409':
           $ref: '#/components/responses/409Conflict'
         '429':
@@ -196,6 +240,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/JobDetailsResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
         '404':
           $ref: '#/components/responses/404NotFound'
 
@@ -217,6 +263,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AcceptedOperationResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '409':
+          $ref: '#/components/responses/409Conflict'
 
   /jobs/{job_id}/reruns:
     post:
@@ -236,6 +290,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AcceptedOperationResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '409':
+          $ref: '#/components/responses/409Conflict'
 
   /operations/{operation_id}:
     get:
@@ -248,12 +310,6 @@ paths:
           schema:
             type: string
             format: uuid
-        - name: X-Workspace-ID
-          in: header
-          required: false
-          schema:
-            type: string
-            format: uuid
       responses:
         '200':
           description: Operation status details
@@ -261,6 +317,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/OperationStatusResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
         '404':
           $ref: '#/components/responses/404NotFound'
 
@@ -290,13 +348,35 @@ paths:
             text/event-stream:
               schema:
                 type: string
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
         '501':
           $ref: '#/components/responses/501NotImplemented'
 
 components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: OpenID Connect (OIDC) Bearer token.
   responses:
     400BadRequest:
       description: Invalid request payload
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    401Unauthorized:
+      description: Authentication required or invalid credentials
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    403Forbidden:
+      description: Insufficient workspace role for this operation
       content:
         application/json:
           schema:

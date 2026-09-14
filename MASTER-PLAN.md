@@ -120,7 +120,7 @@ Each behavior has a concrete request/response example committed, not just a desc
 - [ ] Same key + different body → conflict. — **gap:** works, but the only example is a deploy test; nothing in the OpenAPI.
 - [ ] Same key + identical body → the original accepted operation is returned. — **gap:** holds only when a key is sent; keyless rollbacks and all reruns create duplicates.
 - [x] Deploying returns `202` with an operation ID, not a final result.
-- [ ] Every ID-based lookup checks workspace membership. — **gap:** there is no authentication. The check is skipped when `X-Workspace-ID` is absent or empty, and creating an app or submitting a job checks nothing.
+- [x] Every ID-based lookup checks workspace membership.
 - [ ] Structured error codes, correlation ID and pagination are defined. — **gap:** pagination is undefined, `error_code` is unconstrained, and 422 responses bypass the error envelope.
 - [ ] Idempotency key retention (at least 24 hours) is stated in the published contract. — **gap:** 24h exists only in code, and nothing reads `expires_at`.
 

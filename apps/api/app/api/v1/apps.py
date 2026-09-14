@@ -8,13 +8,14 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.auth import Caller, authorize_workspace_access, get_caller
 from app.core.events import OutboxTopic
 from app.db.session import get_db
 from app.models.application import Application
 from app.models.idempotency import IdempotencyRecord
 from app.models.outbox import OutboxEvent, OutboxStatus
 from app.models.release import Release, ReleaseStatus
-from app.models.workspace import Workspace
+from app.models.workspace import Workspace, WorkspaceRole
 from app.schemas.application import (
     ApplicationResponse,
     CreateApplicationRequest,
@@ -34,16 +35,13 @@ router = APIRouter(tags=["Applications"])
 async def create_application(
     workspace_id: uuid.UUID,
     payload: CreateApplicationRequest,
+    caller: Caller = Depends(get_caller),
     db: AsyncSession = Depends(get_db),
 ) -> ApplicationResponse:
-    # Verify workspace exists
-    ws_stmt = select(Workspace).where(Workspace.id == workspace_id)
-    ws = (await db.execute(ws_stmt)).scalar_one_or_none()
-    if not ws:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Workspace not found",
-        )
+    # Verify caller membership in workspace (requires DEVELOPER)
+    await authorize_workspace_access(
+        db, caller, workspace_id, min_role=WorkspaceRole.DEVELOPER, not_found_detail="Workspace not found"
+    )
 
     # Check slug uniqueness within workspace
     app_stmt = select(Application).where(
@@ -88,7 +86,7 @@ async def deploy_release(
     app_id: uuid.UUID,
     payload: DeployReleaseRequest,
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
-    x_workspace_id: Optional[str] = Header(None, alias="X-Workspace-ID"),
+    caller: Caller = Depends(get_caller),
     db: AsyncSession = Depends(get_db),
 ) -> AcceptedOperationResponse:
     # Find application with row lock for safe generation increments
@@ -100,20 +98,10 @@ async def deploy_release(
             detail="Application not found",
         )
 
-    # Tenant isolation check
-    if x_workspace_id:
-        try:
-            ws_id = uuid.UUID(x_workspace_id)
-            if app.workspace_id != ws_id:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Application not found in specified workspace",
-                )
-        except ValueError:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid X-Workspace-ID header format",
-            )
+    # Tenant isolation: verify caller membership of application's workspace
+    await authorize_workspace_access(
+        db, caller, app.workspace_id, min_role=WorkspaceRole.DEVELOPER, not_found_detail="Application not found"
+    )
 
     endpoint = f"/v1/apps/{app_id}/deployments"
     payload_dict = payload.model_dump(mode="json")
@@ -238,7 +226,7 @@ async def rollback_release(
     app_id: uuid.UUID,
     payload: RollbackRequest,
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
-    x_workspace_id: Optional[str] = Header(None, alias="X-Workspace-ID"),
+    caller: Caller = Depends(get_caller),
     db: AsyncSession = Depends(get_db),
 ) -> AcceptedOperationResponse:
     app_stmt = select(Application).where(Application.id == app_id).with_for_update()
@@ -249,20 +237,10 @@ async def rollback_release(
             detail="Application not found",
         )
 
-    # Tenant isolation check
-    if x_workspace_id:
-        try:
-            ws_id = uuid.UUID(x_workspace_id)
-            if app.workspace_id != ws_id:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Application not found in specified workspace",
-                )
-        except ValueError:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid X-Workspace-ID header format",
-            )
+    # Tenant isolation: verify caller membership of application's workspace
+    await authorize_workspace_access(
+        db, caller, app.workspace_id, min_role=WorkspaceRole.DEVELOPER, not_found_detail="Application not found"
+    )
 
     target_rel_stmt = select(Release).where(
         Release.id == payload.target_release_id, Release.application_id == app.id

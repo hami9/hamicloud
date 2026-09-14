@@ -63,6 +63,10 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
         error_code = "RATE_LIMITED"
     elif exc.status_code == 400:
         error_code = "BAD_REQUEST"
+    elif exc.status_code == 401:
+        error_code = "UNAUTHORIZED"
+    elif exc.status_code == 403:
+        error_code = "FORBIDDEN"
     elif exc.status_code == 503:
         error_code = "SERVICE_UNAVAILABLE"
     elif exc.status_code == 501:
@@ -74,6 +78,10 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
         message = str(exc.detail.get("message", "An error occurred"))
         details = {k: v for k, v in exc.detail.items() if k != "message"}
 
+    resp_headers = {"X-Correlation-ID": correlation_id}
+    if exc.headers:
+        resp_headers.update(exc.headers)
+
     return JSONResponse(
         status_code=exc.status_code,
         content=ErrorResponse(
@@ -82,7 +90,7 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
             correlation_id=correlation_id,
             details=details,
         ).model_dump(exclude_none=True),
-        headers={"X-Correlation-ID": correlation_id},
+        headers=resp_headers,
     )
 
 

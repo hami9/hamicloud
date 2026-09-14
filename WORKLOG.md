@@ -169,6 +169,67 @@ Every entry follows this standard format:
      - Hardened `extract_producer_emitted_topics()` / `extract_topics_from_ast_tree()` in `apps/api/tests/test_contracts.py`: any unrecognized or dynamic topic expression (e.g. f-strings, variables, dynamic function calls) or missing `topic=` argument in outbox calls raises `ValueError` immediately.
      - Added unit tests in `test_unrecognized_topic_expression_fails` verifying that f-strings (`OutboxEvent(topic=f'...')`), variables (`topic=topic_var`), and missing topic arguments trigger `ValueError` as expected. Result: **PASS**.
 
+---
 
+## 2026-09-14 — Phase 2: Tenant Isolation & Authorization Contract (T7, T8)
 
+### Tasks Executed
 
+#### T7 · Enforce membership on every tenant route (PASS)
+- **Implementation:**
+  - Created `apps/api/app/core/auth.py` implementing Decision D1:
+    - `Caller(subject: str)` dataclass representing authenticated caller identity.
+    - `get_caller`: Development seam reading `X-Actor-Subject` / `X-Dev-Subject` when `ENVIRONMENT=development`; returns 401 Unauthorized (`error_code: UNAUTHORIZED`, `WWW-Authenticate: Bearer`) in any other environment or when header is absent/empty.
+    - `authorize_workspace_access`: queries `workspace_memberships`. Returns membership if caller has role >= `min_role` (VIEWER < DEVELOPER < OWNER). If caller is not a member, raises 404 with byte-identical detail message as a non-existent resource ID (preventing cross-tenant metadata leakage). If caller is a member but lacks required role, raises 403 Forbidden (`error_code: FORBIDDEN`).
+  - Updated `apps/api/app/api/v1/workspaces.py`:
+    - `create_workspace` injects `caller: Caller = Depends(get_caller)` and records the caller as `WorkspaceRole.OWNER` in `workspace_memberships`.
+  - Updated `apps/api/app/api/v1/apps.py`:
+    - `create_application`: requires `DEVELOPER` role in path workspace.
+    - `deploy_release`: loads application, checks caller membership of `app.workspace_id` with `DEVELOPER`. Removed `X-Workspace-ID` header read.
+    - `rollback_release`: loads application, checks caller membership of `app.workspace_id` with `DEVELOPER`. Removed `X-Workspace-ID` header read.
+  - Updated `apps/api/app/api/v1/jobs.py`:
+    - `submit_job`: requires `DEVELOPER` role in path workspace.
+    - `get_job`: loads job, checks caller membership of `job.workspace_id` with `VIEWER`. Removed `workspace_id` query parameter and `X-Workspace-ID` header.
+    - `cancel_job`: loads job, checks caller membership of `job.workspace_id` with `DEVELOPER`. Removed `X-Workspace-ID` header read.
+    - `rerun_job`: loads job, checks caller membership of `job.workspace_id` with `DEVELOPER`. Removed `X-Workspace-ID` header read.
+  - Updated `apps/api/app/api/v1/operations.py`:
+    - `get_operation_status`: loads Release or Job, checks caller membership of its workspace with `VIEWER`. Removed `X-Workspace-ID` header.
+    - `stream_operation_events`: loads Release or Job, checks caller membership of its workspace with `VIEWER`. Removed `X-Workspace-ID` header. Authorized members receive 501 Not Implemented.
+  - Updated `apps/api/app/main.py`:
+    - Mapped 401 status to `error_code: UNAUTHORIZED` and 403 status to `error_code: FORBIDDEN` in `http_exception_handler`, preserving `exc.headers` (`WWW-Authenticate: Bearer`).
+- **Tests & Verification:**
+  - Added `test_tenant_isolation_two_workspaces_and_subjects` in `apps/api/tests/test_api_flows.py` using two real workspaces (Alice: Owner of WS 1; Bob: Owner of WS 2 / Non-member of WS 1; Charlie: Viewer of WS 1):
+    - Replaced old test that used a random UUID as foreign workspace.
+    - Verified all 9 tenant routes (`create app`, `deploy`, `rollback`, `submit job`, `get job`, `cancel`, `rerun`, `operation status`, `operation events`):
+      1. Member succeeds (200, 201, 202, or 501).
+      2. Non-member using real resource ID gets 404 byte-identical to a non-existent ID (verified byte-for-byte on error envelope and detail message).
+      3. Request with no identity gets 401 Unauthorized (`WWW-Authenticate: Bearer`).
+      4. Viewer mutation gets 403 Forbidden (`error_code: FORBIDDEN`).
+  - Result: **PASS**.
+  - **Unblocks:** `MASTER-PLAN.md` §A.1: `[x] Every ID-based lookup checks workspace membership.` (ticked and gap note removed).
+
+#### T8 · Publish the authorization contract (PASS)
+- **Implementation:**
+  - Updated `contracts/openapi/v1.yaml`:
+    - Added `components.securitySchemes.BearerAuth` with `type: http`, `scheme: bearer`, `bearerFormat: JWT`.
+    - Added top-level `security: [{BearerAuth: []}]` and overrode with `security: []` on public `/healthz` and `/readyz`.
+    - Updated API description stating workspace access is derived strictly from caller's token membership, not client input.
+    - Documented 401, 403, and 404 responses across all tenant operations.
+    - Removed `X-Workspace-ID` header and `workspace_id` query parameter from the contract. Kept dev identity header out of the public contract.
+- **Tests & Verification:**
+  - Added `test_every_tenant_operation_lists_401_and_404` in `apps/api/tests/test_contracts.py` ensuring all tenant operations declare 401 and 404. Result: **PASS**.
+  - Added `test_openapi_security_contract` in `apps/api/tests/test_contracts.py` ensuring top-level security and BearerAuth scheme are declared. Result: **PASS**.
+  - Verified `openapi-spec-validator` against `contracts/openapi/v1.yaml`. Result: **PASS** (`VALID`).
+
+#### Follow-up Minor Notes
+1. **Replace deprecated jsonschema.RefResolver with referencing library (PASS):**
+   - In `test_all_api_responses_validate_against_openapi_schemas`, replaced `RefResolver.from_schema()` with `referencing.jsonschema.DRAFT202012.create_resource(spec)` and `referencing.Registry()`.
+   - Eliminated all `DeprecationWarning`s from jsonschema.
+2. **Readiness Probe Live Validation (PASS):**
+   - Extended live-validation test to validate `/readyz` live response against `ReadinessResponse` schema.
+   - Also validated 401 and 403 live responses against `ErrorResponse`.
+
+### Test Suite Execution Summary
+- **Python test suite (`apps/api/tests`):** 20 passed, 4 warnings in 5.82s.
+- **Go test suite (`runtime/...`):** Clean vet, domain tests passed in 0.466s.
+- **Database isolation check:** Dev database `hamicloud` unchanged (0 row delta before and after run). All tests strictly run against `hamicloud_test`.

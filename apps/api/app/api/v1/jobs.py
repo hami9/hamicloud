@@ -3,17 +3,18 @@ import json
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.auth import Caller, authorize_workspace_access, get_caller
 from app.core.events import OutboxTopic
 from app.db.session import get_db
 from app.models.idempotency import IdempotencyRecord
 from app.models.job import Job, JobAttempt, JobState
 from app.models.outbox import OutboxEvent, OutboxStatus
-from app.models.workspace import Workspace
+from app.models.workspace import WorkspaceRole
 from app.schemas.common import AcceptedOperationResponse
 from app.schemas.job import JobAttemptItem, JobDetailsResponse, SubmitJobRequest
 
@@ -29,15 +30,21 @@ async def submit_job(
     workspace_id: uuid.UUID,
     payload: SubmitJobRequest,
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    caller: Caller = Depends(get_caller),
     db: AsyncSession = Depends(get_db),
 ) -> AcceptedOperationResponse:
+    # 1. Authorize workspace membership (DEVELOPER role required)
+    await authorize_workspace_access(
+        db, caller, workspace_id, min_role=WorkspaceRole.DEVELOPER, not_found_detail="Workspace not found"
+    )
+
     endpoint = f"/v1/workspaces/{workspace_id}/jobs"
     payload_dict = payload.model_dump(mode="json")
     payload_hash = hashlib.sha256(
         json.dumps(payload_dict, sort_keys=True).encode("utf-8")
     ).hexdigest()
 
-    # 1. Check Idempotency Record
+    # 2. Check Idempotency Record
     idemp_stmt = select(IdempotencyRecord).where(
         IdempotencyRecord.workspace_id == workspace_id,
         IdempotencyRecord.endpoint == endpoint,
@@ -56,15 +63,6 @@ async def submit_job(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Idempotency key reused with different request payload",
             )
-
-    # 2. Check workspace existence
-    ws_stmt = select(Workspace).where(Workspace.id == workspace_id)
-    ws = (await db.execute(ws_stmt)).scalar_one_or_none()
-    if not ws:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Workspace not found",
-        )
 
     # 3. Create Job, Outbox Event, and Idempotency Record in ONE atomic transaction
     job_id = uuid.uuid4()
@@ -126,7 +124,6 @@ async def submit_job(
         await db.commit()
     except IntegrityError:
         await db.rollback()
-        # Handle concurrent submission with the exact same idempotency key
         concurrent_idemp = (await db.execute(idemp_stmt)).scalar_one_or_none()
         if concurrent_idemp and concurrent_idemp.request_hash == payload_hash:
             return AcceptedOperationResponse(
@@ -153,8 +150,7 @@ async def submit_job(
 )
 async def get_job(
     job_id: uuid.UUID,
-    workspace_id: Optional[uuid.UUID] = Query(None, description="Workspace ID for tenant isolation"),
-    x_workspace_id: Optional[str] = Header(None, alias="X-Workspace-ID"),
+    caller: Caller = Depends(get_caller),
     db: AsyncSession = Depends(get_db),
 ) -> JobDetailsResponse:
     stmt = select(Job).where(Job.id == job_id)
@@ -166,23 +162,11 @@ async def get_job(
             detail="Job not found",
         )
 
-    # Tenant isolation check
-    expected_ws_id = workspace_id
-    if not expected_ws_id and x_workspace_id:
-        try:
-            expected_ws_id = uuid.UUID(x_workspace_id)
-        except ValueError:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid X-Workspace-ID header format",
-            )
-
-    if expected_ws_id and job.workspace_id != expected_ws_id:
-        # Prevent cross-tenant information leakage (return 404 per security guidelines)
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Job not found in specified workspace",
-        )
+    # Tenant isolation: verify caller membership of job's workspace (VIEWER or higher)
+    # Non-member receives 404 byte-identical to missing job ID
+    await authorize_workspace_access(
+        db, caller, job.workspace_id, min_role=WorkspaceRole.VIEWER, not_found_detail="Job not found"
+    )
 
     # Load attempts
     attempts_stmt = (
@@ -223,7 +207,7 @@ async def get_job(
 )
 async def cancel_job(
     job_id: uuid.UUID,
-    x_workspace_id: Optional[str] = Header(None, alias="X-Workspace-ID"),
+    caller: Caller = Depends(get_caller),
     db: AsyncSession = Depends(get_db),
 ) -> AcceptedOperationResponse:
     stmt = select(Job).where(Job.id == job_id)
@@ -234,20 +218,10 @@ async def cancel_job(
             detail="Job not found",
         )
 
-    # Tenant isolation check
-    if x_workspace_id:
-        try:
-            ws_id = uuid.UUID(x_workspace_id)
-            if job.workspace_id != ws_id:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Job not found in specified workspace",
-                )
-        except ValueError:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid X-Workspace-ID header format",
-            )
+    # Tenant isolation: verify caller membership of job's workspace (DEVELOPER or higher)
+    await authorize_workspace_access(
+        db, caller, job.workspace_id, min_role=WorkspaceRole.DEVELOPER, not_found_detail="Job not found"
+    )
 
     # Terminal jobs cannot be cancelled
     if job.state in (JobState.SUCCEEDED, JobState.FAILED, JobState.CANCELLED):
@@ -289,7 +263,7 @@ async def cancel_job(
 )
 async def rerun_job(
     job_id: uuid.UUID,
-    x_workspace_id: Optional[str] = Header(None, alias="X-Workspace-ID"),
+    caller: Caller = Depends(get_caller),
     db: AsyncSession = Depends(get_db),
 ) -> AcceptedOperationResponse:
     stmt = select(Job).where(Job.id == job_id)
@@ -297,23 +271,13 @@ async def rerun_job(
     if not original_job:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Original job not found",
+            detail="Job not found",
         )
 
-    # Tenant isolation check
-    if x_workspace_id:
-        try:
-            ws_id = uuid.UUID(x_workspace_id)
-            if original_job.workspace_id != ws_id:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Job not found in specified workspace",
-                )
-        except ValueError:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid X-Workspace-ID header format",
-            )
+    # Tenant isolation: verify caller membership of job's workspace (DEVELOPER or higher)
+    await authorize_workspace_access(
+        db, caller, original_job.workspace_id, min_role=WorkspaceRole.DEVELOPER, not_found_detail="Job not found"
+    )
 
     if original_job.state not in (JobState.FAILED, JobState.CANCELLED, JobState.SUCCEEDED):
         raise HTTPException(

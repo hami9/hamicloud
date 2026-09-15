@@ -89,8 +89,8 @@ async def deploy_release(
     caller: Caller = Depends(get_caller),
     db: AsyncSession = Depends(get_db),
 ) -> AcceptedOperationResponse:
-    # Find application with row lock for safe generation increments
-    app_stmt = select(Application).where(Application.id == app_id).with_for_update()
+    # Find application without lock to verify existence and workspace ownership
+    app_stmt = select(Application).where(Application.id == app_id)
     app = (await db.execute(app_stmt)).scalar_one_or_none()
     if not app:
         raise HTTPException(
@@ -98,10 +98,14 @@ async def deploy_release(
             detail="Application not found",
         )
 
-    # Tenant isolation: verify caller membership of application's workspace
+    # Tenant isolation: verify caller membership of application's workspace BEFORE taking row lock
     await authorize_workspace_access(
         db, caller, app.workspace_id, min_role=WorkspaceRole.DEVELOPER, not_found_detail="Application not found"
     )
+
+    # Acquire row lock for safe generation increment
+    lock_stmt = select(Application).where(Application.id == app_id).with_for_update()
+    app = (await db.execute(lock_stmt)).scalar_one()
 
     endpoint = f"/v1/apps/{app_id}/deployments"
     payload_dict = payload.model_dump(mode="json")
@@ -229,7 +233,8 @@ async def rollback_release(
     caller: Caller = Depends(get_caller),
     db: AsyncSession = Depends(get_db),
 ) -> AcceptedOperationResponse:
-    app_stmt = select(Application).where(Application.id == app_id).with_for_update()
+    # Find application without lock to verify existence and workspace ownership
+    app_stmt = select(Application).where(Application.id == app_id)
     app = (await db.execute(app_stmt)).scalar_one_or_none()
     if not app:
         raise HTTPException(
@@ -237,10 +242,14 @@ async def rollback_release(
             detail="Application not found",
         )
 
-    # Tenant isolation: verify caller membership of application's workspace
+    # Tenant isolation: verify caller membership of application's workspace BEFORE taking row lock
     await authorize_workspace_access(
         db, caller, app.workspace_id, min_role=WorkspaceRole.DEVELOPER, not_found_detail="Application not found"
     )
+
+    # Acquire row lock for safe generation increment
+    lock_stmt = select(Application).where(Application.id == app_id).with_for_update()
+    app = (await db.execute(lock_stmt)).scalar_one()
 
     target_rel_stmt = select(Release).where(
         Release.id == payload.target_release_id, Release.application_id == app.id

@@ -16,22 +16,18 @@ class Caller:
 
 
 async def get_caller(
-    x_actor_subject: Optional[str] = Header(None, alias="X-Actor-Subject"),
     x_dev_subject: Optional[str] = Header(None, alias="X-Dev-Subject"),
 ) -> Caller:
     """Establish caller identity.
 
     DEVELOPMENT SEAM (Decision D1):
     In development (settings.ENVIRONMENT == 'development'), reads caller subject
-    from X-Actor-Subject (or X-Dev-Subject) header. In any other environment, or if
-    the header is absent or empty, raises HTTP 401 Unauthorized until OIDC bearer
-    tokens arrive in M1.
+    from X-Dev-Subject header. In any other environment, or if the header is
+    absent or empty, raises HTTP 401 Unauthorized until OIDC bearer tokens arrive in M1.
 
     NOTE: This is a development seam, NOT a security control.
     """
-    actor = x_actor_subject.strip() if x_actor_subject else None
-    dev = x_dev_subject.strip() if x_dev_subject else None
-    subject = actor or dev
+    subject = x_dev_subject.strip() if x_dev_subject else None
     if settings.ENVIRONMENT == "development" and subject:
         return Caller(subject=subject)
 

@@ -13,6 +13,7 @@ TEST_DATABASE_URL_SYNC = f"postgresql://hamicloud:hamicloud_secret@localhost:543
 
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 os.environ["DATABASE_URL_SYNC"] = TEST_DATABASE_URL_SYNC
+os.environ["ENVIRONMENT"] = "development"
 
 # Ensure apps/api is in sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))

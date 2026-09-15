@@ -68,6 +68,10 @@ HamiCloud must define clear, verifiable security boundaries from day one.
 - **Untrusted Output Rendering:**
   - Application logs and job output streams are treated as untrusted raw text; the dashboard UI sanitizes and escapes all strings prior to rendering to neutralize stored XSS.
 
+### 5. Implementation Status & Development Seam (2026-09-14 — Decision D1)
+- **Status:** In M0, tenant membership is enforced against real database `workspace_memberships` records for every tenant route, returning byte-identical 404s for non-members.
+- **Development Seam Notice:** In development mode (`ENVIRONMENT=development`), caller identity is established via the `X-Dev-Subject` header. This is strictly an engineering and development seam (Decision D1) to enable automated test suites and local workflows without an external IdP, and is **NOT a security control**. In any non-development environment (`ENVIRONMENT=production` or `staging`), or when `ENVIRONMENT` is unset, the seam is inactive and the API rejects requests with HTTP 401 Unauthorized until OIDC bearer token authentication lands in Milestone M1.
+
 ---
 
 ## Consequences

@@ -172,9 +172,17 @@ alembic -c ../../migrations/alembic.ini upgrade head
 ```bash
 uvicorn app.main:app --reload --port 8000
 ```
-Verify health:
+### 4. Development Authentication Seam (M0)
+In Milestone M0, before full OIDC authentication arrives in M1, the Control API provides a development seam (Decision D1):
+- **Header:** `X-Dev-Subject: <subject-identifier>`
+- **Condition:** Active **only** when `ENVIRONMENT=development`. In any other environment (`production`, `staging`) or when unset, the API rejects requests with `401 Unauthorized` (`WWW-Authenticate: Bearer`).
+- **Example request:**
 ```bash
-curl -s http://localhost:8000/healthz | jq
+# Create a workspace as authenticated subject "alice" (recorded as OWNER):
+curl -s -X POST http://localhost:8000/v1/workspaces \
+  -H "Content-Type: application/json" \
+  -H "X-Dev-Subject: alice" \
+  -d '{"name": "Engineering", "slug": "engineering"}' | jq
 ```
 
 ---

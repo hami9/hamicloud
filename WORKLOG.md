@@ -233,3 +233,61 @@ Every entry follows this standard format:
 - **Python test suite (`apps/api/tests`):** 20 passed, 4 warnings in 5.82s.
 - **Go test suite (`runtime/...`):** Clean vet, domain tests passed in 0.466s.
 - **Database isolation check:** Dev database `hamicloud` unchanged (0 row delta before and after run). All tests strictly run against `hamicloud_test`.
+
+---
+
+## 2026-09-14 — Phase 2 Rework: Fail-Closed Default, Closing Test Gaps, and Lock Ordering
+
+### Rework Items Addressed
+
+#### Item 1 · Fail-open default made fail closed (PASS)
+- Changed `apps/api/app/core/config.py`: `ENVIRONMENT` setting default changed from `"development"` to `"production"`, so when `ENVIRONMENT` is unset in the environment, the API fails closed. Kept `ENVIRONMENT=development` in `.env.example`.
+- Configured `os.environ["ENVIRONMENT"] = "development"` in `apps/api/tests/conftest.py` before app import so the test suite runs with dev seam enabled.
+- Added automated test `test_fail_closed_environment_defaults_and_rejects_dev_header_when_non_development`:
+  - Asserts that default instantiation with `ENVIRONMENT` unset in environment fails closed to `"production"`.
+  - Asserts that when `ENVIRONMENT` is unset/empty, `"production"`, or `"staging"`, requests with `X-Dev-Subject: mallory` return 401 Unauthorized (`WWW-Authenticate: Bearer`, `error_code: UNAUTHORIZED`).
+- Result: **PASS**.
+
+#### Item 2 · Close test gaps (PASS)
+- **Gap 2a (Seam in non-development):** Covered by `test_fail_closed_environment_defaults_and_rejects_dev_header_when_non_development`. Result: **PASS**.
+- **Gap 2b (submit_job auth order vs idempotency replay):**
+  - Added automated test `test_submit_job_authorizes_before_idempotency_replay`:
+    - Non-member replays a member's idempotency key with identical body -> asserts 404 Not Found (byte-identical to missing workspace, not 202).
+    - Non-member replays a member's idempotency key with different body -> asserts 404 Not Found (byte-identical to missing workspace, not 409).
+  - Verified regression detection: Temporarily moved `authorize_workspace_access` after idempotency lookup in `submit_job`; the test failed immediately with 202 instead of 404. Reverted to correct order.
+  - Result: **PASS**.
+- **Gap 2c (Job operation ID in Routes 8 and 9):**
+  - Extended `test_tenant_isolation_two_workspaces_and_subjects` to test Route 8 (`GET /v1/operations/{id}`) and Route 9 (`GET /v1/operations/{id}/events`) with both Release and Job operation IDs:
+    - Member gets 200 with `operation_kind: JOB` for Route 8; 501 for Route 9.
+    - Viewer gets 200 for Route 8; 501 for Route 9.
+    - Non-member gets 404 byte-identical to a non-existent operation ID for both routes.
+    - Unauthenticated caller gets 401 for both routes.
+  - Verified regression detection: Temporarily removed `authorize_workspace_access` from job branch of Route 9 in `operations.py`; the test failed immediately with 501 instead of 404. Reverted to correct check.
+  - Result: **PASS**.
+
+#### Item 3 · T8 development header documentation & drop X-Actor-Subject (PASS)
+- Updated `apps/api/app/core/auth.py`: dropped `X-Actor-Subject`. Kept single development identity header `X-Dev-Subject: Optional[str] = Header(None, alias="X-Dev-Subject")`.
+- Replaced all usages of `X-Actor-Subject` across `apps/api/tests/test_api_flows.py` with `X-Dev-Subject`.
+- Documented `X-Dev-Subject` in `README.md` Section 5 (`### 4. Development Authentication Seam (M0)`):
+  - Stated header name (`X-Dev-Subject`).
+  - Stated active only when `ENVIRONMENT=development` (rejects with 401 otherwise).
+  - Provided copy-pasteable `curl` example.
+- Result: **PASS**.
+
+#### Item 4 · Dated implementation-status note in ADR-0004 for D1 (PASS)
+- Added section `### 5. Implementation Status & Development Seam (2026-09-14 — Decision D1)` to `docs/adr/ADR-0004-trust-model-and-tenant-isolation.md` explicitly stating that `X-Dev-Subject` is strictly an engineering development seam to enable local workflows and testing without an IdP, and is **NOT a security control**.
+- Result: **PASS**.
+
+#### Item 5 · Authorize before row lock & update MASTER-PLAN.md (PASS)
+- In `apps/api/app/api/v1/apps.py`:
+  - `deploy_release`: Selects application without lock, runs `authorize_workspace_access`, then acquires exclusive row lock with `.with_for_update()`.
+  - `rollback_release`: Selects application without lock, runs `authorize_workspace_access`, then acquires exclusive row lock with `.with_for_update()`.
+  - Prevents unauthorized callers / non-members from causing row lock contention on application records.
+- Updated `MASTER-PLAN.md` line 7: "Current position: HamiCloud M0 — open. 13 of 45 boxes pass."
+- Result: **PASS**.
+
+### Verification Summary
+- `pytest apps/api/tests -v`: 22 passed, 4 warnings in 6.98s.
+- `go vet ./...` & `go test ./...` in `runtime`: Clean vet, domain tests passed.
+- `openapi-spec-validator`: VALID.
+- Dev DB row count: 0 row delta before and after run (exact counts verified: 43 workspaces, 43 memberships, 20 apps, 53 releases, 34 jobs, 0 attempts, 106 outbox events, 68 idempotency records).

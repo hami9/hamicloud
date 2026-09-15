@@ -23,7 +23,7 @@ def test_workspace_creation_and_duplicate_slug(client: TestClient):
     # 2. Authenticated workspace creation
     unique_slug = f"ws-{uuid.uuid4().hex[:8]}"
     payload = {"name": "Test Workspace", "slug": unique_slug}
-    resp = client.post("/v1/workspaces", json=payload, headers={"X-Actor-Subject": "user-creator"})
+    resp = client.post("/v1/workspaces", json=payload, headers={"X-Dev-Subject": "user-creator"})
     assert resp.status_code == 201, resp.text
     data = resp.json()
     assert data["slug"] == unique_slug
@@ -43,13 +43,13 @@ def test_workspace_creation_and_duplicate_slug(client: TestClient):
     conn.close()
 
     # 3. Duplicate slug returns 409 Conflict
-    dup_resp = client.post("/v1/workspaces", json=payload, headers={"X-Actor-Subject": "user-creator"})
+    dup_resp = client.post("/v1/workspaces", json=payload, headers={"X-Dev-Subject": "user-creator"})
     assert dup_resp.status_code == 409
     assert dup_resp.json()["error_code"] == "CONFLICT"
 
 
 def test_application_and_deployment_flow(client: TestClient):
-    auth_headers = {"X-Actor-Subject": "user-dev"}
+    auth_headers = {"X-Dev-Subject": "user-dev"}
     unique_slug = f"ws-{uuid.uuid4().hex[:8]}"
     ws_resp = client.post("/v1/workspaces", json={"name": "App WS", "slug": unique_slug}, headers=auth_headers)
     assert ws_resp.status_code == 201
@@ -113,7 +113,7 @@ def test_application_and_deployment_flow(client: TestClient):
 
 
 def test_job_flow_and_lifecycle(client: TestClient):
-    auth_headers = {"X-Actor-Subject": "user-jobs"}
+    auth_headers = {"X-Dev-Subject": "user-jobs"}
     unique_slug = f"ws-{uuid.uuid4().hex[:8]}"
     ws_resp = client.post("/v1/workspaces", json={"name": "Job WS", "slug": unique_slug}, headers=auth_headers)
     assert ws_resp.status_code == 201
@@ -154,7 +154,7 @@ def test_job_flow_and_lifecycle(client: TestClient):
 
 
 def test_operations_status_and_stream(client: TestClient):
-    auth_headers = {"X-Actor-Subject": "user-ops"}
+    auth_headers = {"X-Dev-Subject": "user-ops"}
     unique_slug = f"ws-{uuid.uuid4().hex[:8]}"
     ws_resp = client.post("/v1/workspaces", json={"name": "Ops WS", "slug": unique_slug}, headers=auth_headers)
     assert ws_resp.status_code == 201
@@ -203,9 +203,9 @@ def test_tenant_isolation_two_workspaces_and_subjects(client: TestClient):
     sub_bob = "sub-bob-intruder"
     sub_charlie = "sub-charlie-viewer"
 
-    headers_alice = {"X-Actor-Subject": sub_alice}
-    headers_bob = {"X-Actor-Subject": sub_bob}
-    headers_charlie = {"X-Actor-Subject": sub_charlie}
+    headers_alice = {"X-Dev-Subject": sub_alice}
+    headers_bob = {"X-Dev-Subject": sub_bob}
+    headers_charlie = {"X-Dev-Subject": sub_charlie}
 
     # 1. Alice creates Workspace 1
     ws1_resp = client.post(
@@ -507,6 +507,7 @@ def test_tenant_isolation_two_workspaces_and_subjects(client: TestClient):
     # =========================================================================
     missing_op = str(uuid.uuid4())
 
+    # 8a. Test with Release operation ID
     r8_missing = client.get(f"/v1/operations/{missing_op}", headers=headers_alice)
     r8_non_member = client.get(f"/v1/operations/{release_id}", headers=headers_bob)
     assert_byte_identical_404(r8_missing, r8_non_member, "Operation not found")
@@ -516,12 +517,28 @@ def test_tenant_isolation_two_workspaces_and_subjects(client: TestClient):
 
     r8_member = client.get(f"/v1/operations/{release_id}", headers=headers_alice)
     assert r8_member.status_code == 200
+    assert r8_member.json()["operation_kind"] == "RELEASE"
     r8_viewer = client.get(f"/v1/operations/{release_id}", headers=headers_charlie)
     assert r8_viewer.status_code == 200
+
+    # 8b. Test with Job operation ID
+    r8_job_missing = client.get(f"/v1/operations/{missing_op}", headers=headers_alice)
+    r8_job_non_member = client.get(f"/v1/operations/{job_id}", headers=headers_bob)
+    assert_byte_identical_404(r8_job_missing, r8_job_non_member, "Operation not found")
+
+    r8_job_no_auth = client.get(f"/v1/operations/{job_id}")
+    assert_401_unauthorized(r8_job_no_auth)
+
+    r8_job_member = client.get(f"/v1/operations/{job_id}", headers=headers_alice)
+    assert r8_job_member.status_code == 200
+    assert r8_job_member.json()["operation_kind"] == "JOB"
+    r8_job_viewer = client.get(f"/v1/operations/{job_id}", headers=headers_charlie)
+    assert r8_job_viewer.status_code == 200
 
     # =========================================================================
     # Route 9: GET /v1/operations/{id}/events (Operation Events)
     # =========================================================================
+    # 9a. Test with Release operation ID
     r9_missing = client.get(f"/v1/operations/{missing_op}/events", headers=headers_alice)
     r9_non_member = client.get(f"/v1/operations/{release_id}/events", headers=headers_bob)
     assert_byte_identical_404(r9_missing, r9_non_member, "Operation not found")
@@ -534,6 +551,19 @@ def test_tenant_isolation_two_workspaces_and_subjects(client: TestClient):
     assert r9_member.status_code == 501
     r9_viewer = client.get(f"/v1/operations/{release_id}/events", headers=headers_charlie)
     assert r9_viewer.status_code == 501
+
+    # 9b. Test with Job operation ID
+    r9_job_missing = client.get(f"/v1/operations/{missing_op}/events", headers=headers_alice)
+    r9_job_non_member = client.get(f"/v1/operations/{job_id}/events", headers=headers_bob)
+    assert_byte_identical_404(r9_job_missing, r9_job_non_member, "Operation not found")
+
+    r9_job_no_auth = client.get(f"/v1/operations/{job_id}/events")
+    assert_401_unauthorized(r9_job_no_auth)
+
+    r9_job_member = client.get(f"/v1/operations/{job_id}/events", headers=headers_alice)
+    assert r9_job_member.status_code == 501
+    r9_job_viewer = client.get(f"/v1/operations/{job_id}/events", headers=headers_charlie)
+    assert r9_job_viewer.status_code == 501
 
 
 def test_all_api_responses_validate_against_openapi_schemas(client: TestClient):
@@ -555,7 +585,7 @@ def test_all_api_responses_validate_against_openapi_schemas(client: TestClient):
         )
         validator.validate(data)
 
-    auth_headers = {"X-Actor-Subject": "contract-tester"}
+    auth_headers = {"X-Dev-Subject": "contract-tester"}
 
     # 1. HealthResponse: GET /healthz -> 200
     health_resp = client.get("/healthz")
@@ -709,7 +739,7 @@ def test_all_api_responses_validate_against_openapi_schemas(client: TestClient):
     err_403_resp = client.post(
         f"/v1/workspaces/{ws_id}/apps",
         json={"name": "Forbidden App", "slug": f"fb-{uuid.uuid4().hex[:6]}", "workload_type": "HTTP_SERVICE"},
-        headers={"X-Actor-Subject": "viewer-only"},
+        headers={"X-Dev-Subject": "viewer-only"},
     )
     assert err_403_resp.status_code == 403
     validate_body(err_403_resp.json(), "ErrorResponse")
@@ -728,3 +758,107 @@ def test_all_api_responses_validate_against_openapi_schemas(client: TestClient):
     err_501_resp = client.get(f"/v1/operations/{job_id}/events", headers=auth_headers)
     assert err_501_resp.status_code == 501
     validate_body(err_501_resp.json(), "ErrorResponse")
+
+
+def test_submit_job_authorizes_before_idempotency_replay(client: TestClient):
+    """Assert submit_job authorizes workspace membership BEFORE checking idempotency records.
+
+    A non-member attempting to replay a member's idempotency key must receive 404 (Workspace not found),
+    byte-identical to a non-existent workspace, whether replayed with:
+      - the identical request payload (preventing 202 replay leakage)
+      - a different request payload (preventing 409 conflict leakage)
+    """
+    headers_alice = {"X-Dev-Subject": "alice-owner"}
+    headers_bob = {"X-Dev-Subject": "bob-intruder"}
+
+    # Alice creates Workspace 1
+    ws1_resp = client.post(
+        "/v1/workspaces",
+        json={"name": "Alice WS", "slug": f"alice-idemp-{uuid.uuid4().hex[:6]}"},
+        headers=headers_alice,
+    )
+    assert ws1_resp.status_code == 201
+    ws1_id = ws1_resp.json()["id"]
+
+    # Bob creates Workspace 2 (Bob is not a member of WS 1)
+    ws2_resp = client.post(
+        "/v1/workspaces",
+        json={"name": "Bob WS", "slug": f"bob-idemp-{uuid.uuid4().hex[:6]}"},
+        headers=headers_bob,
+    )
+    assert ws2_resp.status_code == 201
+
+    # Alice submits a job with an idempotency key
+    idemp_key = f"key-alice-{uuid.uuid4().hex[:8]}"
+    alice_body = {
+        "name": "data-pipeline",
+        "image_digest": "registry.example.com/data@sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+        "command_args": ["run"],
+    }
+    alice_resp = client.post(
+        f"/v1/workspaces/{ws1_id}/jobs",
+        json=alice_body,
+        headers={"Idempotency-Key": idemp_key, **headers_alice},
+    )
+    assert alice_resp.status_code == 202
+
+    # Missing workspace reference for byte-identical 404 comparison
+    missing_ws_id = str(uuid.uuid4())
+    missing_resp = client.post(
+        f"/v1/workspaces/{missing_ws_id}/jobs",
+        json=alice_body,
+        headers={"Idempotency-Key": idemp_key, **headers_alice},
+    )
+    assert missing_resp.status_code == 404
+    missing_clean = {k: v for k, v in missing_resp.json().items() if k != "correlation_id"}
+
+    # 1. Non-member (Bob) replays Alice's key with the SAME body -> must get 404, NOT 202
+    replay_same_resp = client.post(
+        f"/v1/workspaces/{ws1_id}/jobs",
+        json=alice_body,
+        headers={"Idempotency-Key": idemp_key, **headers_bob},
+    )
+    assert replay_same_resp.status_code == 404
+    replay_same_clean = {k: v for k, v in replay_same_resp.json().items() if k != "correlation_id"}
+    assert replay_same_clean == missing_clean, "Replay with same body leaked info (not byte-identical 404)"
+
+    # 2. Non-member (Bob) replays Alice's key with a DIFFERENT body -> must get 404, NOT 409
+    bob_diff_body = {
+        "name": "malicious-takeover",
+        "image_digest": "registry.example.com/exploit@sha256:abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdef",
+        "command_args": ["rm", "-rf", "/"],
+    }
+    replay_diff_resp = client.post(
+        f"/v1/workspaces/{ws1_id}/jobs",
+        json=bob_diff_body,
+        headers={"Idempotency-Key": idemp_key, **headers_bob},
+    )
+    assert replay_diff_resp.status_code == 404
+    replay_diff_clean = {k: v for k, v in replay_diff_resp.json().items() if k != "correlation_id"}
+    assert replay_diff_clean == missing_clean, "Replay with diff body leaked info (not byte-identical 404)"
+
+
+def test_fail_closed_environment_defaults_and_rejects_dev_header_when_non_development(client: TestClient, monkeypatch):
+    """Verify fail-closed behavior: unset, production, and staging all return 401 even with X-Dev-Subject."""
+    from app.core.config import Settings, settings
+
+    # 1. Verify default Settings instantiation with ENVIRONMENT unset in env fails closed to production
+    with monkeypatch.context() as m:
+        m.delenv("ENVIRONMENT", raising=False)
+        fresh_settings = Settings()
+        assert fresh_settings.ENVIRONMENT != "development", "Default ENVIRONMENT must fail closed!"
+        assert fresh_settings.ENVIRONMENT == "production"
+
+    # 2. Verify unset/empty, production, and staging all return 401 even with X-Dev-Subject
+    payload = {"name": "Mallory WS", "slug": f"mallory-{uuid.uuid4().hex[:6]}"}
+    dev_headers = {"X-Dev-Subject": "mallory"}
+
+    for env_val in ["production", "staging", ""]:
+        monkeypatch.setattr(settings, "ENVIRONMENT", env_val)
+        resp = client.post("/v1/workspaces", json=payload, headers=dev_headers)
+        assert resp.status_code == 401, f"Expected 401 when ENVIRONMENT='{env_val}', got {resp.status_code}"
+        assert resp.headers.get("www-authenticate") == "Bearer"
+        data = resp.json()
+        assert data["error_code"] == "UNAUTHORIZED"
+        assert data["message"] == "Authentication required"
+

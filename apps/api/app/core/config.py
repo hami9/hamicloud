@@ -15,7 +15,8 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "HamiCloud Control API"
     VERSION: str = "0.1.0"
     API_V1_PREFIX: str = "/v1"
-    ENVIRONMENT: str = Field(default="development")
+    # Environment mode: development | staging | production (fails closed to production when unset)
+    ENVIRONMENT: str = Field(default="production")
 
     # PostgreSQL
     DATABASE_URL: str = Field(

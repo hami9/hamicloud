@@ -1,9 +1,10 @@
 import uuid
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 from app.models.application import WorkloadType
+from app.models.release import ReleaseStatus
 
 
 class CreateApplicationRequest(BaseModel):
@@ -34,3 +35,19 @@ class DeployReleaseRequest(BaseModel):
 
 class RollbackRequest(BaseModel):
     target_release_id: uuid.UUID
+
+
+class ReleaseResponse(BaseModel):
+    id: uuid.UUID
+    application_id: uuid.UUID
+    workspace_id: uuid.UUID
+    release_number: int
+    image_digest: str
+    config_json: Dict[str, Any] = Field(default_factory=dict)
+    status: ReleaseStatus
+    created_at: datetime
+
+
+class ReleaseListResponse(BaseModel):
+    items: List[ReleaseResponse]
+    next_cursor: Optional[str] = None

@@ -1,22 +1,28 @@
-import hashlib
-import json
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Optional
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.auth import Caller, authorize_workspace_access, get_caller
 from app.core.events import OutboxTopic
+from app.core.idempotency import (
+    check_idempotency,
+    compute_payload_hash,
+    create_idempotency_record,
+    handle_idempotency_race,
+)
+from app.core.pagination import decode_cursor, encode_cursor
 from app.db.session import get_db
 from app.models.idempotency import IdempotencyRecord
 from app.models.job import Job, JobAttempt, JobState
 from app.models.outbox import OutboxEvent, OutboxStatus
 from app.models.workspace import WorkspaceRole
 from app.schemas.common import AcceptedOperationResponse
-from app.schemas.job import JobAttemptItem, JobDetailsResponse, SubmitJobRequest
+from app.schemas.job import JobAttemptItem, JobDetailsResponse, JobListResponse, SubmitJobRequest
 
 router = APIRouter(tags=["Jobs"])
 
@@ -39,30 +45,14 @@ async def submit_job(
     )
 
     endpoint = f"/v1/workspaces/{workspace_id}/jobs"
-    payload_dict = payload.model_dump(mode="json")
-    payload_hash = hashlib.sha256(
-        json.dumps(payload_dict, sort_keys=True).encode("utf-8")
-    ).hexdigest()
+    payload_hash = compute_payload_hash(payload)
 
     # 2. Check Idempotency Record
-    idemp_stmt = select(IdempotencyRecord).where(
-        IdempotencyRecord.workspace_id == workspace_id,
-        IdempotencyRecord.endpoint == endpoint,
-        IdempotencyRecord.idempotency_key == idempotency_key,
+    cached_response = await check_idempotency(
+        db, workspace_id, endpoint, idempotency_key, payload_hash
     )
-    existing_idemp = (await db.execute(idemp_stmt)).scalar_one_or_none()
-    if existing_idemp:
-        if existing_idemp.request_hash == payload_hash:
-            return AcceptedOperationResponse(
-                operation_id=uuid.UUID(existing_idemp.response_body["operation_id"]),
-                status=existing_idemp.response_body["status"],
-                status_url=existing_idemp.response_body["status_url"],
-            )
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Idempotency key reused with different request payload",
-            )
+    if cached_response:
+        return cached_response
 
     # 3. Create Job, Outbox Event, and Idempotency Record in ONE atomic transaction
     job_id = uuid.uuid4()
@@ -100,41 +90,30 @@ async def submit_job(
     )
     db.add(outbox_event)
 
-    # Prepare response data
-    response_data = {
-        "operation_id": str(job_id),
-        "status": "ACCEPTED",
-        "status_url": f"/v1/operations/{job_id}",
-    }
-
     # Prepare idempotency record
-    idemp_record = IdempotencyRecord(
+    idemp_record = create_idempotency_record(
         workspace_id=workspace_id,
         endpoint=endpoint,
         idempotency_key=idempotency_key,
-        request_hash=payload_hash,
+        payload_hash=payload_hash,
         response_code=202,
-        response_body=response_data,
-        expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+        operation_id=job_id,
     )
     db.add(idemp_record)
 
     # Commit single atomic transaction with race condition handling
     try:
         await db.commit()
-    except IntegrityError:
-        await db.rollback()
-        concurrent_idemp = (await db.execute(idemp_stmt)).scalar_one_or_none()
-        if concurrent_idemp and concurrent_idemp.request_hash == payload_hash:
-            return AcceptedOperationResponse(
-                operation_id=uuid.UUID(concurrent_idemp.response_body["operation_id"]),
-                status=concurrent_idemp.response_body["status"],
-                status_url=concurrent_idemp.response_body["status_url"],
-            )
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Concurrent idempotency conflict detected",
+    except IntegrityError as exc:
+        return await handle_idempotency_race(
+            db, exc, workspace_id, endpoint, idempotency_key, payload_hash
         )
+
+    return AcceptedOperationResponse(
+        operation_id=job_id,
+        status="ACCEPTED",
+        status_url=f"/v1/operations/{job_id}",
+    )
 
     return AcceptedOperationResponse(
         operation_id=job_id,
@@ -207,6 +186,7 @@ async def get_job(
 )
 async def cancel_job(
     job_id: uuid.UUID,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
     caller: Caller = Depends(get_caller),
     db: AsyncSession = Depends(get_db),
 ) -> AcceptedOperationResponse:
@@ -218,10 +198,24 @@ async def cancel_job(
             detail="Job not found",
         )
 
-    # Tenant isolation: verify caller membership of job's workspace (DEVELOPER or higher)
+    # Tenant isolation: verify caller membership of job's workspace (DEVELOPER or higher) BEFORE taking row lock
     await authorize_workspace_access(
         db, caller, job.workspace_id, min_role=WorkspaceRole.DEVELOPER, not_found_detail="Job not found"
     )
+
+    # Acquire pessimistic row lock
+    lock_stmt = select(Job).where(Job.id == job_id).with_for_update()
+    job = (await db.execute(lock_stmt)).scalar_one()
+
+    endpoint = f"/v1/jobs/{job_id}/cancel"
+    payload_hash = compute_payload_hash(None)
+
+    # 1. Idempotency Check
+    cached_response = await check_idempotency(
+        db, job.workspace_id, endpoint, idempotency_key, payload_hash
+    )
+    if cached_response:
+        return cached_response
 
     # Terminal jobs cannot be cancelled
     if job.state in (JobState.SUCCEEDED, JobState.FAILED, JobState.CANCELLED):
@@ -230,24 +224,40 @@ async def cancel_job(
             detail=f"Cannot cancel job in terminal state '{job.state.value}'",
         )
 
-    job.state = JobState.CANCEL_REQUESTED
+    # If already CANCEL_REQUESTED, do not emit duplicate outbox event (T9)
+    if job.state != JobState.CANCEL_REQUESTED:
+        job.state = JobState.CANCEL_REQUESTED
+        event_id = uuid.uuid4()
+        outbox_event = OutboxEvent(
+            event_id=event_id,
+            topic=OutboxTopic.JOB_CANCELLATION_REQUESTED.value,
+            payload_json={
+                "event_id": str(event_id),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "workspace_id": str(job.workspace_id),
+                "job_id": str(job.id),
+            },
+            headers_json={"idempotency_key": idempotency_key},
+            status=OutboxStatus.PENDING,
+        )
+        db.add(outbox_event)
 
-    # Insert outbox event for cancellation
-    event_id = uuid.uuid4()
-    outbox_event = OutboxEvent(
-        event_id=event_id,
-        topic=OutboxTopic.JOB_CANCELLATION_REQUESTED.value,
-        payload_json={
-            "event_id": str(event_id),
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "workspace_id": str(job.workspace_id),
-            "job_id": str(job.id),
-        },
-        headers_json={},
-        status=OutboxStatus.PENDING,
+    idemp_record = create_idempotency_record(
+        workspace_id=job.workspace_id,
+        endpoint=endpoint,
+        idempotency_key=idempotency_key,
+        payload_hash=payload_hash,
+        response_code=202,
+        operation_id=job.id,
     )
-    db.add(outbox_event)
-    await db.commit()
+    db.add(idemp_record)
+
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        return await handle_idempotency_race(
+            db, exc, job.workspace_id, endpoint, idempotency_key, payload_hash
+        )
 
     return AcceptedOperationResponse(
         operation_id=job.id,
@@ -263,6 +273,7 @@ async def cancel_job(
 )
 async def rerun_job(
     job_id: uuid.UUID,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
     caller: Caller = Depends(get_caller),
     db: AsyncSession = Depends(get_db),
 ) -> AcceptedOperationResponse:
@@ -274,10 +285,24 @@ async def rerun_job(
             detail="Job not found",
         )
 
-    # Tenant isolation: verify caller membership of job's workspace (DEVELOPER or higher)
+    # Tenant isolation: verify caller membership of job's workspace (DEVELOPER or higher) BEFORE taking row lock
     await authorize_workspace_access(
         db, caller, original_job.workspace_id, min_role=WorkspaceRole.DEVELOPER, not_found_detail="Job not found"
     )
+
+    # Acquire pessimistic row lock
+    lock_stmt = select(Job).where(Job.id == job_id).with_for_update()
+    original_job = (await db.execute(lock_stmt)).scalar_one()
+
+    endpoint = f"/v1/jobs/{job_id}/reruns"
+    payload_hash = compute_payload_hash(None)
+
+    # 1. Idempotency Check
+    cached_response = await check_idempotency(
+        db, original_job.workspace_id, endpoint, idempotency_key, payload_hash
+    )
+    if cached_response:
+        return cached_response
 
     if original_job.state not in (JobState.FAILED, JobState.CANCELLED, JobState.SUCCEEDED):
         raise HTTPException(
@@ -317,14 +342,96 @@ async def rerun_job(
             "max_retries": new_job.max_retries,
             "parent_job_id": str(original_job.id),
         },
-        headers_json={"rerun_from": str(original_job.id)},
+        headers_json={"rerun_from": str(original_job.id), "idempotency_key": idempotency_key},
         status=OutboxStatus.PENDING,
     )
     db.add(outbox_event)
-    await db.commit()
+
+    idemp_record = create_idempotency_record(
+        workspace_id=original_job.workspace_id,
+        endpoint=endpoint,
+        idempotency_key=idempotency_key,
+        payload_hash=payload_hash,
+        response_code=202,
+        operation_id=new_job_id,
+    )
+    db.add(idemp_record)
+
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        return await handle_idempotency_race(
+            db, exc, original_job.workspace_id, endpoint, idempotency_key, payload_hash
+        )
 
     return AcceptedOperationResponse(
         operation_id=new_job_id,
         status="ACCEPTED",
         status_url=f"/v1/operations/{new_job_id}",
     )
+
+
+@router.get(
+    "/workspaces/{workspace_id}/jobs",
+    response_model=JobListResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def list_workspace_jobs(
+    workspace_id: uuid.UUID,
+    limit: int = Query(default=20, ge=1, le=100),
+    cursor: Optional[str] = Query(default=None),
+    caller: Caller = Depends(get_caller),
+    db: AsyncSession = Depends(get_db),
+) -> JobListResponse:
+    # 1. Authorize workspace membership (VIEWER or higher)
+    await authorize_workspace_access(
+        db, caller, workspace_id, min_role=WorkspaceRole.VIEWER, not_found_detail="Workspace not found"
+    )
+
+    # 2. Query jobs with cursor pagination
+    stmt = (
+        select(Job)
+        .options(selectinload(Job.attempts))
+        .where(Job.workspace_id == workspace_id)
+    )
+    if cursor:
+        cursor_ts, cursor_id = decode_cursor(cursor)
+        stmt = stmt.where(
+            (Job.created_at < cursor_ts)
+            | ((Job.created_at == cursor_ts) & (Job.id < cursor_id))
+        )
+
+    stmt = stmt.order_by(Job.created_at.desc(), Job.id.desc()).limit(limit + 1)
+    jobs = (await db.execute(stmt)).scalars().all()
+
+    next_cursor = None
+    if len(jobs) > limit:
+        next_item = jobs[limit - 1]
+        next_cursor = encode_cursor(next_item.created_at, next_item.id)
+        jobs = jobs[:limit]
+
+    items = [
+        JobDetailsResponse(
+            id=j.id,
+            workspace_id=j.workspace_id,
+            name=j.name,
+            state=j.state,
+            current_attempt_number=j.current_attempt_number,
+            attempts=[
+                JobAttemptItem(
+                    attempt_number=att.attempt_number,
+                    state=att.state,
+                    resource_uid=att.resource_uid,
+                    lease_epoch=att.lease_epoch,
+                    exit_code=att.exit_code,
+                    failure_reason=att.failure_reason,
+                    started_at=att.started_at,
+                    finished_at=att.finished_at,
+                )
+                for att in j.attempts
+            ],
+            created_at=j.created_at,
+        )
+        for j in jobs
+    ]
+    return JobListResponse(items=items, next_cursor=next_cursor)

@@ -34,3 +34,8 @@ class JobDetailsResponse(BaseModel):
     current_attempt_number: int
     attempts: List[JobAttemptItem]
     created_at: datetime
+
+
+class JobListResponse(BaseModel):
+    items: List[JobDetailsResponse]
+    next_cursor: Optional[str] = None

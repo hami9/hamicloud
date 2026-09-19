@@ -183,8 +183,11 @@ Use foreign keys and unique constraints for correctness. Python migrations own t
 | Read logs/events | `GET /v1/operations/{op}/events` | Authorized SSE stream with reconnect cursor and bounded retention |
 | Roll back | `POST /v1/apps/{app}/rollbacks` | Create a new release referencing an older image/configuration |
 | Re-run failed work | `POST /v1/jobs/{job}/reruns` | Create a new audited logical job linked to its predecessor |
+| List workspace jobs² | `GET /v1/workspaces/{ws}/jobs` | Cursor-paginated listing of jobs in a workspace; check workspace membership |
+| List app releases² | `GET /v1/apps/{app}/releases` | Cursor-paginated listing of releases for an application; check application workspace membership |
 
 ¹ Added on 2026-09-14 with owner approval. The endpoint was already in the code and in `contracts/openapi/v1.yaml` as of commit `dc0db7c`; this row brings the Roadmap in line with them.
+² Added on 2026-09-19 with owner approval (Decision D3). Provides cursor-paginated collection endpoints to support API pagination requirements in M0.
 
 All ID-based lookups must check workspace ownership. Pagination, structured error codes, a correlation ID, and OpenAPI documentation are required. Reusing an idempotency key with a different request body returns a conflict; identical retries return the original accepted operation. Store keys for at least 24 hours and publish that retention contract.
 

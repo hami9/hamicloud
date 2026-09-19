@@ -4,7 +4,7 @@ Single tracking file for both projects. It links the two roadmaps, fixes the exe
 
 **Status legend:** `[ ]` not started · `[~]` in progress · `[x]` closed with a committed evidence record
 
-**Current position:** HamiCloud M0 — open. 13 of 45 boxes pass.
+**Current position:** HamiCloud M0 — open. 18 of 45 boxes pass.
 
 ---
 
@@ -116,13 +116,13 @@ Cheap now, expensive at M2. Verify each exists in the migration, not only in pro
 
 Each behavior has a concrete request/response example committed, not just a description.
 
-- [ ] Submitting a job without an idempotency key is rejected. — **gap:** rejected with 422, but in FastAPI's raw shape instead of `ErrorResponse`; no example in the contract and no test.
-- [ ] Same key + different body → conflict. — **gap:** works, but the only example is a deploy test; nothing in the OpenAPI.
-- [ ] Same key + identical body → the original accepted operation is returned. — **gap:** holds only when a key is sent; keyless rollbacks and all reruns create duplicates.
+- [x] Submitting a job without an idempotency key is rejected.
+- [x] Same key + different body → conflict.
+- [x] Same key + identical body → the original accepted operation is returned.
 - [x] Deploying returns `202` with an operation ID, not a final result.
 - [x] Every ID-based lookup checks workspace membership.
-- [ ] Structured error codes, correlation ID and pagination are defined. — **gap:** pagination is undefined, `error_code` is unconstrained, and 422 responses bypass the error envelope.
-- [ ] Idempotency key retention (at least 24 hours) is stated in the published contract. — **gap:** 24h exists only in code, and nothing reads `expires_at`.
+- [x] Structured error codes, correlation ID and pagination are defined.
+- [x] Idempotency key retention (at least 24 hours) is stated in the published contract.
 
 ### Pins and environment
 

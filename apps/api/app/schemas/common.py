@@ -18,8 +18,22 @@ class ReadinessResponse(BaseModel):
     timestamp: datetime
 
 
+class ErrorCode(str, enum.Enum):
+    VALIDATION_ERROR = "VALIDATION_ERROR"
+    UNAUTHORIZED = "UNAUTHORIZED"
+    FORBIDDEN = "FORBIDDEN"
+    NOT_FOUND = "NOT_FOUND"
+    CONFLICT = "CONFLICT"
+    IDEMPOTENCY_CONFLICT = "IDEMPOTENCY_CONFLICT"
+    RATE_LIMITED = "RATE_LIMITED"
+    BAD_REQUEST = "BAD_REQUEST"
+    SERVICE_UNAVAILABLE = "SERVICE_UNAVAILABLE"
+    NOT_IMPLEMENTED = "NOT_IMPLEMENTED"
+    INTERNAL_SERVER_ERROR = "INTERNAL_SERVER_ERROR"
+
+
 class ErrorResponse(BaseModel):
-    error_code: str
+    error_code: ErrorCode
     message: str
     correlation_id: str
     details: Optional[Dict[str, Any]] = None

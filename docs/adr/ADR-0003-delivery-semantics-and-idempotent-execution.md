@@ -34,8 +34,11 @@ HamiCloud must define mathematically sound delivery and execution semantics that
 - All control-plane events and state transitions are **strictly at-least-once delivered and idempotent**.
 - Re-processing an identical event produces identical database state without side effects.
 - Idempotency records store `(workspace_id, endpoint, idempotency_key, request_hash, response_code, response_body, expires_at)`.
-  - Same key + same hash: returns cached response immediately.
-  - Same key + different hash: returns `409 Conflict`.
+  - **Retention Contract:** Records are retained for at least 24 hours (`expires_at = NOW() + INTERVAL '24 hours'`).
+  - Active check: Queries filter by `expires_at > NOW()`. If a record has expired, it is treated as non-existent and a new operation is admitted.
+  - Same key + same hash (unexpired): returns cached `202 Accepted` response immediately.
+  - Same key + different hash (unexpired): returns `409 Conflict` (`IDEMPOTENCY_CONFLICT`).
+  - **Sweeper Ownership:** Expired idempotency records are physically purged by an asynchronous background sweeper task, owned and scheduled by Milestone M1.
 
 ### 2. Execution Lease & Epoch Fencing
 To execute a job attempt or reconcile a release, a worker must claim the `ExecutionIntent` in PostgreSQL:

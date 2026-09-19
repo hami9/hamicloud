@@ -291,3 +291,79 @@ Every entry follows this standard format:
 - `go vet ./...` & `go test ./...` in `runtime`: Clean vet, domain tests passed.
 - `openapi-spec-validator`: VALID.
 - Dev DB row count: 0 row delta before and after run (exact counts verified: 43 workspaces, 43 memberships, 20 apps, 53 releases, 34 jobs, 0 attempts, 106 outbox events, 68 idempotency records).
+
+### [2026-09-19T16:10:00Z] Phase 3 / Milestone M0: Idempotency and the API Contract (T9 – T15, Decision D3)
+
+- **Status:** COMPLETED & VERIFIED
+- **Milestone:** P0 / M0 — Design baseline (Phase 3)
+- **Source of Truth:** `M0-WORK-ORDER.md`, `HamiCloud-Roadmap.md`, `HamiCloud-System-Prompt.md`, and `contracts/openapi/v1.yaml`
+- **Owner Decisions:** Decision D3 approved by owner (recorded in `HamiCloud-Roadmap.md` with dated footnote 2).
+
+#### Deliverables & Implementation Details
+
+1. **T9 · Consolidated Idempotency Engine (`apps/api/app/core/idempotency.py`):**
+   - Implemented deterministic SHA-256 request payload hashing (`compute_payload_hash`) supporting Pydantic models, dicts, and empty bodies.
+   - Enforced mandatory `Idempotency-Key` header on all five mutating endpoints:
+     - `POST /v1/workspaces/{workspace_id}/jobs`
+     - `POST /v1/apps/{app_id}/deployments`
+     - `POST /v1/apps/{app_id}/rollbacks`
+     - `POST /v1/jobs/{job_id}/cancel`
+     - `POST /v1/jobs/{job_id}/reruns`
+   - Added pessimistic parent row locks (`with_for_update()`) on `rerun_job` and `cancel_job`.
+   - Prevented duplicate outbox event emission on `cancel_job` when job is already in `CANCEL_REQUESTED`.
+   - Implemented atomic concurrent race conflict handling (`handle_idempotency_race`) ensuring parallel identical requests produce exactly one domain operation and return the cached `202 Accepted` response.
+
+2. **T10 · Enforce and Publish Key Retention:**
+   - Modified `check_idempotency` to inspect expiration: records older than 24 hours are treated as non-existent and purged upon key reuse, admitting new operations.
+   - Documented retention contract across all five mutating endpoints in `contracts/openapi/v1.yaml`: `"Retained for at least 24 hours; after that the key may be treated as new."`
+   - Updated `docs/adr/ADR-0003-delivery-semantics-and-idempotent-execution.md` to document the 24-hour retention window and explicit ownership of background row purging by the M1 sweeper task.
+
+3. **T11 · Correct Failure Handling in Deploy and Rollback:**
+   - Replaced fragile `COUNT(*) + 1` with `COALESCE(MAX(release_number), 0) + 1` under exclusive application row lock (`with_for_update()`). Verified that deleting an intermediate release does not cause collisions on subsequent deploys.
+   - Isolated constraint inspection to `uq_idempotency_workspace_key` using driver-level causal attributes (`exc.orig.__cause__.constraint_name`). Non-idempotency integrity violations now strictly raise HTTP 500 (`INTERNAL_SERVER_ERROR`), preventing masked database corruptions from reporting as 409 conflicts.
+
+4. **T12 · Complete Error and Pagination Contract:**
+   - Added custom FastAPI exception handler for `RequestValidationError` (422) mapping validation failures into the standard `ErrorResponse` envelope with `error_code: VALIDATION_ERROR`, Pydantic validation details, and `X-Correlation-ID`.
+   - Replaced unconstrained error code string with an explicit 11-member `ErrorCode` enum matching all emitted error conditions (`VALIDATION_ERROR`, `UNAUTHORIZED`, `FORBIDDEN`, `NOT_FOUND`, `CONFLICT`, `IDEMPOTENCY_CONFLICT`, `BAD_REQUEST`, `NOT_IMPLEMENTED`, `INTERNAL_SERVER_ERROR`, `SERVICE_UNAVAILABLE`, `RATE_LIMITED`).
+   - Documented `X-Correlation-ID` header as a mandatory response header on all OpenAPI operations and error schemas.
+   - Implemented opaque base64 cursor pagination helper (`apps/api/app/core/pagination.py`) with `limit` capped at 100, `cursor` decoding `(created_at, id)`, and `next_cursor` generation.
+   - Added cursor pagination to `GET /v1/workspaces/{workspace_id}/jobs` and `GET /v1/apps/{app_id}/releases` (approved under D3).
+
+5. **T13 · Commit Concrete Request/Response Examples in Contract:**
+   - Added OpenAPI `examples` for every operation and schema in `contracts/openapi/v1.yaml`.
+   - Verified that all committed OpenAPI examples validate against their respective schemas and match the live API responses.
+
+6. **T14 · Event Schema Contract Validation:**
+   - Added automated test verifying that all emitted outbox event payloads from API operations conform strictly to their respective JSON Schema contracts in `contracts/events/`.
+
+7. **T15 · Redis Lifespan Connection Pool & Readiness Probe:**
+   - Configured shared `redis.asyncio.ConnectionPool` in FastAPI lifespan (`app.state.redis`), ensuring connection reuse without per-request socket leaks.
+   - Validated `/readyz` probe reporting healthy (200) when Redis and PostgreSQL are up, and degraded/unhealthy (503 `SERVICE_UNAVAILABLE`) when Redis ping fails.
+
+#### Done-when Verification Matrix
+
+| Task | Done-when Requirement | Status | Evidence / Test |
+| --- | --- | --- | --- |
+| **T9** | Missing `Idempotency-Key` returns 422 `ErrorResponse` on all 5 mutating routes | **PASS** | `test_t9_mandatory_idempotency_key_on_all_5_mutating_routes` |
+| **T9** | Same key + same body returns identical `operation_id` (1 domain row, 1 outbox event) | **PASS** | `test_t9_idempotency_replay_and_conflict` |
+| **T9** | Same key + different body returns 409 `IDEMPOTENCY_CONFLICT` | **PASS** | `test_t9_idempotency_replay_and_conflict` |
+| **T9** | Cancel on `CANCEL_REQUESTED` job emits no duplicate outbox event | **PASS** | `test_t9_cancel_job_idempotent_no_duplicate_outbox_when_already_cancel_requested` |
+| **T9** | N concurrent identical requests produce exactly 1 operation | **PASS** | `test_t9_concurrent_identical_requests_atomic_single_operation` |
+| **T10** | Backdated idempotency record (>24h) ignored and new operation admitted | **PASS** | `test_t10_idempotency_record_expiration_after_24_hours` |
+| **T10** | 24-hour retention text documented in OpenAPI and ADR-0003 | **PASS** | `test_t10_adr0003_documents_retention_and_sweeper`, `test_t13_all_operations_document_correlation_id_and_idempotency_retention` |
+| **T11** | Deleting middle release then deploying allocates next number without collision | **PASS** | `test_t11_release_number_allocation_max_plus_one_after_deletion` |
+| **T11** | Non-idempotency integrity error raises 500, not 409 | **PASS** | `test_t11_non_idempotency_integrity_error_raises_500` |
+| **T12** | Request validation failures return `ErrorResponse` envelope with `VALIDATION_ERROR` & correlation ID | **PASS** | `test_t12_validation_error_envelope_and_correlation_id` |
+| **T12** | All error paths return envelope with matching `X-Correlation-ID` header | **PASS** | `test_t12_error_envelope_on_all_status_codes` |
+| **T12** | Cursor pagination walks at least 2 pages and caps limit at 100 on D3 endpoints | **PASS** | `test_t12_cursor_pagination_workspace_jobs`, `test_t12_cursor_pagination_app_releases` |
+| **T13** | Live API responses match committed contract examples | **PASS** | `test_t13_all_schema_examples_validate_against_their_schemas`, `test_t13_every_endpoint_has_request_and_2xx_response_examples` |
+| **T14** | Outbox event payloads validate against JSON Schemas | **PASS** | `test_t14_outbox_payloads_validate_against_event_schemas` |
+| **T15** | Redis lifespan connection pool and `/readyz` probe (healthy & unhealthy) | **PASS** | `test_t15_readyz_healthy_and_unhealthy_and_lifespan_redis` |
+
+#### Overall Verification Summary
+- **Python Suite (`apps/api/tests`):** 40 passed, 9 warnings in 14.70s.
+- **Go Suite (`runtime`):** Domain tests passed (`ok github.com/hami9/hamicloud/runtime/internal/domain`).
+- **OpenAPI 3.1 Validation:** 100% valid, 0 nullable keywords, 0 validation errors.
+- **Dev Database Isolation:** 0 row delta on `hamicloud` dev database (all tests strictly run against `hamicloud_test`).
+- **MASTER-PLAN.md Progress:** 5 checkboxes closed under §A.1 API contract examples (Current position: 18 of 45 boxes pass).
+

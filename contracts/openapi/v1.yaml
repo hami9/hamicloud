@@ -22,10 +22,17 @@ paths:
       responses:
         '200':
           description: Control API is alive
+          headers:
+            X-Correlation-ID:
+              $ref: '#/components/headers/X-Correlation-ID'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/HealthResponse'
+              example:
+                status: "ok"
+                version: "0.1.0"
+                timestamp: "2026-09-19T12:00:00Z"
 
   /readyz:
     get:
@@ -35,16 +42,34 @@ paths:
       responses:
         '200':
           description: Control API is ready to accept requests
+          headers:
+            X-Correlation-ID:
+              $ref: '#/components/headers/X-Correlation-ID'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ReadinessResponse'
+              example:
+                ready: true
+                database: true
+                redis: true
+                timestamp: "2026-09-19T12:00:00Z"
         '503':
           description: Dependencies not ready
+          headers:
+            X-Correlation-ID:
+              $ref: '#/components/headers/X-Correlation-ID'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error_code: "SERVICE_UNAVAILABLE"
+                message: "Platform dependencies are not ready"
+                correlation_id: "req_01HVG89ABCDEF1234567890"
+                details:
+                  database: true
+                  redis: false
 
   /workspaces:
     post:
@@ -56,19 +81,34 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/CreateWorkspaceRequest'
+            example:
+              name: "Acme Production"
+              slug: "acme-prod"
       responses:
         '201':
           description: Workspace created
+          headers:
+            X-Correlation-ID:
+              $ref: '#/components/headers/X-Correlation-ID'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/WorkspaceResponse'
+              example:
+                id: "550e8400-e29b-41d4-a716-446655440000"
+                name: "Acme Production"
+                slug: "acme-prod"
+                created_at: "2026-09-19T12:00:00Z"
         '400':
           $ref: '#/components/responses/400BadRequest'
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '409':
           $ref: '#/components/responses/409Conflict'
+        '422':
+          $ref: '#/components/responses/422UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
 
   /workspaces/{workspace_id}/apps:
     post:
@@ -81,19 +121,36 @@ paths:
           schema:
             type: string
             format: uuid
+            example: "550e8400-e29b-41d4-a716-446655440000"
       requestBody:
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/CreateApplicationRequest'
+            example:
+              name: "Payment Service"
+              slug: "payment-service"
+              workload_type: "HTTP_SERVICE"
       responses:
         '201':
           description: Application registered
+          headers:
+            X-Correlation-ID:
+              $ref: '#/components/headers/X-Correlation-ID'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApplicationResponse'
+              example:
+                id: "7ff5bafe-b321-4ab6-a9f9-9d3eb15feda3"
+                workspace_id: "550e8400-e29b-41d4-a716-446655440000"
+                name: "Payment Service"
+                slug: "payment-service"
+                workload_type: "HTTP_SERVICE"
+                desired_generation: 1
+                current_release_id: null
+                created_at: "2026-09-19T12:00:00Z"
         '400':
           $ref: '#/components/responses/400BadRequest'
         '401':
@@ -104,6 +161,139 @@ paths:
           $ref: '#/components/responses/404NotFound'
         '409':
           $ref: '#/components/responses/409Conflict'
+        '422':
+          $ref: '#/components/responses/422UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /workspaces/{workspace_id}/jobs:
+    get:
+      summary: List jobs in workspace
+      description: Cursor-paginated listing of jobs in a workspace; requires VIEWER role or higher.
+      operationId: listWorkspaceJobs
+      parameters:
+        - name: workspace_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+            example: "550e8400-e29b-41d4-a716-446655440000"
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+            example: 20
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+            example: "MjAyNi0wOS0xOVQxMjowMDowMHw1YmE1ZmI1Ny0wZjZhLTQ4NWItYTExMy1mZDE5ZDMyOTU5MWY"
+      responses:
+        '200':
+          description: List of jobs with pagination metadata
+          headers:
+            X-Correlation-ID:
+              $ref: '#/components/headers/X-Correlation-ID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobListResponse'
+              example:
+                items:
+                  - id: "5ba5fb57-0f6a-485b-a113-fd19d329591f"
+                    workspace_id: "550e8400-e29b-41d4-a716-446655440000"
+                    name: "nightly-backup"
+                    state: "RUNNING"
+                    current_attempt_number: 1
+                    attempts:
+                      - attempt_number: 1
+                        state: "RUNNING"
+                        resource_uid: "pod-backup-1"
+                        lease_epoch: 1
+                        exit_code: null
+                        failure_reason: null
+                        started_at: "2026-09-19T12:00:00Z"
+                        finished_at: null
+                    created_at: "2026-09-19T12:00:00Z"
+                next_cursor: null
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+    post:
+      summary: Submit a finite background job
+      operationId: submitJob
+      parameters:
+        - name: workspace_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+            example: "550e8400-e29b-41d4-a716-446655440000"
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: >-
+            Unique UUID or opaque token preventing duplicate execution.
+            Retained for at least 24 hours (purged by background sweeper task in M1).
+          schema:
+            type: string
+            example: "7b4c6e91-88f1-4b15-b7e2-04e8d35678ab"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmitJobRequest'
+            example:
+              name: "nightly-backup"
+              image_digest: "registry.example.com/backup@sha256:4b227777d4dd1fc61c6f884f48641d02b4d121d3fd328cb08b5531fcacdabf8a"
+              command_args: ["backup", "--all"]
+              env_vars:
+                STORAGE_BUCKET: "backups-prod"
+              timeout_seconds: 600
+              max_retries: 3
+      responses:
+        '202':
+          description: Job accepted and queued
+          headers:
+            X-Correlation-ID:
+              $ref: '#/components/headers/X-Correlation-ID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AcceptedOperationResponse'
+              example:
+                operation_id: "5ba5fb57-0f6a-485b-a113-fd19d329591f"
+                status: "ACCEPTED"
+                status_url: "/v1/operations/5ba5fb57-0f6a-485b-a113-fd19d329591f"
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '409':
+          $ref: '#/components/responses/409Conflict'
+        '422':
+          $ref: '#/components/responses/422UnprocessableEntity'
+        '429':
+          $ref: '#/components/responses/429RateLimited'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
 
   /apps/{app_id}/deployments:
     post:
@@ -116,24 +306,44 @@ paths:
           schema:
             type: string
             format: uuid
+            example: "7ff5bafe-b321-4ab6-a9f9-9d3eb15feda3"
         - name: Idempotency-Key
           in: header
           required: true
+          description: >-
+            Unique UUID or opaque token preventing duplicate execution.
+            Retained for at least 24 hours (purged by background sweeper task in M1).
           schema:
             type: string
+            example: "7b4c6e91-88f1-4b15-b7e2-04e8d35678ab"
       requestBody:
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/DeployReleaseRequest'
+            example:
+              image_digest: "registry.example.com/app@sha256:7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069"
+              port: 8080
+              health_path: "/healthz"
+              env_vars:
+                ENVIRONMENT: "production"
+              cpu_limit: "500m"
+              memory_limit: "512Mi"
       responses:
         '202':
           description: Deployment accepted for reconciliation
+          headers:
+            X-Correlation-ID:
+              $ref: '#/components/headers/X-Correlation-ID'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/AcceptedOperationResponse'
+              example:
+                operation_id: "309bbd1e-07f4-4bdf-b9b7-e81d48381601"
+                status: "ACCEPTED"
+                status_url: "/v1/operations/309bbd1e-07f4-4bdf-b9b7-e81d48381601"
         '400':
           $ref: '#/components/responses/400BadRequest'
         '401':
@@ -144,6 +354,70 @@ paths:
           $ref: '#/components/responses/404NotFound'
         '409':
           $ref: '#/components/responses/409Conflict'
+        '422':
+          $ref: '#/components/responses/422UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /apps/{app_id}/releases:
+    get:
+      summary: List releases for an application
+      description: Cursor-paginated listing of releases for an application; requires VIEWER role or higher.
+      operationId: listAppReleases
+      parameters:
+        - name: app_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+            example: "7ff5bafe-b321-4ab6-a9f9-9d3eb15feda3"
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+            example: 20
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+            example: "MjAyNi0wOS0xOVQxMjowMDowMHwzMDliYmQxZS0wN2Y0LTRiZGYtYjliNy1lODFkNDgzODE2MDE"
+      responses:
+        '200':
+          description: List of releases with pagination metadata
+          headers:
+            X-Correlation-ID:
+              $ref: '#/components/headers/X-Correlation-ID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReleaseListResponse'
+              example:
+                items:
+                  - id: "309bbd1e-07f4-4bdf-b9b7-e81d48381601"
+                    application_id: "7ff5bafe-b321-4ab6-a9f9-9d3eb15feda3"
+                    workspace_id: "550e8400-e29b-41d4-a716-446655440000"
+                    release_number: 1
+                    image_digest: "registry.example.com/app@sha256:7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069"
+                    config_json:
+                      port: 8080
+                      health_path: "/healthz"
+                    status: "IMAGE_READY"
+                    created_at: "2026-09-19T12:00:00Z"
+                next_cursor: null
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
 
   /apps/{app_id}/rollbacks:
     post:
@@ -156,19 +430,38 @@ paths:
           schema:
             type: string
             format: uuid
+            example: "7ff5bafe-b321-4ab6-a9f9-9d3eb15feda3"
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: >-
+            Unique UUID or opaque token preventing duplicate execution.
+            Retained for at least 24 hours (purged by background sweeper task in M1).
+          schema:
+            type: string
+            example: "7b4c6e91-88f1-4b15-b7e2-04e8d35678ab"
       requestBody:
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/RollbackRequest'
+            example:
+              target_release_id: "309bbd1e-07f4-4bdf-b9b7-e81d48381601"
       responses:
         '202':
           description: Rollback accepted
+          headers:
+            X-Correlation-ID:
+              $ref: '#/components/headers/X-Correlation-ID'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/AcceptedOperationResponse'
+              example:
+                operation_id: "419bbd1e-07f4-4bdf-b9b7-e81d48381602"
+                status: "ACCEPTED"
+                status_url: "/v1/operations/419bbd1e-07f4-4bdf-b9b7-e81d48381602"
         '400':
           $ref: '#/components/responses/400BadRequest'
         '401':
@@ -179,48 +472,10 @@ paths:
           $ref: '#/components/responses/404NotFound'
         '409':
           $ref: '#/components/responses/409Conflict'
-
-  /workspaces/{workspace_id}/jobs:
-    post:
-      summary: Submit a finite background job
-      operationId: submitJob
-      parameters:
-        - name: workspace_id
-          in: path
-          required: true
-          schema:
-            type: string
-            format: uuid
-        - name: Idempotency-Key
-          in: header
-          required: true
-          schema:
-            type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/SubmitJobRequest'
-      responses:
-        '202':
-          description: Job accepted and queued
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/AcceptedOperationResponse'
-        '400':
-          $ref: '#/components/responses/400BadRequest'
-        '401':
-          $ref: '#/components/responses/401Unauthorized'
-        '403':
-          $ref: '#/components/responses/403Forbidden'
-        '404':
-          $ref: '#/components/responses/404NotFound'
-        '409':
-          $ref: '#/components/responses/409Conflict'
-        '429':
-          $ref: '#/components/responses/429RateLimited'
+        '422':
+          $ref: '#/components/responses/422UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
 
   /jobs/{job_id}:
     get:
@@ -233,17 +488,39 @@ paths:
           schema:
             type: string
             format: uuid
+            example: "5ba5fb57-0f6a-485b-a113-fd19d329591f"
       responses:
         '200':
           description: Job details
+          headers:
+            X-Correlation-ID:
+              $ref: '#/components/headers/X-Correlation-ID'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/JobDetailsResponse'
+              example:
+                id: "5ba5fb57-0f6a-485b-a113-fd19d329591f"
+                workspace_id: "550e8400-e29b-41d4-a716-446655440000"
+                name: "nightly-backup"
+                state: "RUNNING"
+                current_attempt_number: 1
+                attempts:
+                  - attempt_number: 1
+                    state: "RUNNING"
+                    resource_uid: "pod-backup-1"
+                    lease_epoch: 1
+                    exit_code: null
+                    failure_reason: null
+                    started_at: "2026-09-19T12:00:00Z"
+                    finished_at: null
+                created_at: "2026-09-19T12:00:00Z"
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '404':
           $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
 
   /jobs/{job_id}/cancel:
     post:
@@ -256,13 +533,32 @@ paths:
           schema:
             type: string
             format: uuid
+            example: "5ba5fb57-0f6a-485b-a113-fd19d329591f"
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: >-
+            Unique UUID or opaque token preventing duplicate execution.
+            Retained for at least 24 hours (purged by background sweeper task in M1).
+          schema:
+            type: string
+            example: "7b4c6e91-88f1-4b15-b7e2-04e8d35678ab"
       responses:
         '202':
           description: Cancellation requested
+          headers:
+            X-Correlation-ID:
+              $ref: '#/components/headers/X-Correlation-ID'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/AcceptedOperationResponse'
+              example:
+                operation_id: "5ba5fb57-0f6a-485b-a113-fd19d329591f"
+                status: "ACCEPTED"
+                status_url: "/v1/operations/5ba5fb57-0f6a-485b-a113-fd19d329591f"
+        '400':
+          $ref: '#/components/responses/400BadRequest'
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '403':
@@ -271,6 +567,10 @@ paths:
           $ref: '#/components/responses/404NotFound'
         '409':
           $ref: '#/components/responses/409Conflict'
+        '422':
+          $ref: '#/components/responses/422UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
 
   /jobs/{job_id}/reruns:
     post:
@@ -283,13 +583,32 @@ paths:
           schema:
             type: string
             format: uuid
+            example: "5ba5fb57-0f6a-485b-a113-fd19d329591f"
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: >-
+            Unique UUID or opaque token preventing duplicate execution.
+            Retained for at least 24 hours (purged by background sweeper task in M1).
+          schema:
+            type: string
+            example: "7b4c6e91-88f1-4b15-b7e2-04e8d35678ab"
       responses:
         '202':
           description: New re-run job created
+          headers:
+            X-Correlation-ID:
+              $ref: '#/components/headers/X-Correlation-ID'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/AcceptedOperationResponse'
+              example:
+                operation_id: "6ca5fb57-0f6a-485b-a113-fd19d3295920"
+                status: "ACCEPTED"
+                status_url: "/v1/operations/6ca5fb57-0f6a-485b-a113-fd19d3295920"
+        '400':
+          $ref: '#/components/responses/400BadRequest'
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '403':
@@ -298,6 +617,10 @@ paths:
           $ref: '#/components/responses/404NotFound'
         '409':
           $ref: '#/components/responses/409Conflict'
+        '422':
+          $ref: '#/components/responses/422UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
 
   /operations/{operation_id}:
     get:
@@ -310,17 +633,30 @@ paths:
           schema:
             type: string
             format: uuid
+            example: "309bbd1e-07f4-4bdf-b9b7-e81d48381601"
       responses:
         '200':
           description: Operation status details
+          headers:
+            X-Correlation-ID:
+              $ref: '#/components/headers/X-Correlation-ID'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/OperationStatusResponse'
+              example:
+                operation_id: "309bbd1e-07f4-4bdf-b9b7-e81d48381601"
+                operation_kind: "RELEASE"
+                status: "ACCEPTED"
+                status_url: "/v1/operations/309bbd1e-07f4-4bdf-b9b7-e81d48381601"
+                created_at: "2026-09-19T12:00:00Z"
+                details: null
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '404':
           $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
 
   /operations/{operation_id}/events:
     get:
@@ -336,14 +672,19 @@ paths:
           schema:
             type: string
             format: uuid
+            example: "309bbd1e-07f4-4bdf-b9b7-e81d48381601"
         - name: Last-Event-ID
           in: header
           required: false
           schema:
             type: string
+            example: "ev_102"
       responses:
         '200':
           description: Real-time event stream
+          headers:
+            X-Correlation-ID:
+              $ref: '#/components/headers/X-Correlation-ID'
           content:
             text/event-stream:
               schema:
@@ -352,6 +693,8 @@ paths:
           $ref: '#/components/responses/401Unauthorized'
         '404':
           $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
         '501':
           $ref: '#/components/responses/501NotImplemented'
 
@@ -362,49 +705,145 @@ components:
       scheme: bearer
       bearerFormat: JWT
       description: OpenID Connect (OIDC) Bearer token.
+
+  headers:
+    X-Correlation-ID:
+      description: Unique correlation identifier for tracing across platform components
+      schema:
+        type: string
+        example: "req_01HVG89ABCDEF1234567890"
+
   responses:
     400BadRequest:
       description: Invalid request payload
+      headers:
+        X-Correlation-ID:
+          $ref: '#/components/headers/X-Correlation-ID'
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error_code: "BAD_REQUEST"
+            message: "Invalid request payload"
+            correlation_id: "req_01HVG89ABCDEF1234567890"
+            details: null
     401Unauthorized:
       description: Authentication required or invalid credentials
+      headers:
+        X-Correlation-ID:
+          $ref: '#/components/headers/X-Correlation-ID'
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error_code: "UNAUTHORIZED"
+            message: "Authentication required"
+            correlation_id: "req_01HVG89ABCDEF1234567890"
+            details: null
     403Forbidden:
       description: Insufficient workspace role for this operation
+      headers:
+        X-Correlation-ID:
+          $ref: '#/components/headers/X-Correlation-ID'
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error_code: "FORBIDDEN"
+            message: "Insufficient role for this operation"
+            correlation_id: "req_01HVG89ABCDEF1234567890"
+            details: null
     404NotFound:
       description: Resource not found or not in workspace
+      headers:
+        X-Correlation-ID:
+          $ref: '#/components/headers/X-Correlation-ID'
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error_code: "NOT_FOUND"
+            message: "Resource not found"
+            correlation_id: "req_01HVG89ABCDEF1234567890"
+            details: null
     409Conflict:
       description: State conflict or idempotency key mismatch
+      headers:
+        X-Correlation-ID:
+          $ref: '#/components/headers/X-Correlation-ID'
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error_code: "CONFLICT"
+            message: "Resource conflict detected"
+            correlation_id: "req_01HVG89ABCDEF1234567890"
+            details: null
+    422UnprocessableEntity:
+      description: Request payload failed schema validation
+      headers:
+        X-Correlation-ID:
+          $ref: '#/components/headers/X-Correlation-ID'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error_code: "VALIDATION_ERROR"
+            message: "Request validation failed"
+            correlation_id: "req_01HVG89ABCDEF1234567890"
+            details:
+              errors:
+                - loc: ["body", "name"]
+                  msg: "Field required"
+                  type: "missing"
     429RateLimited:
       description: Workspace quota or rate limit exceeded
+      headers:
+        X-Correlation-ID:
+          $ref: '#/components/headers/X-Correlation-ID'
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error_code: "RATE_LIMITED"
+            message: "Concurrent job quota limit reached for workspace"
+            correlation_id: "req_01HVG89ABCDEF1234567890"
+            details: null
+    500InternalServerError:
+      description: Internal platform error occurred
+      headers:
+        X-Correlation-ID:
+          $ref: '#/components/headers/X-Correlation-ID'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error_code: "INTERNAL_SERVER_ERROR"
+            message: "An unexpected internal platform error occurred."
+            correlation_id: "req_01HVG89ABCDEF1234567890"
+            details: null
     501NotImplemented:
       description: Feature not implemented in this baseline
+      headers:
+        X-Correlation-ID:
+          $ref: '#/components/headers/X-Correlation-ID'
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error_code: "NOT_IMPLEMENTED"
+            message: "Live operation event streaming lands in milestone M1"
+            correlation_id: "req_01HVG89ABCDEF1234567890"
+            details: null
 
   schemas:
     HealthResponse:
@@ -413,13 +852,18 @@ components:
       properties:
         status:
           type: string
-          example: ok
+          example: "ok"
         version:
           type: string
-          example: 0.1.0
+          example: "0.1.0"
         timestamp:
           type: string
           format: date-time
+          example: "2026-09-19T12:00:00Z"
+      example:
+        status: "ok"
+        version: "0.1.0"
+        timestamp: "2026-09-19T12:00:00Z"
 
     ReadinessResponse:
       type: object
@@ -437,6 +881,12 @@ components:
         timestamp:
           type: string
           format: date-time
+          example: "2026-09-19T12:00:00Z"
+      example:
+        ready: true
+        database: true
+        redis: true
+        timestamp: "2026-09-19T12:00:00Z"
 
     ErrorResponse:
       type: object
@@ -444,16 +894,34 @@ components:
       properties:
         error_code:
           type: string
-          example: WORKSPACE_QUOTA_EXCEEDED
+          enum:
+            - VALIDATION_ERROR
+            - UNAUTHORIZED
+            - FORBIDDEN
+            - NOT_FOUND
+            - CONFLICT
+            - IDEMPOTENCY_CONFLICT
+            - RATE_LIMITED
+            - BAD_REQUEST
+            - SERVICE_UNAVAILABLE
+            - NOT_IMPLEMENTED
+            - INTERNAL_SERVER_ERROR
+          example: "NOT_FOUND"
         message:
           type: string
-          example: Concurrent job quota limit reached for workspace.
+          example: "Resource not found"
         correlation_id:
           type: string
-          example: req_01HVG...
+          example: "req_01HVG89ABCDEF1234567890"
         details:
           type: [object, 'null']
           additionalProperties: true
+          example: null
+      example:
+        error_code: "NOT_FOUND"
+        message: "Resource not found"
+        correlation_id: "req_01HVG89ABCDEF1234567890"
+        details: null
 
     CreateWorkspaceRequest:
       type: object
@@ -463,11 +931,16 @@ components:
           type: string
           minLength: 1
           maxLength: 100
+          example: "Acme Production"
         slug:
           type: string
           pattern: '^[a-z0-9-]+$'
           minLength: 3
           maxLength: 100
+          example: "acme-prod"
+      example:
+        name: "Acme Production"
+        slug: "acme-prod"
 
     WorkspaceResponse:
       type: object
@@ -476,13 +949,22 @@ components:
         id:
           type: string
           format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440000"
         name:
           type: string
+          example: "Acme Production"
         slug:
           type: string
+          example: "acme-prod"
         created_at:
           type: string
           format: date-time
+          example: "2026-09-19T12:00:00Z"
+      example:
+        id: "550e8400-e29b-41d4-a716-446655440000"
+        name: "Acme Production"
+        slug: "acme-prod"
+        created_at: "2026-09-19T12:00:00Z"
 
     CreateApplicationRequest:
       type: object
@@ -490,13 +972,23 @@ components:
       properties:
         name:
           type: string
+          minLength: 1
           maxLength: 100
+          example: "Payment Service"
         slug:
           type: string
           pattern: '^[a-z0-9-]+$'
+          minLength: 3
+          maxLength: 100
+          example: "payment-service"
         workload_type:
           type: string
           enum: [HTTP_SERVICE]
+          example: "HTTP_SERVICE"
+      example:
+        name: "Payment Service"
+        slug: "payment-service"
+        workload_type: "HTTP_SERVICE"
 
     ApplicationResponse:
       type: object
@@ -505,23 +997,40 @@ components:
         id:
           type: string
           format: uuid
+          example: "7ff5bafe-b321-4ab6-a9f9-9d3eb15feda3"
         workspace_id:
           type: string
           format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440000"
         name:
           type: string
+          example: "Payment Service"
         slug:
           type: string
+          example: "payment-service"
         workload_type:
           type: string
+          example: "HTTP_SERVICE"
         desired_generation:
           type: integer
+          example: 1
         current_release_id:
           type: [string, 'null']
           format: uuid
+          example: null
         created_at:
           type: string
           format: date-time
+          example: "2026-09-19T12:00:00Z"
+      example:
+        id: "7ff5bafe-b321-4ab6-a9f9-9d3eb15feda3"
+        workspace_id: "550e8400-e29b-41d4-a716-446655440000"
+        name: "Payment Service"
+        slug: "payment-service"
+        workload_type: "HTTP_SERVICE"
+        desired_generation: 1
+        current_release_id: null
+        created_at: "2026-09-19T12:00:00Z"
 
     DeployReleaseRequest:
       type: object
@@ -529,6 +1038,7 @@ components:
       properties:
         image_digest:
           type: string
+          minLength: 5
           example: "registry.example.com/app@sha256:7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069"
         port:
           type: integer
@@ -543,12 +1053,24 @@ components:
           type: object
           additionalProperties:
             type: string
+          example:
+            ENVIRONMENT: "production"
         cpu_limit:
           type: string
           default: "500m"
+          example: "500m"
         memory_limit:
           type: string
           default: "512Mi"
+          example: "512Mi"
+      example:
+        image_digest: "registry.example.com/app@sha256:7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069"
+        port: 8080
+        health_path: "/healthz"
+        env_vars:
+          ENVIRONMENT: "production"
+        cpu_limit: "500m"
+        memory_limit: "512Mi"
 
     AcceptedOperationResponse:
       type: object
@@ -557,13 +1079,18 @@ components:
         operation_id:
           type: string
           format: uuid
+          example: "309bbd1e-07f4-4bdf-b9b7-e81d48381601"
         status:
           type: string
           enum: [ACCEPTED]
-          example: ACCEPTED
+          example: "ACCEPTED"
         status_url:
           type: string
-          example: "/v1/operations/01HVG89..."
+          example: "/v1/operations/309bbd1e-07f4-4bdf-b9b7-e81d48381601"
+      example:
+        operation_id: "309bbd1e-07f4-4bdf-b9b7-e81d48381601"
+        status: "ACCEPTED"
+        status_url: "/v1/operations/309bbd1e-07f4-4bdf-b9b7-e81d48381601"
 
     OperationStatusResponse:
       type: object
@@ -572,21 +1099,33 @@ components:
         operation_id:
           type: string
           format: uuid
+          example: "309bbd1e-07f4-4bdf-b9b7-e81d48381601"
         operation_kind:
           type: string
           enum: [RELEASE, JOB]
+          example: "RELEASE"
         status:
           type: string
           enum: [ACCEPTED, QUEUED, ADMITTED, STARTING, RUNNING, SUCCEEDED, RETRY_WAIT, FAILED, CANCEL_REQUESTED, CANCELLED, REQUESTED, BUILDING, IMAGE_READY, DEPLOYING, HEALTHY, BUILD_FAILED, DEPLOY_FAILED]
+          example: "ACCEPTED"
         status_url:
           type: string
-          example: "/v1/operations/01HVG89..."
+          example: "/v1/operations/309bbd1e-07f4-4bdf-b9b7-e81d48381601"
         created_at:
           type: [string, 'null']
           format: date-time
+          example: "2026-09-19T12:00:00Z"
         details:
           type: [object, 'null']
           additionalProperties: true
+          example: null
+      example:
+        operation_id: "309bbd1e-07f4-4bdf-b9b7-e81d48381601"
+        operation_kind: "RELEASE"
+        status: "ACCEPTED"
+        status_url: "/v1/operations/309bbd1e-07f4-4bdf-b9b7-e81d48381601"
+        created_at: "2026-09-19T12:00:00Z"
+        details: null
 
     RollbackRequest:
       type: object
@@ -595,6 +1134,9 @@ components:
         target_release_id:
           type: string
           format: uuid
+          example: "309bbd1e-07f4-4bdf-b9b7-e81d48381601"
+      example:
+        target_release_id: "309bbd1e-07f4-4bdf-b9b7-e81d48381601"
 
     SubmitJobRequest:
       type: object
@@ -602,28 +1144,46 @@ components:
       properties:
         name:
           type: string
+          minLength: 1
           maxLength: 100
+          example: "nightly-backup"
         image_digest:
           type: string
-          example: "registry.example.com/worker@sha256:4b227777d4dd1fc61c6f884f48641d02b4d121d3fd328cb08b5531fcacdabf8a"
+          minLength: 5
+          example: "registry.example.com/batch@sha256:4b227777d4dd1fc61c6f884f48641d02b4d121d3fd328cb08b5531fcacdabf8a"
         command_args:
           type: array
           items:
             type: string
           default: []
+          example: ["backup", "--all"]
         env_vars:
           type: object
           additionalProperties:
             type: string
           default: {}
+          example:
+            STORAGE_BUCKET: "backups-prod"
         timeout_seconds:
           type: integer
           default: 600
+          minimum: 10
           maximum: 3600
+          example: 600
         max_retries:
           type: integer
           default: 3
+          minimum: 0
           maximum: 5
+          example: 3
+      example:
+        name: "nightly-backup"
+        image_digest: "registry.example.com/batch@sha256:4b227777d4dd1fc61c6f884f48641d02b4d121d3fd328cb08b5531fcacdabf8a"
+        command_args: ["backup", "--all"]
+        env_vars:
+          STORAGE_BUCKET: "backups-prod"
+        timeout_seconds: 600
+        max_retries: 3
 
     JobAttemptItem:
       type: object
@@ -631,23 +1191,40 @@ components:
       properties:
         attempt_number:
           type: integer
+          example: 1
         state:
           type: string
           enum: [QUEUED, ADMITTED, STARTING, RUNNING, SUCCEEDED, RETRY_WAIT, FAILED, CANCEL_REQUESTED, CANCELLED]
+          example: "RUNNING"
         resource_uid:
           type: [string, 'null']
+          example: "pod-backup-1"
         lease_epoch:
           type: integer
+          example: 1
         exit_code:
           type: [integer, 'null']
+          example: null
         failure_reason:
           type: [string, 'null']
+          example: null
         started_at:
           type: [string, 'null']
           format: date-time
+          example: "2026-09-19T12:00:00Z"
         finished_at:
           type: [string, 'null']
           format: date-time
+          example: null
+      example:
+        attempt_number: 1
+        state: "RUNNING"
+        resource_uid: "pod-backup-1"
+        lease_epoch: 1
+        exit_code: null
+        failure_reason: null
+        started_at: "2026-09-19T12:00:00Z"
+        finished_at: null
 
     JobDetailsResponse:
       type: object
@@ -656,16 +1233,21 @@ components:
         id:
           type: string
           format: uuid
+          example: "5ba5fb57-0f6a-485b-a113-fd19d329591f"
         workspace_id:
           type: string
           format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440000"
         name:
           type: string
+          example: "nightly-backup"
         state:
           type: string
           enum: [QUEUED, ADMITTED, STARTING, RUNNING, SUCCEEDED, RETRY_WAIT, FAILED, CANCEL_REQUESTED, CANCELLED]
+          example: "RUNNING"
         current_attempt_number:
           type: integer
+          example: 1
         attempts:
           type: array
           items:
@@ -673,3 +1255,123 @@ components:
         created_at:
           type: string
           format: date-time
+          example: "2026-09-19T12:00:00Z"
+      example:
+        id: "5ba5fb57-0f6a-485b-a113-fd19d329591f"
+        workspace_id: "550e8400-e29b-41d4-a716-446655440000"
+        name: "nightly-backup"
+        state: "RUNNING"
+        current_attempt_number: 1
+        attempts:
+          - attempt_number: 1
+            state: "RUNNING"
+            resource_uid: "pod-backup-1"
+            lease_epoch: 1
+            exit_code: null
+            failure_reason: null
+            started_at: "2026-09-19T12:00:00Z"
+            finished_at: null
+        created_at: "2026-09-19T12:00:00Z"
+
+    JobListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/JobDetailsResponse'
+        next_cursor:
+          type: [string, 'null']
+          example: null
+      example:
+        items:
+          - id: "5ba5fb57-0f6a-485b-a113-fd19d329591f"
+            workspace_id: "550e8400-e29b-41d4-a716-446655440000"
+            name: "nightly-backup"
+            state: "RUNNING"
+            current_attempt_number: 1
+            attempts:
+              - attempt_number: 1
+                state: "RUNNING"
+                resource_uid: "pod-backup-1"
+                lease_epoch: 1
+                exit_code: null
+                failure_reason: null
+                started_at: "2026-09-19T12:00:00Z"
+                finished_at: null
+            created_at: "2026-09-19T12:00:00Z"
+        next_cursor: null
+
+    ReleaseResponse:
+      type: object
+      required: [id, application_id, workspace_id, release_number, image_digest, config_json, status, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: "309bbd1e-07f4-4bdf-b9b7-e81d48381601"
+        application_id:
+          type: string
+          format: uuid
+          example: "7ff5bafe-b321-4ab6-a9f9-9d3eb15feda3"
+        workspace_id:
+          type: string
+          format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        release_number:
+          type: integer
+          example: 1
+        image_digest:
+          type: string
+          example: "registry.example.com/app@sha256:7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069"
+        config_json:
+          type: object
+          additionalProperties: true
+          example:
+            port: 8080
+            health_path: "/healthz"
+        status:
+          type: string
+          enum: [REQUESTED, BUILDING, IMAGE_READY, DEPLOYING, HEALTHY, BUILD_FAILED, DEPLOY_FAILED]
+          example: "IMAGE_READY"
+        created_at:
+          type: string
+          format: date-time
+          example: "2026-09-19T12:00:00Z"
+      example:
+        id: "309bbd1e-07f4-4bdf-b9b7-e81d48381601"
+        application_id: "7ff5bafe-b321-4ab6-a9f9-9d3eb15feda3"
+        workspace_id: "550e8400-e29b-41d4-a716-446655440000"
+        release_number: 1
+        image_digest: "registry.example.com/app@sha256:7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069"
+        config_json:
+          port: 8080
+          health_path: "/healthz"
+        status: "IMAGE_READY"
+        created_at: "2026-09-19T12:00:00Z"
+
+    ReleaseListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReleaseResponse'
+        next_cursor:
+          type: [string, 'null']
+          example: null
+      example:
+        items:
+          - id: "309bbd1e-07f4-4bdf-b9b7-e81d48381601"
+            application_id: "7ff5bafe-b321-4ab6-a9f9-9d3eb15feda3"
+            workspace_id: "550e8400-e29b-41d4-a716-446655440000"
+            release_number: 1
+            image_digest: "registry.example.com/app@sha256:7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069"
+            config_json:
+              port: 8080
+              health_path: "/healthz"
+            status: "IMAGE_READY"
+            created_at: "2026-09-19T12:00:00Z"
+        next_cursor: null

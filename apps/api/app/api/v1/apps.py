@@ -3,13 +3,20 @@ import json
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import Caller, authorize_workspace_access, get_caller
 from app.core.events import OutboxTopic
+from app.core.idempotency import (
+    check_idempotency,
+    compute_payload_hash,
+    create_idempotency_record,
+    handle_idempotency_race,
+)
+from app.core.pagination import decode_cursor, encode_cursor
 from app.db.session import get_db
 from app.models.application import Application
 from app.models.idempotency import IdempotencyRecord
@@ -20,6 +27,8 @@ from app.schemas.application import (
     ApplicationResponse,
     CreateApplicationRequest,
     DeployReleaseRequest,
+    ReleaseListResponse,
+    ReleaseResponse,
     RollbackRequest,
 )
 from app.schemas.common import AcceptedOperationResponse
@@ -108,35 +117,21 @@ async def deploy_release(
     app = (await db.execute(lock_stmt)).scalar_one()
 
     endpoint = f"/v1/apps/{app_id}/deployments"
-    payload_dict = payload.model_dump(mode="json")
-    payload_hash = hashlib.sha256(
-        json.dumps(payload_dict, sort_keys=True).encode("utf-8")
-    ).hexdigest()
+    payload_hash = compute_payload_hash(payload)
 
     # 1. Idempotency Check
-    idemp_stmt = select(IdempotencyRecord).where(
-        IdempotencyRecord.workspace_id == app.workspace_id,
-        IdempotencyRecord.endpoint == endpoint,
-        IdempotencyRecord.idempotency_key == idempotency_key,
+    cached_response = await check_idempotency(
+        db, app.workspace_id, endpoint, idempotency_key, payload_hash
     )
-    existing_idemp = (await db.execute(idemp_stmt)).scalar_one_or_none()
-    if existing_idemp:
-        if existing_idemp.request_hash == payload_hash:
-            return AcceptedOperationResponse(
-                operation_id=uuid.UUID(existing_idemp.response_body["operation_id"]),
-                status=existing_idemp.response_body["status"],
-                status_url=existing_idemp.response_body["status_url"],
-            )
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Idempotency key reused with different deployment payload",
-            )
+    if cached_response:
+        return cached_response
 
-    # 2. Increment generation & determine release number
-    rel_count_stmt = select(func.count(Release.id)).where(Release.application_id == app.id)
-    release_count = (await db.execute(rel_count_stmt)).scalar() or 0
-    next_release_number = release_count + 1
+    # 2. Increment generation & determine release number (MAX(release_number) + 1 under row lock)
+    rel_max_stmt = select(func.coalesce(func.max(Release.release_number), 0)).where(
+        Release.application_id == app.id
+    )
+    release_max = (await db.execute(rel_max_stmt)).scalar() or 0
+    next_release_number = release_max + 1
 
     app.desired_generation += 1
 
@@ -182,36 +177,21 @@ async def deploy_release(
     db.add(outbox_event)
 
     # 4. Create Idempotency Record
-    response_data = {
-        "operation_id": str(release_id),
-        "status": "ACCEPTED",
-        "status_url": f"/v1/operations/{release_id}",
-    }
-    idemp_record = IdempotencyRecord(
+    idemp_record = create_idempotency_record(
         workspace_id=app.workspace_id,
         endpoint=endpoint,
         idempotency_key=idempotency_key,
-        request_hash=payload_hash,
+        payload_hash=payload_hash,
         response_code=202,
-        response_body=response_data,
-        expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+        operation_id=release_id,
     )
     db.add(idemp_record)
 
     try:
         await db.commit()
-    except IntegrityError:
-        await db.rollback()
-        concurrent_idemp = (await db.execute(idemp_stmt)).scalar_one_or_none()
-        if concurrent_idemp and concurrent_idemp.request_hash == payload_hash:
-            return AcceptedOperationResponse(
-                operation_id=uuid.UUID(concurrent_idemp.response_body["operation_id"]),
-                status=concurrent_idemp.response_body["status"],
-                status_url=concurrent_idemp.response_body["status_url"],
-            )
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Concurrent deployment conflict detected",
+    except IntegrityError as exc:
+        return await handle_idempotency_race(
+            db, exc, app.workspace_id, endpoint, idempotency_key, payload_hash
         )
 
     return AcceptedOperationResponse(
@@ -229,7 +209,7 @@ async def deploy_release(
 async def rollback_release(
     app_id: uuid.UUID,
     payload: RollbackRequest,
-    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
     caller: Caller = Depends(get_caller),
     db: AsyncSession = Depends(get_db),
 ) -> AcceptedOperationResponse:
@@ -262,38 +242,23 @@ async def rollback_release(
         )
 
     endpoint = f"/v1/apps/{app_id}/rollbacks"
-    payload_dict = payload.model_dump(mode="json")
-    payload_hash = hashlib.sha256(
-        json.dumps(payload_dict, sort_keys=True).encode("utf-8")
-    ).hexdigest()
+    payload_hash = compute_payload_hash(payload)
 
-    # Idempotency check if header is supplied
-    if idempotency_key:
-        idemp_stmt = select(IdempotencyRecord).where(
-            IdempotencyRecord.workspace_id == app.workspace_id,
-            IdempotencyRecord.endpoint == endpoint,
-            IdempotencyRecord.idempotency_key == idempotency_key,
-        )
-        existing_idemp = (await db.execute(idemp_stmt)).scalar_one_or_none()
-        if existing_idemp:
-            if existing_idemp.request_hash == payload_hash:
-                return AcceptedOperationResponse(
-                    operation_id=uuid.UUID(existing_idemp.response_body["operation_id"]),
-                    status=existing_idemp.response_body["status"],
-                    status_url=existing_idemp.response_body["status_url"],
-                )
-            else:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="Idempotency key reused with different rollback payload",
-                )
+    # 1. Idempotency Check
+    cached_response = await check_idempotency(
+        db, app.workspace_id, endpoint, idempotency_key, payload_hash
+    )
+    if cached_response:
+        return cached_response
 
-    # Increment generation
+    # 2. Increment generation & determine release number
     app.desired_generation += 1
 
-    rel_count_stmt = select(func.count(Release.id)).where(Release.application_id == app.id)
-    release_count = (await db.execute(rel_count_stmt)).scalar() or 0
-    next_release_number = release_count + 1
+    rel_max_stmt = select(func.coalesce(func.max(Release.release_number), 0)).where(
+        Release.application_id == app.id
+    )
+    release_max = (await db.execute(rel_max_stmt)).scalar() or 0
+    next_release_number = release_max + 1
 
     new_release_id = uuid.uuid4()
     rollback_release_obj = Release(
@@ -312,7 +277,7 @@ async def rollback_release(
     port = target_config.get("port", 8080)
     health_path = target_config.get("health_path", "/healthz")
 
-    # Insert outbox event
+    # 3. Insert outbox event
     event_id = uuid.uuid4()
     outbox_event = OutboxEvent(
         event_id=event_id,
@@ -330,32 +295,91 @@ async def rollback_release(
             "is_rollback": True,
             "target_release_id": str(target_rel.id),
         },
-        headers_json={"rollback_from": str(target_rel.id)},
+        headers_json={"rollback_from": str(target_rel.id), "idempotency_key": idempotency_key},
         status=OutboxStatus.PENDING,
     )
     db.add(outbox_event)
 
-    if idempotency_key:
-        response_data = {
-            "operation_id": str(new_release_id),
-            "status": "ACCEPTED",
-            "status_url": f"/v1/operations/{new_release_id}",
-        }
-        idemp_record = IdempotencyRecord(
-            workspace_id=app.workspace_id,
-            endpoint=endpoint,
-            idempotency_key=idempotency_key,
-            request_hash=payload_hash,
-            response_code=202,
-            response_body=response_data,
-            expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
-        )
-        db.add(idemp_record)
+    # 4. Create Idempotency Record
+    idemp_record = create_idempotency_record(
+        workspace_id=app.workspace_id,
+        endpoint=endpoint,
+        idempotency_key=idempotency_key,
+        payload_hash=payload_hash,
+        response_code=202,
+        operation_id=new_release_id,
+    )
+    db.add(idemp_record)
 
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        return await handle_idempotency_race(
+            db, exc, app.workspace_id, endpoint, idempotency_key, payload_hash
+        )
 
     return AcceptedOperationResponse(
         operation_id=new_release_id,
         status="ACCEPTED",
         status_url=f"/v1/operations/{new_release_id}",
     )
+
+
+@router.get(
+    "/apps/{app_id}/releases",
+    response_model=ReleaseListResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def list_releases(
+    app_id: uuid.UUID,
+    limit: int = Query(default=20, ge=1, le=100),
+    cursor: Optional[str] = Query(default=None),
+    caller: Caller = Depends(get_caller),
+    db: AsyncSession = Depends(get_db),
+) -> ReleaseListResponse:
+    # 1. Look up application
+    app_stmt = select(Application).where(Application.id == app_id)
+    app = (await db.execute(app_stmt)).scalar_one_or_none()
+    if not app:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Application not found",
+        )
+
+    # 2. Authorize workspace access (VIEWER or higher)
+    await authorize_workspace_access(
+        db, caller, app.workspace_id, min_role=WorkspaceRole.VIEWER, not_found_detail="Application not found"
+    )
+
+    # 3. Query releases with cursor pagination
+    stmt = select(Release).where(Release.application_id == app_id)
+    if cursor:
+        cursor_ts, cursor_id = decode_cursor(cursor)
+        stmt = stmt.where(
+            (Release.created_at < cursor_ts)
+            | ((Release.created_at == cursor_ts) & (Release.id < cursor_id))
+        )
+
+    stmt = stmt.order_by(Release.created_at.desc(), Release.id.desc()).limit(limit + 1)
+    releases = (await db.execute(stmt)).scalars().all()
+
+    next_cursor = None
+    if len(releases) > limit:
+        next_item = releases[limit - 1]
+        next_cursor = encode_cursor(next_item.created_at, next_item.id)
+        releases = releases[:limit]
+
+    items = [
+        ReleaseResponse(
+            id=r.id,
+            application_id=r.application_id,
+            workspace_id=r.workspace_id,
+            release_number=r.release_number,
+            image_digest=r.image_digest,
+            config_json=r.config_json or {},
+            status=r.status,
+            created_at=r.created_at,
+        )
+        for r in releases
+    ]
+    return ReleaseListResponse(items=items, next_cursor=next_cursor)

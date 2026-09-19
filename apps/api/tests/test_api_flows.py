@@ -106,7 +106,7 @@ def test_application_and_deployment_flow(client: TestClient):
     rollback_resp = client.post(
         f"/v1/apps/{app_id}/rollbacks",
         json={"target_release_id": release_id},
-        headers=auth_headers,
+        headers={"Idempotency-Key": f"idemp-rb-{uuid.uuid4().hex[:8]}", **auth_headers},
     )
     assert rollback_resp.status_code == 202, rollback_resp.text
     assert rollback_resp.json()["status"] == "ACCEPTED"
@@ -145,7 +145,10 @@ def test_job_flow_and_lifecycle(client: TestClient):
     assert job_details["workspace_id"] == ws_id
 
     # 3. Cancel Job
-    cancel_resp = client.post(f"/v1/jobs/{job_id}/cancel", headers=auth_headers)
+    cancel_resp = client.post(
+        f"/v1/jobs/{job_id}/cancel",
+        headers={"Idempotency-Key": f"idemp-cancel-{uuid.uuid4().hex[:8]}", **auth_headers},
+    )
     assert cancel_resp.status_code == 202, cancel_resp.text
 
     # Verify state updated to CANCEL_REQUESTED
@@ -377,17 +380,37 @@ def test_tenant_isolation_two_workspaces_and_subjects(client: TestClient):
     # =========================================================================
     rollback_body = {"target_release_id": release_id}
 
-    r3_missing = client.post(f"/v1/apps/{missing_app}/rollbacks", json=rollback_body, headers=headers_alice)
-    r3_non_member = client.post(f"/v1/apps/{app_id}/rollbacks", json=rollback_body, headers=headers_bob)
+    r3_missing = client.post(
+        f"/v1/apps/{missing_app}/rollbacks",
+        json=rollback_body,
+        headers={"Idempotency-Key": f"k-{uuid.uuid4().hex[:6]}", **headers_alice},
+    )
+    r3_non_member = client.post(
+        f"/v1/apps/{app_id}/rollbacks",
+        json=rollback_body,
+        headers={"Idempotency-Key": f"k-{uuid.uuid4().hex[:6]}", **headers_bob},
+    )
     assert_byte_identical_404(r3_missing, r3_non_member, "Application not found")
 
-    r3_no_auth = client.post(f"/v1/apps/{app_id}/rollbacks", json=rollback_body)
+    r3_no_auth = client.post(
+        f"/v1/apps/{app_id}/rollbacks",
+        json=rollback_body,
+        headers={"Idempotency-Key": f"k-{uuid.uuid4().hex[:6]}"},
+    )
     assert_401_unauthorized(r3_no_auth)
 
-    r3_viewer = client.post(f"/v1/apps/{app_id}/rollbacks", json=rollback_body, headers=headers_charlie)
+    r3_viewer = client.post(
+        f"/v1/apps/{app_id}/rollbacks",
+        json=rollback_body,
+        headers={"Idempotency-Key": f"k-{uuid.uuid4().hex[:6]}", **headers_charlie},
+    )
     assert_403_forbidden(r3_viewer)
 
-    r3_member = client.post(f"/v1/apps/{app_id}/rollbacks", json=rollback_body, headers=headers_alice)
+    r3_member = client.post(
+        f"/v1/apps/{app_id}/rollbacks",
+        json=rollback_body,
+        headers={"Idempotency-Key": f"k-{uuid.uuid4().hex[:6]}", **headers_alice},
+    )
     assert r3_member.status_code == 202
 
     # =========================================================================
@@ -460,17 +483,32 @@ def test_tenant_isolation_two_workspaces_and_subjects(client: TestClient):
     )
     target_job_id = cancel_target_resp.json()["operation_id"]
 
-    r6_missing = client.post(f"/v1/jobs/{missing_job}/cancel", headers=headers_alice)
-    r6_non_member = client.post(f"/v1/jobs/{target_job_id}/cancel", headers=headers_bob)
+    r6_missing = client.post(
+        f"/v1/jobs/{missing_job}/cancel",
+        headers={"Idempotency-Key": f"k-{uuid.uuid4().hex[:6]}", **headers_alice},
+    )
+    r6_non_member = client.post(
+        f"/v1/jobs/{target_job_id}/cancel",
+        headers={"Idempotency-Key": f"k-{uuid.uuid4().hex[:6]}", **headers_bob},
+    )
     assert_byte_identical_404(r6_missing, r6_non_member, "Job not found")
 
-    r6_no_auth = client.post(f"/v1/jobs/{target_job_id}/cancel")
+    r6_no_auth = client.post(
+        f"/v1/jobs/{target_job_id}/cancel",
+        headers={"Idempotency-Key": f"k-{uuid.uuid4().hex[:6]}"},
+    )
     assert_401_unauthorized(r6_no_auth)
 
-    r6_viewer = client.post(f"/v1/jobs/{target_job_id}/cancel", headers=headers_charlie)
+    r6_viewer = client.post(
+        f"/v1/jobs/{target_job_id}/cancel",
+        headers={"Idempotency-Key": f"k-{uuid.uuid4().hex[:6]}", **headers_charlie},
+    )
     assert_403_forbidden(r6_viewer)
 
-    r6_member = client.post(f"/v1/jobs/{target_job_id}/cancel", headers=headers_alice)
+    r6_member = client.post(
+        f"/v1/jobs/{target_job_id}/cancel",
+        headers={"Idempotency-Key": f"k-{uuid.uuid4().hex[:6]}", **headers_alice},
+    )
     assert r6_member.status_code == 202
 
     # =========================================================================
@@ -489,17 +527,32 @@ def test_tenant_isolation_two_workspaces_and_subjects(client: TestClient):
     conn.commit()
     conn.close()
 
-    r7_missing = client.post(f"/v1/jobs/{missing_job}/reruns", headers=headers_alice)
-    r7_non_member = client.post(f"/v1/jobs/{rerun_job_id}/reruns", headers=headers_bob)
+    r7_missing = client.post(
+        f"/v1/jobs/{missing_job}/reruns",
+        headers={"Idempotency-Key": f"k-{uuid.uuid4().hex[:6]}", **headers_alice},
+    )
+    r7_non_member = client.post(
+        f"/v1/jobs/{rerun_job_id}/reruns",
+        headers={"Idempotency-Key": f"k-{uuid.uuid4().hex[:6]}", **headers_bob},
+    )
     assert_byte_identical_404(r7_missing, r7_non_member, "Job not found")
 
-    r7_no_auth = client.post(f"/v1/jobs/{rerun_job_id}/reruns")
+    r7_no_auth = client.post(
+        f"/v1/jobs/{rerun_job_id}/reruns",
+        headers={"Idempotency-Key": f"k-{uuid.uuid4().hex[:6]}"},
+    )
     assert_401_unauthorized(r7_no_auth)
 
-    r7_viewer = client.post(f"/v1/jobs/{rerun_job_id}/reruns", headers=headers_charlie)
+    r7_viewer = client.post(
+        f"/v1/jobs/{rerun_job_id}/reruns",
+        headers={"Idempotency-Key": f"k-{uuid.uuid4().hex[:6]}", **headers_charlie},
+    )
     assert_403_forbidden(r7_viewer)
 
-    r7_member = client.post(f"/v1/jobs/{rerun_job_id}/reruns", headers=headers_alice)
+    r7_member = client.post(
+        f"/v1/jobs/{rerun_job_id}/reruns",
+        headers={"Idempotency-Key": f"k-{uuid.uuid4().hex[:6]}", **headers_alice},
+    )
     assert r7_member.status_code == 202
 
     # =========================================================================
@@ -634,7 +687,10 @@ def test_all_api_responses_validate_against_openapi_schemas(client: TestClient):
     job_id = job_data["operation_id"]
 
     # 6. AcceptedOperationResponse on Job Cancellation: POST /v1/jobs/{job}/cancel -> 202
-    cancel_resp = client.post(f"/v1/jobs/{job_id}/cancel", headers=auth_headers)
+    cancel_resp = client.post(
+        f"/v1/jobs/{job_id}/cancel",
+        headers={"Idempotency-Key": f"idemp-cancel-{uuid.uuid4().hex[:8]}", **auth_headers},
+    )
     assert cancel_resp.status_code == 202
     validate_body(cancel_resp.json(), "AcceptedOperationResponse")
 
@@ -645,7 +701,10 @@ def test_all_api_responses_validate_against_openapi_schemas(client: TestClient):
     conn.commit()
     conn.close()
 
-    rerun_resp = client.post(f"/v1/jobs/{job_id}/reruns", headers=auth_headers)
+    rerun_resp = client.post(
+        f"/v1/jobs/{job_id}/reruns",
+        headers={"Idempotency-Key": f"idemp-rerun-{uuid.uuid4().hex[:8]}", **auth_headers},
+    )
     assert rerun_resp.status_code == 202
     validate_body(rerun_resp.json(), "AcceptedOperationResponse")
 
@@ -675,7 +734,7 @@ def test_all_api_responses_validate_against_openapi_schemas(client: TestClient):
     rollback_resp = client.post(
         f"/v1/apps/{app_id}/rollbacks",
         json={"target_release_id": release_id},
-        headers=auth_headers,
+        headers={"Idempotency-Key": f"idemp-rb-{uuid.uuid4().hex[:8]}", **auth_headers},
     )
     assert rollback_resp.status_code == 202
     validate_body(rollback_resp.json(), "AcceptedOperationResponse")

@@ -1,8 +1,6 @@
-import hashlib
-import json
 import uuid
-from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from datetime import datetime, timezone
+from typing import Optional
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -19,10 +17,9 @@ from app.core.idempotency import (
 from app.core.pagination import decode_cursor, encode_cursor
 from app.db.session import get_db
 from app.models.application import Application
-from app.models.idempotency import IdempotencyRecord
 from app.models.outbox import OutboxEvent, OutboxStatus
 from app.models.release import Release, ReleaseStatus
-from app.models.workspace import Workspace, WorkspaceRole
+from app.models.workspace import WorkspaceRole
 from app.schemas.application import (
     ApplicationResponse,
     CreateApplicationRequest,
@@ -94,14 +91,15 @@ async def create_application(
 async def deploy_release(
     app_id: uuid.UUID,
     payload: DeployReleaseRequest,
-    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    idempotency_key: str = Header(..., alias="Idempotency-Key", min_length=1, max_length=255),
     caller: Caller = Depends(get_caller),
     db: AsyncSession = Depends(get_db),
 ) -> AcceptedOperationResponse:
-    # Find application without lock to verify existence and workspace ownership
-    app_stmt = select(Application).where(Application.id == app_id)
-    app = (await db.execute(app_stmt)).scalar_one_or_none()
-    if not app:
+    # Find application workspace_id without lock to verify existence and ownership
+    # (scalar query avoids loading Application entity into ORM identity map before lock)
+    ws_stmt = select(Application.workspace_id).where(Application.id == app_id)
+    workspace_id = (await db.execute(ws_stmt)).scalar_one_or_none()
+    if not workspace_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Application not found",
@@ -109,11 +107,16 @@ async def deploy_release(
 
     # Tenant isolation: verify caller membership of application's workspace BEFORE taking row lock
     await authorize_workspace_access(
-        db, caller, app.workspace_id, min_role=WorkspaceRole.DEVELOPER, not_found_detail="Application not found"
+        db, caller, workspace_id, min_role=WorkspaceRole.DEVELOPER, not_found_detail="Application not found"
     )
 
-    # Acquire row lock for safe generation increment
-    lock_stmt = select(Application).where(Application.id == app_id).with_for_update()
+    # Acquire exclusive row lock for safe generation increment (populate_existing=True ensures fresh entity)
+    lock_stmt = (
+        select(Application)
+        .where(Application.id == app_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     app = (await db.execute(lock_stmt)).scalar_one()
 
     endpoint = f"/v1/apps/{app_id}/deployments"
@@ -121,7 +124,7 @@ async def deploy_release(
 
     # 1. Idempotency Check
     cached_response = await check_idempotency(
-        db, app.workspace_id, endpoint, idempotency_key, payload_hash
+        db, workspace_id, endpoint, idempotency_key, payload_hash
     )
     if cached_response:
         return cached_response
@@ -147,7 +150,7 @@ async def deploy_release(
     release = Release(
         id=release_id,
         application_id=app.id,
-        workspace_id=app.workspace_id,
+        workspace_id=workspace_id,
         release_number=next_release_number,
         image_digest=payload.image_digest,
         config_json=config_data,
@@ -163,7 +166,7 @@ async def deploy_release(
         payload_json={
             "event_id": str(event_id),
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "workspace_id": str(app.workspace_id),
+            "workspace_id": str(workspace_id),
             "application_id": str(app.id),
             "release_id": str(release_id),
             "generation": app.desired_generation,
@@ -178,7 +181,7 @@ async def deploy_release(
 
     # 4. Create Idempotency Record
     idemp_record = create_idempotency_record(
-        workspace_id=app.workspace_id,
+        workspace_id=workspace_id,
         endpoint=endpoint,
         idempotency_key=idempotency_key,
         payload_hash=payload_hash,
@@ -191,7 +194,7 @@ async def deploy_release(
         await db.commit()
     except IntegrityError as exc:
         return await handle_idempotency_race(
-            db, exc, app.workspace_id, endpoint, idempotency_key, payload_hash
+            db, exc, workspace_id, endpoint, idempotency_key, payload_hash
         )
 
     return AcceptedOperationResponse(
@@ -209,14 +212,15 @@ async def deploy_release(
 async def rollback_release(
     app_id: uuid.UUID,
     payload: RollbackRequest,
-    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    idempotency_key: str = Header(..., alias="Idempotency-Key", min_length=1, max_length=255),
     caller: Caller = Depends(get_caller),
     db: AsyncSession = Depends(get_db),
 ) -> AcceptedOperationResponse:
-    # Find application without lock to verify existence and workspace ownership
-    app_stmt = select(Application).where(Application.id == app_id)
-    app = (await db.execute(app_stmt)).scalar_one_or_none()
-    if not app:
+    # Find application workspace_id without lock to verify existence and ownership
+    # (scalar query avoids loading Application entity into ORM identity map before lock)
+    ws_stmt = select(Application.workspace_id).where(Application.id == app_id)
+    workspace_id = (await db.execute(ws_stmt)).scalar_one_or_none()
+    if not workspace_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Application not found",
@@ -224,11 +228,16 @@ async def rollback_release(
 
     # Tenant isolation: verify caller membership of application's workspace BEFORE taking row lock
     await authorize_workspace_access(
-        db, caller, app.workspace_id, min_role=WorkspaceRole.DEVELOPER, not_found_detail="Application not found"
+        db, caller, workspace_id, min_role=WorkspaceRole.DEVELOPER, not_found_detail="Application not found"
     )
 
-    # Acquire row lock for safe generation increment
-    lock_stmt = select(Application).where(Application.id == app_id).with_for_update()
+    # Acquire exclusive row lock for safe generation increment (populate_existing=True ensures fresh entity)
+    lock_stmt = (
+        select(Application)
+        .where(Application.id == app_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     app = (await db.execute(lock_stmt)).scalar_one()
 
     target_rel_stmt = select(Release).where(
@@ -246,7 +255,7 @@ async def rollback_release(
 
     # 1. Idempotency Check
     cached_response = await check_idempotency(
-        db, app.workspace_id, endpoint, idempotency_key, payload_hash
+        db, workspace_id, endpoint, idempotency_key, payload_hash
     )
     if cached_response:
         return cached_response
@@ -264,7 +273,7 @@ async def rollback_release(
     rollback_release_obj = Release(
         id=new_release_id,
         application_id=app.id,
-        workspace_id=app.workspace_id,
+        workspace_id=workspace_id,
         release_number=next_release_number,
         image_digest=target_rel.image_digest,
         config_json=target_rel.config_json,
@@ -285,7 +294,7 @@ async def rollback_release(
         payload_json={
             "event_id": str(event_id),
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "workspace_id": str(app.workspace_id),
+            "workspace_id": str(workspace_id),
             "application_id": str(app.id),
             "release_id": str(new_release_id),
             "generation": app.desired_generation,
@@ -302,7 +311,7 @@ async def rollback_release(
 
     # 4. Create Idempotency Record
     idemp_record = create_idempotency_record(
-        workspace_id=app.workspace_id,
+        workspace_id=workspace_id,
         endpoint=endpoint,
         idempotency_key=idempotency_key,
         payload_hash=payload_hash,
@@ -315,7 +324,7 @@ async def rollback_release(
         await db.commit()
     except IntegrityError as exc:
         return await handle_idempotency_race(
-            db, exc, app.workspace_id, endpoint, idempotency_key, payload_hash
+            db, exc, workspace_id, endpoint, idempotency_key, payload_hash
         )
 
     return AcceptedOperationResponse(

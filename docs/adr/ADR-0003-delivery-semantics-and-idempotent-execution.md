@@ -35,10 +35,10 @@ HamiCloud must define mathematically sound delivery and execution semantics that
 - Re-processing an identical event produces identical database state without side effects.
 - Idempotency records store `(workspace_id, endpoint, idempotency_key, request_hash, response_code, response_body, expires_at)`.
   - **Retention Contract:** Records are retained for at least 24 hours (`expires_at = NOW() + INTERVAL '24 hours'`).
-  - Active check: Queries filter by `expires_at > NOW()`. If a record has expired, it is treated as non-existent and a new operation is admitted.
+  - Active check: The read path checks `expires_at`. If an existing record is expired (`expires_at <= NOW()`), the read path deletes the expired record upon read so the key can be reused immediately, and the incoming request is admitted as a fresh operation.
   - Same key + same hash (unexpired): returns cached `202 Accepted` response immediately.
   - Same key + different hash (unexpired): returns `409 Conflict` (`IDEMPOTENCY_CONFLICT`).
-  - **Sweeper Ownership:** Expired idempotency records are physically purged by an asynchronous background sweeper task, owned and scheduled by Milestone M1.
+  - **Sweeper Ownership:** Untouched expired idempotency records that are never read again are physically purged by an asynchronous background sweeper task, owned and scheduled by Milestone M1.
 
 ### 2. Execution Lease & Epoch Fencing
 To execute a job attempt or reconcile a release, a worker must claim the `ExecutionIntent` in PostgreSQL:

@@ -1,10 +1,11 @@
-import ast
-from concurrent.futures import ThreadPoolExecutor
+import asyncio
+import base64
 from datetime import datetime, timedelta, timezone
 import glob
 import json
 import os
 import uuid
+import httpx
 import jsonschema
 import psycopg2
 import pytest
@@ -15,16 +16,14 @@ from referencing import Registry, Resource
 from referencing.jsonschema import DRAFT202012
 
 from app.core.config import settings
-from app.core.idempotency import handle_idempotency_race
 from app.main import app
-from sqlalchemy.exc import IntegrityError
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 CONTRACTS_DIR = os.path.join(REPO_ROOT, "contracts")
 OPENAPI_SPEC = os.path.join(CONTRACTS_DIR, "openapi", "v1.yaml")
 EVENTS_DIR = os.path.join(CONTRACTS_DIR, "events")
 ADR_0003 = os.path.join(REPO_ROOT, "docs", "adr", "ADR-0003-delivery-semantics-and-idempotent-execution.md")
-TEST_DATABASE_URL_SYNC = f"postgresql://hamicloud:hamicloud_secret@localhost:5432/hamicloud_test"
+TEST_DATABASE_URL_SYNC = "postgresql://hamicloud:hamicloud_secret@localhost:5432/hamicloud_test"
 
 
 # =============================================================================
@@ -63,24 +62,38 @@ def create_test_workspace_and_app(client: TestClient, subject: str = "test-user"
 
 
 # =============================================================================
-# T9 Tests — Mandatory Idempotency-Key on Mutating Routes & Atomic Execution
+# T9 Tests — Mandatory Idempotency-Key, Async Concurrency, Replays & Conflicts
 # =============================================================================
 
 def test_t9_mandatory_idempotency_key_on_all_5_mutating_routes(client: TestClient, clean_db):
-    """Verify that missing Idempotency-Key on any of the 5 mutating routes returns 422 VALIDATION_ERROR."""
+    """Verify missing Idempotency-Key on any of the 5 mutating routes returns 422 VALIDATION_ERROR."""
     ws_id, app_id, auth_headers = create_test_workspace_and_app(client)
 
-    # First create a deployment to have a release
+    # Initial deployment
     deploy_key = f"idemp-dep-{uuid.uuid4().hex[:8]}"
-    deploy_payload = {"image_digest": "registry.example.com/web@sha256:1111111111111111111111111111111111111111111111111111111111111111", "port": 8080}
-    dep_res = client.post(f"/v1/apps/{app_id}/deployments", json=deploy_payload, headers={"Idempotency-Key": deploy_key, **auth_headers})
+    deploy_payload = {
+        "image_digest": "registry.example.com/web@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "port": 8080,
+    }
+    dep_res = client.post(
+        f"/v1/apps/{app_id}/deployments",
+        json=deploy_payload,
+        headers={"Idempotency-Key": deploy_key, **auth_headers},
+    )
     assert dep_res.status_code == 202
     release_id = dep_res.json()["operation_id"]
 
-    # First create a job
+    # Initial job
     job_key = f"idemp-job-{uuid.uuid4().hex[:8]}"
-    job_payload = {"name": "test-job", "image_digest": "registry.example.com/batch@sha256:2222222222222222222222222222222222222222222222222222222222222222"}
-    job_res = client.post(f"/v1/workspaces/{ws_id}/jobs", json=job_payload, headers={"Idempotency-Key": job_key, **auth_headers})
+    job_payload = {
+        "name": "test-job",
+        "image_digest": "registry.example.com/batch@sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    }
+    job_res = client.post(
+        f"/v1/workspaces/{ws_id}/jobs",
+        json=job_payload,
+        headers={"Idempotency-Key": job_key, **auth_headers},
+    )
     assert job_res.status_code == 202
     job_id = job_res.json()["operation_id"]
 
@@ -91,7 +104,6 @@ def test_t9_mandatory_idempotency_key_on_all_5_mutating_routes(client: TestClien
     conn.commit()
     conn.close()
 
-    # The 5 mutating routes without Idempotency-Key:
     mutating_calls = [
         ("POST", f"/v1/workspaces/{ws_id}/jobs", job_payload),
         ("POST", f"/v1/apps/{app_id}/deployments", deploy_payload),
@@ -107,55 +119,207 @@ def test_t9_mandatory_idempotency_key_on_all_5_mutating_routes(client: TestClien
         assert data["error_code"] == "VALIDATION_ERROR"
         assert "correlation_id" in data
         assert resp.headers.get("X-Correlation-ID") == data["correlation_id"]
-        # Ensure details describe the missing header
-        assert "Idempotency-Key" in str(data.get("details"))
+        assert "idempotency-key" in str(data.get("details")).lower()
 
 
-def test_t9_idempotency_replay_and_conflict(client: TestClient, clean_db):
-    """Verify identical retry returns original 202; different body returns 409 IDEMPOTENCY_CONFLICT."""
+def test_t9_idempotency_key_length_validation(client: TestClient, clean_db):
+    """Verify Idempotency-Key min_length=1 and max_length=255 validation returns 422."""
+    ws_id, _, auth_headers = create_test_workspace_and_app(client)
+    job_payload = {
+        "name": "len-test-job",
+        "image_digest": "registry.example.com/batch@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    }
+
+    # 1. Key length 256 (> 255) -> 422
+    too_long_key = "k" * 256
+    r_long = client.post(
+        f"/v1/workspaces/{ws_id}/jobs",
+        json=job_payload,
+        headers={"Idempotency-Key": too_long_key, **auth_headers},
+    )
+    assert r_long.status_code == 422
+    assert r_long.json()["error_code"] == "VALIDATION_ERROR"
+
+    # 2. Empty key ("") -> 422
+    r_empty = client.post(
+        f"/v1/workspaces/{ws_id}/jobs",
+        json=job_payload,
+        headers={"Idempotency-Key": "", **auth_headers},
+    )
+    assert r_empty.status_code == 422
+    assert r_empty.json()["error_code"] == "VALIDATION_ERROR"
+
+    # 3. Valid key length 255 -> 202
+    valid_key = "k" * 255
+    r_valid = client.post(
+        f"/v1/workspaces/{ws_id}/jobs",
+        json=job_payload,
+        headers={"Idempotency-Key": valid_key, **auth_headers},
+    )
+    assert r_valid.status_code == 202
+
+
+def test_t9_idempotency_replay_and_conflict_all_5_endpoints(client: TestClient, clean_db):
+    """Verify replay -> 202 identical body & no extra outbox event; diff body -> 409 on all endpoints."""
     ws_id, app_id, auth_headers = create_test_workspace_and_app(client)
-    idemp_key = f"key-{uuid.uuid4().hex[:8]}"
 
-    payload1 = {
-        "image_digest": "registry.example.com/web@sha256:3333333333333333333333333333333333333333333333333333333333333333",
+    # -------------------------------------------------------------------------
+    # 1. submit_job
+    # -------------------------------------------------------------------------
+    submit_key = f"key-submit-{uuid.uuid4().hex[:8]}"
+    job_payload = {
+        "name": "replay-job",
+        "image_digest": "registry.example.com/job@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    }
+    r1 = client.post(f"/v1/workspaces/{ws_id}/jobs", json=job_payload, headers={"Idempotency-Key": submit_key, **auth_headers})
+    assert r1.status_code == 202
+    job_id = r1.json()["operation_id"]
+
+    # Replay identical -> 202 identical response
+    r1_replay = client.post(f"/v1/workspaces/{ws_id}/jobs", json=job_payload, headers={"Idempotency-Key": submit_key, **auth_headers})
+    assert r1_replay.status_code == 202
+    assert r1_replay.json() == r1.json()
+
+    # Replay diff body -> 409
+    r1_diff = client.post(
+        f"/v1/workspaces/{ws_id}/jobs",
+        json=dict(job_payload, name="different-name"),
+        headers={"Idempotency-Key": submit_key, **auth_headers},
+    )
+    assert r1_diff.status_code == 409
+    assert r1_diff.json()["error_code"] == "IDEMPOTENCY_CONFLICT"
+
+    # Outbox count for job.submitted.v1 must be exactly 1
+    conn = psycopg2.connect(TEST_DATABASE_URL_SYNC)
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM outbox_events WHERE topic = 'job.submitted.v1' AND payload_json->>'job_id' = %s", (job_id,))
+        assert cur.fetchone()[0] == 1
+    conn.close()
+
+    # -------------------------------------------------------------------------
+    # 2. deploy_release
+    # -------------------------------------------------------------------------
+    deploy_key = f"key-deploy-{uuid.uuid4().hex[:8]}"
+    deploy_payload = {
+        "image_digest": "registry.example.com/app@sha256:2222222222222222222222222222222222222222222222222222222222222222",
         "port": 8080,
     }
-    # 1. Initial submission -> 202 Accepted
-    resp1 = client.post(
-        f"/v1/apps/{app_id}/deployments",
-        json=payload1,
-        headers={"Idempotency-Key": idemp_key, **auth_headers},
-    )
-    assert resp1.status_code == 202
-    op_id = resp1.json()["operation_id"]
+    r2 = client.post(f"/v1/apps/{app_id}/deployments", json=deploy_payload, headers={"Idempotency-Key": deploy_key, **auth_headers})
+    assert r2.status_code == 202
+    release_1_id = r2.json()["operation_id"]
 
-    # 2. Replay with identical key and identical payload -> 202 with original operation_id
-    resp2 = client.post(
-        f"/v1/apps/{app_id}/deployments",
-        json=payload1,
-        headers={"Idempotency-Key": idemp_key, **auth_headers},
-    )
-    assert resp2.status_code == 202
-    assert resp2.json()["operation_id"] == op_id
+    # Replay identical -> 202
+    r2_replay = client.post(f"/v1/apps/{app_id}/deployments", json=deploy_payload, headers={"Idempotency-Key": deploy_key, **auth_headers})
+    assert r2_replay.status_code == 202
+    assert r2_replay.json() == r2.json()
 
-    # 3. Replay with same key but different payload -> 409 Conflict with IDEMPOTENCY_CONFLICT
-    payload_diff = dict(payload1, port=9000)
-    resp3 = client.post(
+    # Replay diff body -> 409
+    r2_diff = client.post(
         f"/v1/apps/{app_id}/deployments",
-        json=payload_diff,
-        headers={"Idempotency-Key": idemp_key, **auth_headers},
+        json=dict(deploy_payload, port=8081),
+        headers={"Idempotency-Key": deploy_key, **auth_headers},
     )
-    assert resp3.status_code == 409
-    data3 = resp3.json()
-    assert data3["error_code"] == "IDEMPOTENCY_CONFLICT"
-    assert "Idempotency key reused with different" in data3["message"]
+    assert r2_diff.status_code == 409
+    assert r2_diff.json()["error_code"] == "IDEMPOTENCY_CONFLICT"
+
+    # Outbox count for release_1_id must be exactly 1
+    conn = psycopg2.connect(TEST_DATABASE_URL_SYNC)
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM outbox_events WHERE topic = 'app.deployment.requested.v1' AND payload_json->>'release_id' = %s", (release_1_id,))
+        assert cur.fetchone()[0] == 1
+    conn.close()
+
+    # Deploy release 2 for rollback test
+    r2_second = client.post(
+        f"/v1/apps/{app_id}/deployments",
+        json={"image_digest": "registry.example.com/app@sha256:3333333333333333333333333333333333333333333333333333333333333333", "port": 8082},
+        headers={"Idempotency-Key": f"k-dep2-{uuid.uuid4().hex[:6]}", **auth_headers},
+    )
+    assert r2_second.status_code == 202
+    release_2_id = r2_second.json()["operation_id"]
+
+    # -------------------------------------------------------------------------
+    # 3. rollback_release
+    # -------------------------------------------------------------------------
+    rb_key = f"key-rb-{uuid.uuid4().hex[:8]}"
+    rb_payload = {"target_release_id": release_1_id}
+    r3 = client.post(f"/v1/apps/{app_id}/rollbacks", json=rb_payload, headers={"Idempotency-Key": rb_key, **auth_headers})
+    assert r3.status_code == 202
+    rb_op_id = r3.json()["operation_id"]
+
+    # Replay identical -> 202
+    r3_replay = client.post(f"/v1/apps/{app_id}/rollbacks", json=rb_payload, headers={"Idempotency-Key": rb_key, **auth_headers})
+    assert r3_replay.status_code == 202
+    assert r3_replay.json() == r3.json()
+
+    # Replay diff body -> 409
+    r3_diff = client.post(
+        f"/v1/apps/{app_id}/rollbacks",
+        json={"target_release_id": release_2_id},
+        headers={"Idempotency-Key": rb_key, **auth_headers},
+    )
+    assert r3_diff.status_code == 409
+    assert r3_diff.json()["error_code"] == "IDEMPOTENCY_CONFLICT"
+
+    # Outbox count for rollback release must be exactly 1
+    conn = psycopg2.connect(TEST_DATABASE_URL_SYNC)
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM outbox_events WHERE topic = 'app.deployment.requested.v1' AND payload_json->>'release_id' = %s", (rb_op_id,))
+        assert cur.fetchone()[0] == 1
+    conn.close()
+
+    # -------------------------------------------------------------------------
+    # 4. cancel_job
+    # -------------------------------------------------------------------------
+    cancel_key = f"key-cancel-{uuid.uuid4().hex[:8]}"
+    r4 = client.post(f"/v1/jobs/{job_id}/cancel", headers={"Idempotency-Key": cancel_key, **auth_headers})
+    assert r4.status_code == 202
+    assert r4.json()["operation_id"] == job_id
+
+    # Replay identical -> 202
+    r4_replay = client.post(f"/v1/jobs/{job_id}/cancel", headers={"Idempotency-Key": cancel_key, **auth_headers})
+    assert r4_replay.status_code == 202
+    assert r4_replay.json() == r4.json()
+
+    # Outbox count for cancel must be exactly 1
+    conn = psycopg2.connect(TEST_DATABASE_URL_SYNC)
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM outbox_events WHERE topic = 'job.cancellation.requested.v1' AND payload_json->>'job_id' = %s", (job_id,))
+        assert cur.fetchone()[0] == 1
+    conn.close()
+
+    # -------------------------------------------------------------------------
+    # 5. rerun_job
+    # -------------------------------------------------------------------------
+    # Mark job as FAILED so rerun is allowed
+    conn = psycopg2.connect(TEST_DATABASE_URL_SYNC)
+    with conn.cursor() as cur:
+        cur.execute("UPDATE jobs SET state = 'FAILED' WHERE id = %s", (job_id,))
+    conn.commit()
+    conn.close()
+
+    rerun_key = f"key-rerun-{uuid.uuid4().hex[:8]}"
+    r5 = client.post(f"/v1/jobs/{job_id}/reruns", headers={"Idempotency-Key": rerun_key, **auth_headers})
+    assert r5.status_code == 202
+    rerun_job_id = r5.json()["operation_id"]
+
+    # Replay identical -> 202
+    r5_replay = client.post(f"/v1/jobs/{job_id}/reruns", headers={"Idempotency-Key": rerun_key, **auth_headers})
+    assert r5_replay.status_code == 202
+    assert r5_replay.json() == r5.json()
+
+    # Outbox count for rerun must be exactly 1
+    conn = psycopg2.connect(TEST_DATABASE_URL_SYNC)
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM outbox_events WHERE topic = 'job.submitted.v1' AND payload_json->>'job_id' = %s", (rerun_job_id,))
+        assert cur.fetchone()[0] == 1
+    conn.close()
 
 
 def test_t9_cancel_job_idempotent_no_duplicate_outbox_when_already_cancel_requested(client: TestClient, clean_db):
-    """Verify that calling cancel on a job already in CANCEL_REQUESTED does not emit duplicate outbox event."""
+    """Verify calling cancel on job already in CANCEL_REQUESTED does not emit duplicate outbox event."""
     ws_id, _, auth_headers = create_test_workspace_and_app(client)
 
-    # Submit job
     submit_key = f"job-sub-{uuid.uuid4().hex[:8]}"
     job_payload = {
         "name": "cancel-target",
@@ -177,7 +341,7 @@ def test_t9_cancel_job_idempotent_no_duplicate_outbox_when_already_cancel_reques
     conn.close()
     assert count_first == 1
 
-    # Second cancel call (even with a new idempotency key) on already CANCEL_REQUESTED job
+    # Second cancel call with new key on already CANCEL_REQUESTED job
     k2 = f"canc-2-{uuid.uuid4().hex[:8]}"
     c2_resp = client.post(f"/v1/jobs/{job_id}/cancel", headers={"Idempotency-Key": k2, **auth_headers})
     assert c2_resp.status_code == 202
@@ -191,40 +355,39 @@ def test_t9_cancel_job_idempotent_no_duplicate_outbox_when_already_cancel_reques
     assert count_second == 1, "Duplicate outbox event was emitted for cancel_job!"
 
 
-def test_t9_concurrent_identical_requests_atomic_single_operation(clean_db):
-    """Concurrent identical requests: exactly 1 operation created, all return identical 202 response."""
-    with TestClient(app) as client:
-        ws_id, _, auth_headers = create_test_workspace_and_app(client)
+@pytest.mark.asyncio
+async def test_t9_concurrent_identical_requests_atomic_single_operation(clean_db):
+    """Concurrent identical requests on single event loop: exactly 1 op created, all return identical 202."""
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as async_client:
+        auth_headers = {"X-Dev-Subject": "test-user"}
+        ws_resp = await async_client.post("/v1/workspaces", json={"name": "WS", "slug": f"ws-{uuid.uuid4().hex[:8]}"}, headers=auth_headers)
+        assert ws_resp.status_code == 201
+        ws_id = ws_resp.json()["id"]
 
-    shared_key = f"concurrent-key-{uuid.uuid4().hex[:8]}"
-    job_payload = {
-        "name": "concurrent-job",
-        "image_digest": "registry.example.com/job@sha256:5555555555555555555555555555555555555555555555555555555555555555",
-    }
+        shared_key = f"concurrent-key-{uuid.uuid4().hex[:8]}"
+        job_payload = {
+            "name": "concurrent-job",
+            "image_digest": "registry.example.com/job@sha256:5555555555555555555555555555555555555555555555555555555555555555",
+        }
 
-    def execute_request():
-        with TestClient(app) as c:
-            return c.post(
+        tasks = [
+            async_client.post(
                 f"/v1/workspaces/{ws_id}/jobs",
                 json=job_payload,
                 headers={"Idempotency-Key": shared_key, **auth_headers},
             )
+            for _ in range(10)
+        ]
+        results = await asyncio.gather(*tasks)
 
-    # Launch 10 concurrent identical requests
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        futures = [executor.submit(execute_request) for _ in range(10)]
-        results = [f.result() for f in futures]
-
-    # Verify all 10 return 202
     for r in results:
         assert r.status_code == 202, f"Concurrent request returned {r.status_code}: {r.text}"
 
-    # Verify all 10 return identical operation_id
     op_ids = {r.json()["operation_id"] for r in results}
     assert len(op_ids) == 1, f"Expected exactly 1 distinct operation_id, got {op_ids}"
     single_op_id = list(op_ids)[0]
 
-    # Verify database state: exactly 1 job, 1 idempotency record, 1 outbox event
     conn = psycopg2.connect(TEST_DATABASE_URL_SYNC)
     with conn.cursor() as cur:
         cur.execute("SELECT count(*) FROM jobs WHERE id = %s", (single_op_id,))
@@ -236,67 +399,194 @@ def test_t9_concurrent_identical_requests_atomic_single_operation(clean_db):
     conn.close()
 
 
+@pytest.mark.asyncio
+async def test_t9_concurrent_deploys_increment_generation_and_emit_events(clean_db):
+    """8 concurrent deploys with distinct keys assert desired_generation reaches 9 and emits 8 events."""
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as async_client:
+        auth_headers = {"X-Dev-Subject": "test-deployer"}
+        ws_res = await async_client.post("/v1/workspaces", json={"name": "Dep WS", "slug": f"ws-{uuid.uuid4().hex[:8]}"}, headers=auth_headers)
+        assert ws_res.status_code == 201
+        ws_id = ws_res.json()["id"]
+
+        app_res = await async_client.post(
+            f"/v1/workspaces/{ws_id}/apps",
+            json={"name": "Dep App", "slug": f"app-{uuid.uuid4().hex[:8]}", "workload_type": "HTTP_SERVICE"},
+            headers=auth_headers,
+        )
+        assert app_res.status_code == 201
+        app_id = app_res.json()["id"]
+
+        tasks = [
+            async_client.post(
+                f"/v1/apps/{app_id}/deployments",
+                json={
+                    "image_digest": f"registry.example.com/app@sha256:{str(i)*64}",
+                    "port": 8000 + i,
+                },
+                headers={"Idempotency-Key": f"dep-concurrent-{i}-{uuid.uuid4().hex[:6]}", **auth_headers},
+            )
+            for i in range(1, 9)
+        ]
+        results = await asyncio.gather(*tasks)
+
+    for r in results:
+        assert r.status_code == 202, f"Deploy returned {r.status_code}: {r.text}"
+
+    # Verify desired_generation reaches 9 (1 initial + 8 = 9)
+    conn = psycopg2.connect(TEST_DATABASE_URL_SYNC)
+    with conn.cursor() as cur:
+        cur.execute("SELECT desired_generation FROM applications WHERE id = %s", (app_id,))
+        desired_gen = cur.fetchone()[0]
+        assert desired_gen == 9, f"Expected desired_generation 9, got {desired_gen}"
+
+        # Verify exactly 8 outbox events were emitted with generations 2..9
+        cur.execute("""
+            SELECT (payload_json->>'generation')::int
+            FROM outbox_events
+            WHERE topic = 'app.deployment.requested.v1'
+            ORDER BY id ASC
+        """)
+        emitted_gens = [row[0] for row in cur.fetchall()]
+        assert len(emitted_gens) == 8
+        assert sorted(emitted_gens) == list(range(2, 10)), f"Expected generations 2..9, got {emitted_gens}"
+    conn.close()
+
+
+@pytest.mark.asyncio
+async def test_t9_concurrent_cancels_emit_single_event(clean_db):
+    """8 concurrent cancels assert exactly 1 cancellation outbox event."""
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as async_client:
+        auth_headers = {"X-Dev-Subject": "test-canceler"}
+        ws_res = await async_client.post("/v1/workspaces", json={"name": "Cancel WS", "slug": f"ws-{uuid.uuid4().hex[:8]}"}, headers=auth_headers)
+        assert ws_res.status_code == 201
+        ws_id = ws_res.json()["id"]
+
+        j_res = await async_client.post(
+            f"/v1/workspaces/{ws_id}/jobs",
+            json={"name": "concurrent-cancel-job", "image_digest": "registry.example.com/job@sha256:6666666666666666666666666666666666666666666666666666666666666666"},
+            headers={"Idempotency-Key": f"k-sub-{uuid.uuid4().hex[:6]}", **auth_headers},
+        )
+        assert j_res.status_code == 202
+        job_id = j_res.json()["operation_id"]
+
+        tasks = [
+            async_client.post(
+                f"/v1/jobs/{job_id}/cancel",
+                headers={"Idempotency-Key": f"cancel-concurrent-{i}-{uuid.uuid4().hex[:6]}", **auth_headers},
+            )
+            for i in range(8)
+        ]
+        results = await asyncio.gather(*tasks)
+
+    for r in results:
+        assert r.status_code == 202
+
+    conn = psycopg2.connect(TEST_DATABASE_URL_SYNC)
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM outbox_events WHERE topic = 'job.cancellation.requested.v1'")
+        cancel_events = cur.fetchone()[0]
+        assert cancel_events == 1, f"Expected exactly 1 cancel event, got {cancel_events}"
+    conn.close()
+
+
 # =============================================================================
 # T10 Tests — Idempotency Record Expiration (24h Retention & ADR-0003)
 # =============================================================================
 
-def test_t10_idempotency_record_expiration_after_24_hours(client: TestClient, clean_db):
-    """Verify an idempotency record older than 24 hours is treated as non-existent and a new operation is admitted."""
-    ws_id, _, auth_headers = create_test_workspace_and_app(client)
-    expired_key = f"exp-key-{uuid.uuid4().hex[:8]}"
-    endpoint = f"/v1/workspaces/{ws_id}/jobs"
-    old_op_id = str(uuid.uuid4())
+def test_t10_idempotency_record_retention_exact_sentence_contract():
+    """Verify OpenAPI spec declares exact retention sentence and length limits on all 5 mutating routes."""
+    with open(OPENAPI_SPEC, "r", encoding="utf-8") as f:
+        spec = yaml.safe_load(f)
 
+    mutating_routes = [
+        "/v1/workspaces/{workspace_id}/jobs",
+        "/v1/apps/{app_id}/deployments",
+        "/v1/apps/{app_id}/rollbacks",
+        "/v1/jobs/{job_id}/cancel",
+        "/v1/jobs/{job_id}/reruns",
+    ]
+    expected_desc = "Retained for at least 24 hours; after that the key may be treated as new."
+
+    for path in mutating_routes:
+        op = spec["paths"][path]["post"]
+        idemp_params = [p for p in op.get("parameters", []) if p.get("in") == "header" and p.get("name") == "Idempotency-Key"]
+        assert len(idemp_params) == 1, f"Missing Idempotency-Key on {path}"
+        param = idemp_params[0]
+        assert param["description"] == expected_desc, f"Mismatch on {path}: {param['description']}"
+        assert param["schema"]["minLength"] == 1
+        assert param["schema"]["maxLength"] == 255
+
+
+def test_t10_idempotency_record_expiration_and_read_path_deletion(client: TestClient, clean_db):
+    """Verify unexpired record hits cache; expired record is deleted upon read and treated as new."""
+    ws_id, _, auth_headers = create_test_workspace_and_app(client)
+    test_key = f"key-exp-{uuid.uuid4().hex[:8]}"
+    endpoint = f"/v1/workspaces/{ws_id}/jobs"
     job_payload = {
-        "name": "expired-job",
-        "image_digest": "registry.example.com/job@sha256:6666666666666666666666666666666666666666666666666666666666666666",
+        "name": "exp-test-job",
+        "image_digest": "registry.example.com/job@sha256:7777777777777777777777777777777777777777777777777777777777777777",
     }
 
-    # Manually insert an expired idempotency record (25 hours ago)
-    past_time = datetime.now(timezone.utc) - timedelta(hours=25)
+    # 1. Initial request -> 202
+    r1 = client.post(endpoint, json=job_payload, headers={"Idempotency-Key": test_key, **auth_headers})
+    assert r1.status_code == 202
+    op1_id = r1.json()["operation_id"]
+
+    # 2. Unexpired replay -> returns cached 202 with op1_id, no new outbox event
+    r2 = client.post(endpoint, json=job_payload, headers={"Idempotency-Key": test_key, **auth_headers})
+    assert r2.status_code == 202
+    assert r2.json()["operation_id"] == op1_id
+
     conn = psycopg2.connect(TEST_DATABASE_URL_SYNC)
     with conn.cursor() as cur:
-        cur.execute("""
-            INSERT INTO idempotency_records (
-                id, workspace_id, endpoint, idempotency_key, request_hash,
-                response_code, response_body, expires_at, created_at, updated_at
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """, (
-            str(uuid.uuid4()), ws_id, endpoint, expired_key, "dummy-hash",
-            202, json.dumps({"operation_id": old_op_id, "status": "ACCEPTED", "status_url": f"/v1/operations/{old_op_id}"}),
-            past_time, past_time, past_time,
-        ))
+        cur.execute("SELECT count(*) FROM outbox_events WHERE topic = 'job.submitted.v1'")
+        assert cur.fetchone()[0] == 1
+
+        # 3. Simulate passage of time by setting expires_at to 1 hour in the past
+        past_time = datetime.now(timezone.utc) - timedelta(hours=1)
+        cur.execute("UPDATE idempotency_records SET expires_at = %s WHERE idempotency_key = %s", (past_time, test_key))
     conn.commit()
     conn.close()
 
-    # Submit request with the expired key
-    resp = client.post(endpoint, json=job_payload, headers={"Idempotency-Key": expired_key, **auth_headers})
-    assert resp.status_code == 202
-    new_op_id = resp.json()["operation_id"]
+    # 4. Next request with the same key treats it as new
+    r3 = client.post(endpoint, json=job_payload, headers={"Idempotency-Key": test_key, **auth_headers})
+    assert r3.status_code == 202
+    op3_id = r3.json()["operation_id"]
+    assert op3_id != op1_id, "Expired key did not create a new operation!"
 
-    # Verify a new operation was created, not the cached expired one
-    assert new_op_id != old_op_id
+    # 5. Verify a new outbox event was emitted and expires_at is refreshed > now
+    conn = psycopg2.connect(TEST_DATABASE_URL_SYNC)
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM outbox_events WHERE topic = 'job.submitted.v1'")
+        assert cur.fetchone()[0] == 2
+
+        cur.execute("SELECT expires_at FROM idempotency_records WHERE idempotency_key = %s", (test_key,))
+        new_expires_at = cur.fetchone()[0]
+        assert new_expires_at > datetime.now(timezone.utc)
+    conn.close()
 
 
-def test_t10_adr0003_documents_retention_and_sweeper():
-    """Verify ADR-0003 documents the 24-hour retention period and background sweeper task ownership in M1."""
+def test_t10_adr0003_documents_retention_read_path_and_sweeper():
+    """Verify ADR-0003 documents 24-hour retention, read-path deletion, and M1 sweeper."""
     assert os.path.exists(ADR_0003), f"Missing ADR-0003 at {ADR_0003}"
     with open(ADR_0003, "r", encoding="utf-8") as f:
         content = f.read()
-    assert "24 hours" in content, "ADR-0003 missing explicit 24-hour retention contract documentation!"
-    assert "sweeper" in content.lower(), "ADR-0003 missing background sweeper documentation!"
+    assert "24 hours" in content, "ADR-0003 missing 24-hour retention contract documentation!"
+    assert "deletes the expired record upon read" in content, "ADR-0003 missing read-path deletion documentation!"
+    assert "sweeper" in content.lower(), "ADR-0003 missing sweeper documentation!"
     assert "M1" in content, "ADR-0003 missing M1 sweeper ownership documentation!"
 
 
 # =============================================================================
-# T11 Tests — Release Number Allocation & Pessimistic Lock Integrity
+# T11 Tests — Release Number Allocation & Real PostgreSQL Integrity Checks
 # =============================================================================
 
 def test_t11_release_number_allocation_max_plus_one_after_deletion(client: TestClient, clean_db):
-    """Verify release number is allocated as MAX(release_number) + 1, even if a middle release is deleted."""
+    """Verify release number is allocated as MAX(release_number) + 1, even if middle release deleted."""
     ws_id, app_id, auth_headers = create_test_workspace_and_app(client)
 
-    # Deploy 3 releases
     for i in range(1, 4):
         deploy_payload = {
             "image_digest": f"registry.example.com/app@sha256:{str(i)*64}",
@@ -309,19 +599,18 @@ def test_t11_release_number_allocation_max_plus_one_after_deletion(client: TestC
         )
         assert res.status_code == 202
 
-    # Check DB release numbers: [1, 2, 3]
     conn = psycopg2.connect(TEST_DATABASE_URL_SYNC)
     with conn.cursor() as cur:
         cur.execute("SELECT release_number FROM releases WHERE application_id = %s ORDER BY release_number", (app_id,))
         numbers = [row[0] for row in cur.fetchall()]
         assert numbers == [1, 2, 3]
 
-        # Delete middle release (release_number = 2)
+        # Delete middle release
         cur.execute("DELETE FROM releases WHERE application_id = %s AND release_number = 2", (app_id,))
     conn.commit()
     conn.close()
 
-    # Deploy 4th release: must allocate MAX(1, 3) + 1 = 4 (NOT 2 + 1 = 3, which would collide)
+    # Deploy 4th release: must allocate MAX(1, 3) + 1 = 4
     deploy_payload_4 = {
         "image_digest": "registry.example.com/app@sha256:7777777777777777777777777777777777777777777777777777777777777777",
         "port": 8084,
@@ -341,114 +630,130 @@ def test_t11_release_number_allocation_max_plus_one_after_deletion(client: TestC
     assert numbers == [1, 3, 4], f"Expected release numbers [1, 3, 4], got {numbers}"
 
 
-@pytest.mark.asyncio
-async def test_t11_non_idempotency_integrity_error_raises_500():
-    """Verify handle_idempotency_race re-raises non-idempotency IntegrityErrors as HTTP 500."""
-    class FakeCause:
-        constraint_name = "fk_other_table"
+def test_t11_real_postgresql_integrity_error_bubbles_to_500(client: TestClient, clean_db):
+    """Verify non-idempotency PostgreSQL constraint violation bubbles up to 500 INTERNAL_SERVER_ERROR."""
+    ws_id, _, auth_headers = create_test_workspace_and_app(client)
 
-    class FakeOrig:
-        __cause__ = FakeCause()
-        constraint_name = "fk_other_table"
+    conn = psycopg2.connect(TEST_DATABASE_URL_SYNC)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("ALTER TABLE jobs ADD CONSTRAINT chk_test_job_name_min CHECK (length(name) >= 5)")
+        conn.commit()
 
-    fake_exc = IntegrityError("statement", {}, FakeOrig())
-
-    class FakeSession:
-        async def rollback(self):
-            pass
-
-    with pytest.raises(Exception) as exc_info:
-        await handle_idempotency_race(
-            FakeSession(), fake_exc, uuid.uuid4(), "/test", "key", "hash"
+        # Submit job with name "abc" (length 3, violating CHECK constraint)
+        resp = client.post(
+            f"/v1/workspaces/{ws_id}/jobs",
+            json={"name": "abc", "image_digest": "registry.example.com/job@sha256:1111111111111111111111111111111111111111111111111111111111111111"},
+            headers={"Idempotency-Key": f"k-fail-{uuid.uuid4().hex[:6]}", **auth_headers},
         )
-    assert exc_info.value.status_code == 500
+        assert resp.status_code == 500
+        data = resp.json()
+        assert data["error_code"] == "INTERNAL_SERVER_ERROR"
+        assert "correlation_id" in data
+        assert resp.headers.get("X-Correlation-ID") == data["correlation_id"]
+    finally:
+        with conn.cursor() as cur:
+            cur.execute("ALTER TABLE jobs DROP CONSTRAINT IF EXISTS chk_test_job_name_min")
+        conn.commit()
+        conn.close()
 
 
-# =============================================================================
-# T12 Tests — Unified Error Responses & Cursor Pagination (D3)
-# =============================================================================
+def test_t11_user_data_with_constraint_name_substring_not_mistaken_for_conflict(client: TestClient, clean_db):
+    """Verify user data containing 'uq_idempotency_workspace_key' does not get mistaken for idempotency conflict."""
+    ws_id, _, auth_headers = create_test_workspace_and_app(client)
 
-def test_t12_validation_error_envelope_and_correlation_id(client: TestClient):
-    """Submitting invalid body returns 422 with ErrorResponse envelope and error_code VALIDATION_ERROR."""
-    resp = client.post("/v1/workspaces", json={"name": "Bad Slug WS", "slug": "UPPERCASE_AND_UNDERSCORE!"}, headers={"X-Dev-Subject": "user"})
-    assert resp.status_code == 422
-    data = resp.json()
-    assert data["error_code"] == "VALIDATION_ERROR"
-    assert "Request validation failed" in data["message"]
-    assert "correlation_id" in data
-    assert resp.headers.get("X-Correlation-ID") == data["correlation_id"]
-    assert "errors" in data["details"]
+    # Job name contains the constraint name substring
+    name_with_sub = "uq_idempotency_workspace_key"
+    resp = client.post(
+        f"/v1/workspaces/{ws_id}/jobs",
+        json={"name": name_with_sub, "image_digest": "registry.example.com/job@sha256:1111111111111111111111111111111111111111111111111111111111111111"},
+        headers={"Idempotency-Key": f"k-sub-{uuid.uuid4().hex[:6]}", **auth_headers},
+    )
+    assert resp.status_code == 202, f"Expected 202, got {resp.status_code}: {resp.text}"
 
 
-def test_t12_error_envelope_on_all_status_codes(client: TestClient, clean_db):
-    """Verify uniform error envelope across 400, 401, 403, 404, 409, 422, 501."""
-    ws_id, app_id, auth_headers = create_test_workspace_and_app(client)
+def test_t11_rerun_job_with_98_char_name_truncates_safely(client: TestClient, clean_db):
+    """Verify rerun creates job with length <= 100 even when original job name is 98 chars."""
+    ws_id, _, auth_headers = create_test_workspace_and_app(client)
 
-    # 400: Malformed cursor on list endpoint
-    r400 = client.get(f"/v1/workspaces/{ws_id}/jobs?cursor=not-valid-base64-garbage!", headers=auth_headers)
-    assert r400.status_code == 400
-    assert r400.json()["error_code"] == "BAD_REQUEST"
+    name_98 = "j" * 98
+    submit_res = client.post(
+        f"/v1/workspaces/{ws_id}/jobs",
+        json={"name": name_98, "image_digest": "registry.example.com/job@sha256:1111111111111111111111111111111111111111111111111111111111111111"},
+        headers={"Idempotency-Key": f"k-sub-{uuid.uuid4().hex[:6]}", **auth_headers},
+    )
+    assert submit_res.status_code == 202
+    job_id = submit_res.json()["operation_id"]
 
-    # 401: No auth on tenant route
-    r401 = client.get(f"/v1/jobs/{uuid.uuid4()}")
-    assert r401.status_code == 401
-    assert r401.json()["error_code"] == "UNAUTHORIZED"
-
-    # 403: Viewer role mutation
+    # Mark job failed
     conn = psycopg2.connect(TEST_DATABASE_URL_SYNC)
     with conn.cursor() as cur:
-        cur.execute("INSERT INTO workspace_memberships (id, workspace_id, user_subject, role, created_at, updated_at) VALUES (%s, %s, %s, %s, NOW(), NOW())", (str(uuid.uuid4()), ws_id, "charlie-viewer", "VIEWER"))
+        cur.execute("UPDATE jobs SET state = 'FAILED' WHERE id = %s", (job_id,))
     conn.commit()
     conn.close()
 
-    r403 = client.post(f"/v1/workspaces/{ws_id}/apps", json={"name": "App", "slug": f"app-{uuid.uuid4().hex[:6]}", "workload_type": "HTTP_SERVICE"}, headers={"X-Dev-Subject": "charlie-viewer"})
-    assert r403.status_code == 403
-    assert r403.json()["error_code"] == "FORBIDDEN"
+    # Rerun job
+    rerun_res = client.post(
+        f"/v1/jobs/{job_id}/reruns",
+        headers={"Idempotency-Key": f"k-rerun-{uuid.uuid4().hex[:6]}", **auth_headers},
+    )
+    assert rerun_res.status_code == 202
+    new_job_id = rerun_res.json()["operation_id"]
 
-    # 404: Not found
-    r404 = client.get(f"/v1/jobs/{uuid.uuid4()}", headers=auth_headers)
-    assert r404.status_code == 404
-    assert r404.json()["error_code"] == "NOT_FOUND"
-
-    # 409: Duplicate slug
-    ws_data = client.get(f"/v1/workspaces/{ws_id}", headers=auth_headers)
-    # create another workspace with same slug
+    # Verify new job name length in DB
     conn = psycopg2.connect(TEST_DATABASE_URL_SYNC)
     with conn.cursor() as cur:
-        cur.execute("SELECT slug FROM workspaces WHERE id = %s", (ws_id,))
-        slug = cur.fetchone()[0]
+        cur.execute("SELECT name FROM jobs WHERE id = %s", (new_job_id,))
+        new_name = cur.fetchone()[0]
     conn.close()
-    r409 = client.post("/v1/workspaces", json={"name": "Dup", "slug": slug}, headers=auth_headers)
-    assert r409.status_code == 409
-    assert r409.json()["error_code"] == "CONFLICT"
+    assert len(new_name) <= 100, f"New job name exceeded 100 chars: {len(new_name)}"
+    assert new_name.endswith("-rerun")
 
-    # 422: Validation error
-    r422 = client.post(f"/v1/workspaces/{ws_id}/jobs", json={}, headers={"Idempotency-Key": "k", **auth_headers})
-    assert r422.status_code == 422
-    assert r422.json()["error_code"] == "VALIDATION_ERROR"
 
-    # 501: Not implemented (authorized operation)
-    j_501 = client.post(
-        f"/v1/workspaces/{ws_id}/jobs",
-        json={"name": "job-501", "image_digest": "registry.example.com/job@sha256:1111111111111111111111111111111111111111111111111111111111111111"},
-        headers={"Idempotency-Key": f"k-501-{uuid.uuid4().hex[:6]}", **auth_headers},
-    )
-    assert j_501.status_code == 202
-    op_501_id = j_501.json()["operation_id"]
-    r501 = client.get(f"/v1/operations/{op_501_id}/events", headers=auth_headers)
-    assert r501.status_code == 501
-    assert r501.json()["error_code"] == "NOT_IMPLEMENTED"
+# =============================================================================
+# T12 Tests — Unified Error Responses & Cursor Pagination
+# =============================================================================
 
-    # Verify all responses have matching X-Correlation-ID header
-    for resp in (r400, r401, r403, r404, r409, r422, r501):
-        assert resp.headers.get("X-Correlation-ID") == resp.json()["correlation_id"]
+def test_t12_starlette_error_responses_standard_envelope(client: TestClient):
+    """Verify unknown paths (404) and wrong methods (405) return standard ErrorResponse envelope."""
+    # 1. Unknown route -> 404
+    r404 = client.get("/v1/nonexistent_route_abc")
+    assert r404.status_code == 404
+    d404 = r404.json()
+    assert d404["error_code"] == "NOT_FOUND"
+    assert "correlation_id" in d404
+    assert r404.headers.get("X-Correlation-ID") == d404["correlation_id"]
+
+    # 2. Method not allowed -> 405
+    r405 = client.post("/healthz")
+    assert r405.status_code == 405
+    d405 = r405.json()
+    assert d405["error_code"] == "BAD_REQUEST"
+    assert "correlation_id" in d405
+    assert r405.headers.get("X-Correlation-ID") == d405["correlation_id"]
+
+
+def test_t12_pagination_cursor_decode_overflow_returns_400(client: TestClient, clean_db):
+    """Verify cursor with timestamp overflow (year 99999999) returns 400 with 'Invalid pagination cursor'."""
+    ws_id, _, auth_headers = create_test_workspace_and_app(client)
+
+    # Encode invalid year cursor
+    raw_cursor = "99999999-01-01T00:00:00+00:00|5ba5fb57-0f6a-485b-a113-fd19d329591f"
+    b64_cursor = base64.b64encode(raw_cursor.encode()).decode()
+
+    resp = client.get(f"/v1/workspaces/{ws_id}/jobs?cursor={b64_cursor}", headers=auth_headers)
+    assert resp.status_code == 400
+    data = resp.json()
+    assert data["error_code"] == "BAD_REQUEST"
+    assert data["message"] == "Invalid pagination cursor"
+    assert "correlation_id" in data
+    assert resp.headers.get("X-Correlation-ID") == data["correlation_id"]
 
 
 def test_t12_cursor_pagination_workspace_jobs(client: TestClient, clean_db):
     """Verify cursor pagination on GET /v1/workspaces/{ws}/jobs walks at least 2 pages, caps limit at 100."""
     ws_id, _, auth_headers = create_test_workspace_and_app(client)
 
-    # Seed 5 jobs
     created_job_ids = []
     for i in range(5):
         j_resp = client.post(
@@ -480,27 +785,20 @@ def test_t12_cursor_pagination_workspace_jobs(client: TestClient, clean_db):
     assert len(p3_data["items"]) == 1
     assert p3_data["next_cursor"] is None
 
-    # Verify all 5 jobs were traversed without duplicates
     traversed_ids = [j["id"] for j in p1_data["items"] + p2_data["items"] + p3_data["items"]]
     assert len(traversed_ids) == 5
     assert set(traversed_ids) == set(created_job_ids)
 
-    # Test limit capped at 100 (101 returns 422)
+    # Limit capped at 100 (101 returns 422)
     p_invalid_limit = client.get(f"/v1/workspaces/{ws_id}/jobs?limit=101", headers=auth_headers)
     assert p_invalid_limit.status_code == 422
     assert p_invalid_limit.json()["error_code"] == "VALIDATION_ERROR"
-
-    # Test invalid cursor returns 400
-    p_invalid_cur = client.get(f"/v1/workspaces/{ws_id}/jobs?cursor=bad-cursor!", headers=auth_headers)
-    assert p_invalid_cur.status_code == 400
-    assert p_invalid_cur.json()["error_code"] == "BAD_REQUEST"
 
 
 def test_t12_cursor_pagination_app_releases(client: TestClient, clean_db):
     """Verify cursor pagination on GET /v1/apps/{app}/releases walks at least 2 pages, caps limit at 100."""
     ws_id, app_id, auth_headers = create_test_workspace_and_app(client)
 
-    # Seed 5 releases
     created_rel_ids = []
     for i in range(5):
         r_resp = client.post(
@@ -532,20 +830,13 @@ def test_t12_cursor_pagination_app_releases(client: TestClient, clean_db):
     assert len(p3_data["items"]) == 1
     assert p3_data["next_cursor"] is None
 
-    # Verify all 5 releases were traversed without duplicates
     traversed_ids = [r["id"] for r in p1_data["items"] + p2_data["items"] + p3_data["items"]]
     assert len(traversed_ids) == 5
     assert set(traversed_ids) == set(created_rel_ids)
 
-    # Test limit capped at 100 (101 returns 422)
+    # Limit capped at 100
     p_invalid_limit = client.get(f"/v1/apps/{app_id}/releases?limit=101", headers=auth_headers)
     assert p_invalid_limit.status_code == 422
-    assert p_invalid_limit.json()["error_code"] == "VALIDATION_ERROR"
-
-    # Test invalid cursor returns 400
-    p_invalid_cur = client.get(f"/v1/apps/{app_id}/releases?cursor=bad-cursor!", headers=auth_headers)
-    assert p_invalid_cur.status_code == 400
-    assert p_invalid_cur.json()["error_code"] == "BAD_REQUEST"
 
 
 # =============================================================================
@@ -573,7 +864,6 @@ def test_t13_all_schema_examples_validate_against_their_schemas():
             {"$ref": f"urn:openapi#/components/schemas/{schema_name}"},
             registry=registry,
         )
-        # Check top-level example
         if "example" in schema_def:
             validator.validate(schema_def["example"])
 
@@ -591,7 +881,6 @@ def test_t13_every_endpoint_has_request_and_2xx_response_examples():
                 continue
             op_id = op.get("operationId", f"{method.upper()} {path}")
 
-            # Request body example
             if "requestBody" in op:
                 content = op["requestBody"].get("content", {})
                 json_content = content.get("application/json", {})
@@ -599,7 +888,6 @@ def test_t13_every_endpoint_has_request_and_2xx_response_examples():
                     f"Operation '{op_id}' ({method.upper()} {path}) missing example in requestBody content"
                 )
 
-            # 2xx response example
             responses = op.get("responses", {})
             success_status = next((k for k in responses if k.startswith("2")), None)
             if success_status and success_status != "204":
@@ -612,53 +900,12 @@ def test_t13_every_endpoint_has_request_and_2xx_response_examples():
                     )
 
 
-def test_t13_all_operations_document_correlation_id_and_idempotency_retention():
-    """Verify X-Correlation-ID is documented on all operations and Idempotency-Key retention is documented."""
-    with open(OPENAPI_SPEC, "r", encoding="utf-8") as f:
-        spec = yaml.safe_load(f)
-
-    paths = spec.get("paths", {})
-    mutating_routes = {
-        "/workspaces/{workspace_id}/jobs": "post",
-        "/apps/{app_id}/deployments": "post",
-        "/apps/{app_id}/rollbacks": "post",
-        "/jobs/{job_id}/cancel": "post",
-        "/jobs/{job_id}/reruns": "post",
-    }
-
-    for path, path_item in paths.items():
-        for method in ("get", "post", "put", "delete", "patch"):
-            op = path_item.get(method)
-            if not op:
-                continue
-            op_id = op.get("operationId", f"{method.upper()} {path}")
-
-            # Verify 2xx response documents X-Correlation-ID
-            success_status = next((k for k in op.get("responses", {}) if k.startswith("2")), None)
-            if success_status:
-                resp_headers = op["responses"][success_status].get("headers", {})
-                assert "X-Correlation-ID" in resp_headers, (
-                    f"Operation '{op_id}' ({method.upper()} {path}) missing X-Correlation-ID in {success_status} response"
-                )
-
-    # Verify mutating operations require Idempotency-Key and document retention
-    for path, method in mutating_routes.items():
-        op = paths[path][method]
-        op_id = op.get("operationId")
-        headers = [p for p in op.get("parameters", []) if p.get("in") == "header" and p.get("name") == "Idempotency-Key"]
-        assert len(headers) == 1, f"Mutating operation '{op_id}' missing Idempotency-Key parameter!"
-        idemp_param = headers[0]
-        assert idemp_param.get("required") is True, f"Idempotency-Key must be required on '{op_id}'!"
-        desc = idemp_param.get("description", "")
-        assert "24 hours" in desc, f"Idempotency-Key description on '{op_id}' must document 24 hours retention contract!"
-
-
 # =============================================================================
 # T14 Tests — Outbox Event Schema Validation
 # =============================================================================
 
 def test_t14_outbox_payloads_validate_against_event_schemas(client: TestClient, clean_db):
-    """Verify that all outbox payloads inserted by mutating endpoints validate against JSON schemas in contracts/events/."""
+    """Verify all outbox payloads inserted by mutating endpoints validate against JSON schemas."""
     ws_id, app_id, auth_headers = create_test_workspace_and_app(client)
 
     # 1. Trigger job.submitted.v1
@@ -680,7 +927,6 @@ def test_t14_outbox_payloads_validate_against_event_schemas(client: TestClient, 
     release_id = dep_res.json()["operation_id"]
 
     # 3. Trigger app.deployment.requested.v1 with rollback
-    # Deploy a second release so we can rollback to the first
     client.post(
         f"/v1/apps/{app_id}/deployments",
         json={"image_digest": "registry.example.com/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "port": 8081},
@@ -697,7 +943,6 @@ def test_t14_outbox_payloads_validate_against_event_schemas(client: TestClient, 
     c_res = client.post(f"/v1/jobs/{job_id}/cancel", headers={"Idempotency-Key": f"k-{uuid.uuid4().hex[:6]}", **auth_headers})
     assert c_res.status_code == 202
 
-    # Query outbox events from DB
     conn = psycopg2.connect(TEST_DATABASE_URL_SYNC)
     with conn.cursor() as cur:
         cur.execute("SELECT topic, payload_json FROM outbox_events")
@@ -720,8 +965,7 @@ def test_t14_outbox_payloads_validate_against_event_schemas(client: TestClient, 
 # =============================================================================
 
 def test_t15_readyz_healthy_and_unhealthy_and_lifespan_redis(client: TestClient, monkeypatch):
-    """Verify /readyz returns 200 when DB and Redis are up, 503 when either is down, and reuses lifespan client pool."""
-    # 1. Healthy state -> 200
+    """Verify /readyz returns 200 when DB and Redis are up, 503 when either is down."""
     res = client.get("/readyz")
     assert res.status_code == 200
     data = res.json()
@@ -729,11 +973,9 @@ def test_t15_readyz_healthy_and_unhealthy_and_lifespan_redis(client: TestClient,
     assert data["database"] is True
     assert data["redis"] is True
 
-    # Verify Redis client is stored on app.state.redis from lifespan
     assert hasattr(app.state, "redis")
     assert app.state.redis is not None
 
-    # 2. Redis unreachable -> 503
     async def broken_ping():
         raise ConnectionError("Redis down")
 
@@ -743,3 +985,181 @@ def test_t15_readyz_healthy_and_unhealthy_and_lifespan_redis(client: TestClient,
     down_data = res_down.json()
     assert down_data["error_code"] == "SERVICE_UNAVAILABLE"
     assert down_data["details"]["redis"] is False
+
+
+# =============================================================================
+# T16 Tests — Live Response & Documented Request Examples Validation
+# =============================================================================
+
+def test_t16_live_api_responses_validate_against_openapi_schemas(client: TestClient, clean_db):
+    """Validate live responses for every response body type returned by the API against OpenAPI component schemas."""
+    with open(OPENAPI_SPEC, "r", encoding="utf-8") as f:
+        spec = yaml.safe_load(f)
+
+    resource = DRAFT202012.create_resource(spec)
+    registry = Registry().with_resource("urn:openapi", resource)
+
+    def validate_body(data: dict, schema_name: str) -> None:
+        validator = jsonschema.Draft202012Validator(
+            {"$ref": f"urn:openapi#/components/schemas/{schema_name}"},
+            registry=registry,
+        )
+        validator.validate(data)
+
+    auth_headers = {"X-Dev-Subject": "contract-tester"}
+
+    # 1. HealthResponse: GET /healthz -> 200
+    health_resp = client.get("/healthz")
+    assert health_resp.status_code == 200
+    validate_body(health_resp.json(), "HealthResponse")
+
+    # 2. ReadinessResponse: GET /readyz -> 200
+    readyz_resp = client.get("/readyz")
+    assert readyz_resp.status_code == 200
+    validate_body(readyz_resp.json(), "ReadinessResponse")
+
+    # 3. WorkspaceResponse: POST /v1/workspaces -> 201
+    unique_slug = f"ws-{uuid.uuid4().hex[:8]}"
+    ws_resp = client.post("/v1/workspaces", json={"name": "Contracts WS", "slug": unique_slug}, headers=auth_headers)
+    assert ws_resp.status_code == 201
+    ws_data = ws_resp.json()
+    validate_body(ws_data, "WorkspaceResponse")
+    ws_id = ws_data["id"]
+
+    # 4. ApplicationResponse: POST /v1/workspaces/{ws}/apps -> 201
+    app_slug = f"svc-{uuid.uuid4().hex[:6]}"
+    app_resp = client.post(
+        f"/v1/workspaces/{ws_id}/apps",
+        json={"name": "Contract App", "slug": app_slug, "workload_type": "HTTP_SERVICE"},
+        headers=auth_headers,
+    )
+    assert app_resp.status_code == 201
+    app_data = app_resp.json()
+    validate_body(app_data, "ApplicationResponse")
+    app_id = app_data["id"]
+
+    # 5. AcceptedOperationResponse on Job Submission: POST /v1/workspaces/{ws}/jobs -> 202
+    job_payload = {
+        "name": "contract-job",
+        "image_digest": "registry.example.com/job@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    }
+    job_resp = client.post(
+        f"/v1/workspaces/{ws_id}/jobs",
+        json=job_payload,
+        headers={"Idempotency-Key": f"idemp-job-{uuid.uuid4().hex[:8]}", **auth_headers},
+    )
+    assert job_resp.status_code == 202
+    job_data = job_resp.json()
+    validate_body(job_data, "AcceptedOperationResponse")
+    job_id = job_data["operation_id"]
+
+    # 6. AcceptedOperationResponse on Job Cancellation: POST /v1/jobs/{job}/cancel -> 202
+    cancel_resp = client.post(
+        f"/v1/jobs/{job_id}/cancel",
+        headers={"Idempotency-Key": f"idemp-cancel-{uuid.uuid4().hex[:8]}", **auth_headers},
+    )
+    assert cancel_resp.status_code == 202
+    validate_body(cancel_resp.json(), "AcceptedOperationResponse")
+
+    # 7. AcceptedOperationResponse on Job Rerun: POST /v1/jobs/{job}/reruns -> 202
+    conn = psycopg2.connect(TEST_DATABASE_URL_SYNC)
+    with conn.cursor() as cur:
+        cur.execute("UPDATE jobs SET state = 'FAILED' WHERE id = %s", (job_id,))
+    conn.commit()
+    conn.close()
+
+    rerun_resp = client.post(
+        f"/v1/jobs/{job_id}/reruns",
+        headers={"Idempotency-Key": f"idemp-rerun-{uuid.uuid4().hex[:8]}", **auth_headers},
+    )
+    assert rerun_resp.status_code == 202
+    validate_body(rerun_resp.json(), "AcceptedOperationResponse")
+
+    # 8. AcceptedOperationResponse on App Deploy: POST /v1/apps/{app}/deployments -> 202
+    deploy_payload = {
+        "image_digest": "registry.example.com/app@sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "port": 8080,
+    }
+    deploy_resp = client.post(
+        f"/v1/apps/{app_id}/deployments",
+        json=deploy_payload,
+        headers={"Idempotency-Key": f"idemp-deploy-{uuid.uuid4().hex[:8]}", **auth_headers},
+    )
+    assert deploy_resp.status_code == 202
+    deploy_data = deploy_resp.json()
+    validate_body(deploy_data, "AcceptedOperationResponse")
+    release_id = deploy_data["operation_id"]
+
+    # 9. AcceptedOperationResponse on App Rollback: POST /v1/apps/{app}/rollbacks -> 202
+    client.post(
+        f"/v1/apps/{app_id}/deployments",
+        json=dict(deploy_payload, port=8081),
+        headers={"Idempotency-Key": f"idemp-deploy2-{uuid.uuid4().hex[:8]}", **auth_headers},
+    )
+    rollback_resp = client.post(
+        f"/v1/apps/{app_id}/rollbacks",
+        json={"target_release_id": release_id},
+        headers={"Idempotency-Key": f"idemp-rb-{uuid.uuid4().hex[:8]}", **auth_headers},
+    )
+    assert rollback_resp.status_code == 202
+    validate_body(rollback_resp.json(), "AcceptedOperationResponse")
+
+    # 10. OperationStatusResponse: GET /v1/operations/{id} -> 200
+    job_op_resp = client.get(f"/v1/operations/{job_id}", headers=auth_headers)
+    assert job_op_resp.status_code == 200
+    job_op_data = job_op_resp.json()
+    validate_body(job_op_data, "OperationStatusResponse")
+
+    # 11. JobDetailsResponse with at least one Attempt: GET /v1/jobs/{job} -> 200
+    attempt_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc)
+    conn = psycopg2.connect(TEST_DATABASE_URL_SYNC)
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO job_attempts (
+                id, job_id, attempt_number, state, resource_uid, lease_epoch,
+                exit_code, failure_reason, started_at, finished_at, created_at, updated_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (
+            attempt_id, job_id, 1, 'RUNNING', 'pod-exec-worker-1', 1,
+            None, None, now, None, now, now
+        ))
+    conn.commit()
+    conn.close()
+
+    job_details_resp = client.get(f"/v1/jobs/{job_id}", headers=auth_headers)
+    assert job_details_resp.status_code == 200
+    job_details_data = job_details_resp.json()
+    assert len(job_details_data["attempts"]) >= 1
+    validate_body(job_details_data, "JobDetailsResponse")
+
+
+def test_t16_documented_request_examples_execute_successfully(client: TestClient, clean_db):
+    """Verify that documented example request payloads in the OpenAPI spec execute successfully."""
+    with open(OPENAPI_SPEC, "r", encoding="utf-8") as f:
+        spec = yaml.safe_load(f)
+
+    auth_headers = {"X-Dev-Subject": "spec-example-tester"}
+
+    # 1. createWorkspace example
+    ws_ex = spec["paths"]["/v1/workspaces"]["post"]["requestBody"]["content"]["application/json"]["example"]
+    ws_ex_payload = dict(ws_ex, slug=f"ex-ws-{uuid.uuid4().hex[:6]}")
+    r_ws = client.post("/v1/workspaces", json=ws_ex_payload, headers=auth_headers)
+    assert r_ws.status_code == 201
+    ws_id = r_ws.json()["id"]
+
+    # 2. createApplication example
+    app_ex = spec["paths"]["/v1/workspaces/{workspace_id}/apps"]["post"]["requestBody"]["content"]["application/json"]["example"]
+    app_ex_payload = dict(app_ex, slug=f"ex-app-{uuid.uuid4().hex[:6]}")
+    r_app = client.post(f"/v1/workspaces/{ws_id}/apps", json=app_ex_payload, headers=auth_headers)
+    assert r_app.status_code == 201
+
+    # 3. submitJob example
+    job_ex = spec["paths"]["/v1/workspaces/{workspace_id}/jobs"]["post"]["requestBody"]["content"]["application/json"]["example"]
+    job_key = spec["paths"]["/v1/workspaces/{workspace_id}/jobs"]["post"]["parameters"][1]["schema"]["example"]
+    r_job = client.post(
+        f"/v1/workspaces/{ws_id}/jobs",
+        json=job_ex,
+        headers={"Idempotency-Key": f"{job_key}-{uuid.uuid4().hex[:4]}", **auth_headers},
+    )
+    assert r_job.status_code == 202

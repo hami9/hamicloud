@@ -106,12 +106,7 @@ def is_idempotency_violation(exc: IntegrityError) -> bool:
     orig = getattr(exc, "orig", None)
     cause = getattr(orig, "__cause__", None)
     constraint = getattr(cause, "constraint_name", None) or getattr(orig, "constraint_name", None)
-    if constraint == "uq_idempotency_workspace_key":
-        return True
-
-    # Fallback check on string representation for safety across drivers
-    msg = str(exc).lower()
-    return "uq_idempotency_workspace_key" in msg
+    return constraint == "uq_idempotency_workspace_key"
 
 
 async def handle_idempotency_race(

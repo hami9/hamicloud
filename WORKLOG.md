@@ -367,3 +367,82 @@ Every entry follows this standard format:
 - **Dev Database Isolation:** 0 row delta on `hamicloud` dev database (all tests strictly run against `hamicloud_test`).
 - **MASTER-PLAN.md Progress:** 5 checkboxes closed under §A.1 API contract examples (Current position: 18 of 45 boxes pass).
 
+---
+
+### [2026-09-20T11:20:00Z] Phase 3 Review Rework: Concurrency, Contract Reconciliation, Real PostgreSQL Tests, and Error Envelopes
+
+- **Status:** PASS (All 11 review rejection items addressed and verified)
+- **Source of Truth:** Phase 3 Review Feedback, `M0-WORK-ORDER.md`, `contracts/openapi/v1.yaml`, `MASTER-PLAN.md`
+- **Correction / Retraction:** The 2026-09-19 entry's claim of "COMPLETED & VERIFIED" is formally retracted per the Phase 3 review findings. The implementation suffered from SQLAlchemy ORM identity-map caching under `SELECT ... FOR UPDATE`, multi-threaded test client deadlocks, mock-based constraint assertions, unapproved roadmap edits, and contract/example mismatches.
+
+#### Detailed Resolutions
+
+1. **Pessimistic Concurrency Refresh (Item 1):**
+   - In `apps/api/app/api/v1/apps.py` (`deploy_release`, `rollback_release`) and `jobs.py` (`cancel_job`, `rerun_job`), decoupled authorization from locking: queried scalar `workspace_id` first to authorize caller, then acquired exclusive row lock using `.with_for_update().execution_options(populate_existing=True)` to force SQLAlchemy to refresh the in-memory entity from the database snapshot.
+   - In `apps.py`, passed local variable `workspace_id` into `handle_idempotency_race` in the exception handler.
+   - Added concurrency tests asserting `desired_generation` increments sequentially to 9 across 8 concurrent deploys with 8 distinct outbox events, and exactly 1 cancellation event is written across 8 concurrent cancels.
+
+2. **Async Concurrency Test Suite (Item 2):**
+   - Replaced multi-threaded `ThreadPoolExecutor` and multiple `TestClient`s with a single-event-loop architecture using `httpx.AsyncClient(transport=ASGITransport(app=app))` and `asyncio.gather()`.
+   - In `apps/api/app/db/session.py`, configured `NullPool` when connected to `hamicloud_test` to prevent connection leaks across event loops.
+   - All concurrency tests now complete deterministically in under 3 seconds with zero deadlocks.
+
+3. **OpenAPI Retention Contract & ADR-0003 (Item 3):**
+   - Enforced the exact parameter description across all 5 mutating routes in `contracts/openapi/v1.yaml`: `"Retained for at least 24 hours; after that the key may be treated as new."`
+   - Added `minLength: 1`, `maxLength: 255` to `Idempotency-Key` headers in OpenAPI spec.
+   - Updated `docs/adr/ADR-0003-delivery-semantics-and-idempotent-execution.md` to document that the read path deletes expired records upon read for immediate key reuse, while untouched expired rows are purged by the M1 background sweeper.
+   - Added tests verifying the exact contract text, read-path deletion, and immediate key reuse with new `operation_id` and fresh outbox events.
+
+4. **Real PostgreSQL Integrity Tests & Constraint Isolation (Item 4):**
+   - Removed mock sessions from tests. Added test `test_t11_real_postgresql_integrity_error_bubbles_to_500` applying a real check constraint on PostgreSQL `jobs` table, verifying non-idempotency violations bubble up to 500 `INTERNAL_SERVER_ERROR`.
+   - In `apps/api/app/core/idempotency.py`, dropped substring matching fallback in `is_idempotency_violation`; restricted strictly to driver-reported `cause.constraint_name == "uq_idempotency_workspace_key"`.
+   - Added test verifying user inputs containing `"uq_idempotency_workspace_key"` as substring in text columns do not trigger false 409 conflicts.
+
+5. **Complete Replay & Conflict Test Matrix (Item 5):**
+   - Implemented full replay and conflict tests across all 5 mutating routes (`submit_job`, `deploy_release`, `rollback_release`, `cancel_job`, `rerun_job`).
+   - Verified byte-for-byte identical responses upon replay and verified that no secondary outbox events are emitted.
+   - Verified 409 `IDEMPOTENCY_CONFLICT` on payload divergence for `submit_job`, `deploy_release`, and `rollback_release`.
+
+6. **OpenAPI Path & Server Reconciliation (Item 6):**
+   - Changed `servers:` in `contracts/openapi/v1.yaml` to `[{url: /}]`.
+   - Kept `/healthz` and `/readyz` at root path.
+   - Prefixed all other API paths with `/v1/` (`/v1/workspaces`, `/v1/workspaces/{workspace_id}/apps`, etc.).
+   - Updated all client calls and tests to use `/v1/` paths.
+
+7. **Hardened Input Validation & Error Envelopes (Item 7):**
+   - In `apps/api/app/core/pagination.py`: hardened `decode_cursor` to support unpadded base64, parse ISO timestamps into UTC (catching `OverflowError`), validate year bounds (1970–9999), and raise 400 `Invalid pagination cursor` on any malformed cursor.
+   - In `apps/api/app/api/v1/jobs.py`: truncated original job name to 94 chars (`f"{original_job.name[:94]}-rerun"`) ensuring total job name never exceeds column limit of 100 characters. Removed duplicate return block in `submit_job`.
+   - In `apps/api/app/main.py`: registered `StarletteHTTPException` handler ensuring unknown paths (404) and method not allowed (405) return the standard `ErrorResponse` envelope with matching `X-Correlation-ID` header. Added catch-all 500 handler.
+   - Disabled docs outside development (`ENVIRONMENT != "development"`). Stripped `X-Dev-Subject` header from served OpenAPI schema via `custom_openapi()`.
+
+8. **OpenAPI Contract Cleanup (Item 8):**
+   - Removed 400 `BadRequest` declarations from all endpoints that cannot produce it (retained only on cursor-paginated GET routes).
+   - Removed 429 `RateLimited` and `RATE_LIMITED` from `ErrorCode` enum and OpenAPI responses (rate limiting deferred to M2).
+   - Removed all `details: null` instances from OpenAPI examples and schemas.
+   - Added valid base64-encoded padded cursor examples (`MjAyNi0wOS0xOVQxMjowMDowMHw1YmE1ZmI1Ny0wZjZhLTQ4NWItYTExMy1mZDE5ZDMyOTU5MWY=`).
+   - Fixed `JobDetailsResponse` example (`state: "QUEUED"`, `current_attempt_number: 0`, `attempts: []`).
+   - Added missing OpenAPI examples: `MissingIdempotencyKey` (422), `IdempotencyConflict` (409), and `IdenticalReplay` (202).
+
+9. **Master Plan Realignment (Item 9):**
+   - Unticked the 5 §A.1 boxes during rework and reset pass count to 13/45.
+   - Upon full test passage, re-ticked the 5 boxes under §A.1 API contract examples:
+     - `[x] Submitting a job without an idempotency key is rejected.`
+     - `[x] Same key + different body → conflict.`
+     - `[x] Same key + identical body → the original accepted operation is returned.`
+     - `[x] Structured error codes, correlation ID and pagination are defined.`
+     - `[x] Idempotency key retention (at least 24 hours) is stated in the published contract.`
+   - Updated `MASTER-PLAN.md` current position to: `18 of 45 boxes pass`.
+
+10. **Roadmap Reversion (Item 10):**
+    - Reverted unapproved owner decision D3 additions in `HamiCloud-Roadmap.md` (footnote 2 and the two rows `List workspace jobs` and `List app releases` in §6.1).
+
+11. **Codebase Hygiene & Verification (Item 11):**
+    - Cleaned unused imports (`hashlib`, `json`, `timedelta`, `List`, `IdempotencyRecord`, `Workspace`) from `apps.py` and `jobs.py`.
+    - Added typing to middleware in `main.py` (`call_next: Any`).
+    - Verified `mypy --explicit-package-bases app` passes with 0 errors across 28 source files.
+    - Verified `ruff check apps/api/app/api/v1/apps.py apps/api/app/api/v1/jobs.py --select F401` passes with 0 unused imports.
+    - Verified complete Python test suite: **47 passed, 8 warnings in 44.29s**.
+    - Verified Go runtime test suite: **PASS** (`ok github.com/hami9/hamicloud/runtime/internal/domain`).
+    - Verified dev database `hamicloud` has exact 0-row delta (368 rows total, unchanged).
+
+

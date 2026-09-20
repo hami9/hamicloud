@@ -8,8 +8,8 @@ info:
     clients never supply the workspace ID for authorization.
   version: 1.0.0
 servers:
-  - url: /v1
-    description: Control Plane API v1
+  - url: /
+    description: Control Plane API
 security:
   - BearerAuth: []
 
@@ -71,7 +71,7 @@ paths:
                   database: true
                   redis: false
 
-  /workspaces:
+  /v1/workspaces:
     post:
       summary: Create a new workspace
       operationId: createWorkspace
@@ -99,8 +99,6 @@ paths:
                 name: "Acme Production"
                 slug: "acme-prod"
                 created_at: "2026-09-19T12:00:00Z"
-        '400':
-          $ref: '#/components/responses/400BadRequest'
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '409':
@@ -110,7 +108,7 @@ paths:
         '500':
           $ref: '#/components/responses/500InternalServerError'
 
-  /workspaces/{workspace_id}/apps:
+  /v1/workspaces/{workspace_id}/apps:
     post:
       summary: Create an application in workspace
       operationId: createApplication
@@ -151,8 +149,6 @@ paths:
                 desired_generation: 1
                 current_release_id: null
                 created_at: "2026-09-19T12:00:00Z"
-        '400':
-          $ref: '#/components/responses/400BadRequest'
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '403':
@@ -166,7 +162,7 @@ paths:
         '500':
           $ref: '#/components/responses/500InternalServerError'
 
-  /workspaces/{workspace_id}/jobs:
+  /v1/workspaces/{workspace_id}/jobs:
     get:
       summary: List jobs in workspace
       description: Cursor-paginated listing of jobs in a workspace; requires VIEWER role or higher.
@@ -193,7 +189,7 @@ paths:
           required: false
           schema:
             type: string
-            example: "MjAyNi0wOS0xOVQxMjowMDowMHw1YmE1ZmI1Ny0wZjZhLTQ4NWItYTExMy1mZDE5ZDMyOTU5MWY"
+            example: "MjAyNi0wOS0xOVQxMjowMDowMHw1YmE1ZmI1Ny0wZjZhLTQ4NWItYTExMy1mZDE5ZDMyOTU5MWY="
       responses:
         '200':
           description: List of jobs with pagination metadata
@@ -244,11 +240,11 @@ paths:
         - name: Idempotency-Key
           in: header
           required: true
-          description: >-
-            Unique UUID or opaque token preventing duplicate execution.
-            Retained for at least 24 hours (purged by background sweeper task in M1).
+          description: "Retained for at least 24 hours; after that the key may be treated as new."
           schema:
             type: string
+            minLength: 1
+            maxLength: 255
             example: "7b4c6e91-88f1-4b15-b7e2-04e8d35678ab"
       requestBody:
         required: true
@@ -274,12 +270,19 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AcceptedOperationResponse'
-              example:
-                operation_id: "5ba5fb57-0f6a-485b-a113-fd19d329591f"
-                status: "ACCEPTED"
-                status_url: "/v1/operations/5ba5fb57-0f6a-485b-a113-fd19d329591f"
-        '400':
-          $ref: '#/components/responses/400BadRequest'
+              examples:
+                Accepted:
+                  summary: Operation accepted
+                  value:
+                    operation_id: "5ba5fb57-0f6a-485b-a113-fd19d329591f"
+                    status: "ACCEPTED"
+                    status_url: "/v1/operations/5ba5fb57-0f6a-485b-a113-fd19d329591f"
+                IdenticalReplay:
+                  summary: Idempotent replay of previously accepted request
+                  value:
+                    operation_id: "5ba5fb57-0f6a-485b-a113-fd19d329591f"
+                    status: "ACCEPTED"
+                    status_url: "/v1/operations/5ba5fb57-0f6a-485b-a113-fd19d329591f"
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '403':
@@ -290,12 +293,10 @@ paths:
           $ref: '#/components/responses/409Conflict'
         '422':
           $ref: '#/components/responses/422UnprocessableEntity'
-        '429':
-          $ref: '#/components/responses/429RateLimited'
         '500':
           $ref: '#/components/responses/500InternalServerError'
 
-  /apps/{app_id}/deployments:
+  /v1/apps/{app_id}/deployments:
     post:
       summary: Deploy a new release for an application
       operationId: deployRelease
@@ -310,11 +311,11 @@ paths:
         - name: Idempotency-Key
           in: header
           required: true
-          description: >-
-            Unique UUID or opaque token preventing duplicate execution.
-            Retained for at least 24 hours (purged by background sweeper task in M1).
+          description: "Retained for at least 24 hours; after that the key may be treated as new."
           schema:
             type: string
+            minLength: 1
+            maxLength: 255
             example: "7b4c6e91-88f1-4b15-b7e2-04e8d35678ab"
       requestBody:
         required: true
@@ -344,8 +345,6 @@ paths:
                 operation_id: "309bbd1e-07f4-4bdf-b9b7-e81d48381601"
                 status: "ACCEPTED"
                 status_url: "/v1/operations/309bbd1e-07f4-4bdf-b9b7-e81d48381601"
-        '400':
-          $ref: '#/components/responses/400BadRequest'
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '403':
@@ -359,7 +358,7 @@ paths:
         '500':
           $ref: '#/components/responses/500InternalServerError'
 
-  /apps/{app_id}/releases:
+  /v1/apps/{app_id}/releases:
     get:
       summary: List releases for an application
       description: Cursor-paginated listing of releases for an application; requires VIEWER role or higher.
@@ -386,7 +385,7 @@ paths:
           required: false
           schema:
             type: string
-            example: "MjAyNi0wOS0xOVQxMjowMDowMHwzMDliYmQxZS0wN2Y0LTRiZGYtYjliNy1lODFkNDgzODE2MDE"
+            example: "MjAyNi0wOS0xOVQxMjowMDowMHwzMDliYmQxZS0wN2Y0LTRiZGYtYjliNy1lODFkNDgzODE2MDE="
       responses:
         '200':
           description: List of releases with pagination metadata
@@ -419,7 +418,7 @@ paths:
         '500':
           $ref: '#/components/responses/500InternalServerError'
 
-  /apps/{app_id}/rollbacks:
+  /v1/apps/{app_id}/rollbacks:
     post:
       summary: Roll back application to a previous healthy release
       operationId: rollbackRelease
@@ -434,11 +433,11 @@ paths:
         - name: Idempotency-Key
           in: header
           required: true
-          description: >-
-            Unique UUID or opaque token preventing duplicate execution.
-            Retained for at least 24 hours (purged by background sweeper task in M1).
+          description: "Retained for at least 24 hours; after that the key may be treated as new."
           schema:
             type: string
+            minLength: 1
+            maxLength: 255
             example: "7b4c6e91-88f1-4b15-b7e2-04e8d35678ab"
       requestBody:
         required: true
@@ -462,8 +461,6 @@ paths:
                 operation_id: "419bbd1e-07f4-4bdf-b9b7-e81d48381602"
                 status: "ACCEPTED"
                 status_url: "/v1/operations/419bbd1e-07f4-4bdf-b9b7-e81d48381602"
-        '400':
-          $ref: '#/components/responses/400BadRequest'
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '403':
@@ -477,7 +474,7 @@ paths:
         '500':
           $ref: '#/components/responses/500InternalServerError'
 
-  /jobs/{job_id}:
+  /v1/jobs/{job_id}:
     get:
       summary: Inspect job status and attempt history
       operationId: getJob
@@ -522,7 +519,7 @@ paths:
         '500':
           $ref: '#/components/responses/500InternalServerError'
 
-  /jobs/{job_id}/cancel:
+  /v1/jobs/{job_id}/cancel:
     post:
       summary: Request graceful cancellation of an active job
       operationId: cancelJob
@@ -537,11 +534,11 @@ paths:
         - name: Idempotency-Key
           in: header
           required: true
-          description: >-
-            Unique UUID or opaque token preventing duplicate execution.
-            Retained for at least 24 hours (purged by background sweeper task in M1).
+          description: "Retained for at least 24 hours; after that the key may be treated as new."
           schema:
             type: string
+            minLength: 1
+            maxLength: 255
             example: "7b4c6e91-88f1-4b15-b7e2-04e8d35678ab"
       responses:
         '202':
@@ -553,12 +550,19 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AcceptedOperationResponse'
-              example:
-                operation_id: "5ba5fb57-0f6a-485b-a113-fd19d329591f"
-                status: "ACCEPTED"
-                status_url: "/v1/operations/5ba5fb57-0f6a-485b-a113-fd19d329591f"
-        '400':
-          $ref: '#/components/responses/400BadRequest'
+              examples:
+                Accepted:
+                  summary: Operation accepted
+                  value:
+                    operation_id: "5ba5fb57-0f6a-485b-a113-fd19d329591f"
+                    status: "ACCEPTED"
+                    status_url: "/v1/operations/5ba5fb57-0f6a-485b-a113-fd19d329591f"
+                IdenticalReplay:
+                  summary: Idempotent replay of previously accepted request
+                  value:
+                    operation_id: "5ba5fb57-0f6a-485b-a113-fd19d329591f"
+                    status: "ACCEPTED"
+                    status_url: "/v1/operations/5ba5fb57-0f6a-485b-a113-fd19d329591f"
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '403':
@@ -572,7 +576,7 @@ paths:
         '500':
           $ref: '#/components/responses/500InternalServerError'
 
-  /jobs/{job_id}/reruns:
+  /v1/jobs/{job_id}/reruns:
     post:
       summary: Re-run a failed job as a new linked logical job
       operationId: rerunJob
@@ -587,11 +591,11 @@ paths:
         - name: Idempotency-Key
           in: header
           required: true
-          description: >-
-            Unique UUID or opaque token preventing duplicate execution.
-            Retained for at least 24 hours (purged by background sweeper task in M1).
+          description: "Retained for at least 24 hours; after that the key may be treated as new."
           schema:
             type: string
+            minLength: 1
+            maxLength: 255
             example: "7b4c6e91-88f1-4b15-b7e2-04e8d35678ab"
       responses:
         '202':
@@ -607,8 +611,6 @@ paths:
                 operation_id: "6ca5fb57-0f6a-485b-a113-fd19d3295920"
                 status: "ACCEPTED"
                 status_url: "/v1/operations/6ca5fb57-0f6a-485b-a113-fd19d3295920"
-        '400':
-          $ref: '#/components/responses/400BadRequest'
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '403':
@@ -622,7 +624,7 @@ paths:
         '500':
           $ref: '#/components/responses/500InternalServerError'
 
-  /operations/{operation_id}:
+  /v1/operations/{operation_id}:
     get:
       summary: Inspect status of an asynchronous operation
       operationId: getOperationStatus
@@ -650,7 +652,6 @@ paths:
                 status: "ACCEPTED"
                 status_url: "/v1/operations/309bbd1e-07f4-4bdf-b9b7-e81d48381601"
                 created_at: "2026-09-19T12:00:00Z"
-                details: null
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '404':
@@ -658,7 +659,7 @@ paths:
         '500':
           $ref: '#/components/responses/500InternalServerError'
 
-  /operations/{operation_id}/events:
+  /v1/operations/{operation_id}/events:
     get:
       summary: Server-Sent Events (SSE) stream for operation logs and events
       description: >-
@@ -715,7 +716,7 @@ components:
 
   responses:
     400BadRequest:
-      description: Invalid request payload
+      description: Invalid request payload or query parameter
       headers:
         X-Correlation-ID:
           $ref: '#/components/headers/X-Correlation-ID'
@@ -725,9 +726,8 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
           example:
             error_code: "BAD_REQUEST"
-            message: "Invalid request payload"
+            message: "Invalid pagination cursor"
             correlation_id: "req_01HVG89ABCDEF1234567890"
-            details: null
     401Unauthorized:
       description: Authentication required or invalid credentials
       headers:
@@ -741,7 +741,6 @@ components:
             error_code: "UNAUTHORIZED"
             message: "Authentication required"
             correlation_id: "req_01HVG89ABCDEF1234567890"
-            details: null
     403Forbidden:
       description: Insufficient workspace role for this operation
       headers:
@@ -755,7 +754,6 @@ components:
             error_code: "FORBIDDEN"
             message: "Insufficient role for this operation"
             correlation_id: "req_01HVG89ABCDEF1234567890"
-            details: null
     404NotFound:
       description: Resource not found or not in workspace
       headers:
@@ -765,11 +763,13 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
-          example:
-            error_code: "NOT_FOUND"
-            message: "Resource not found"
-            correlation_id: "req_01HVG89ABCDEF1234567890"
-            details: null
+          examples:
+            NotFound:
+              summary: Resource not found
+              value:
+                error_code: "NOT_FOUND"
+                message: "Job not found"
+                correlation_id: "req_01HVG89ABCDEF1234567890"
     409Conflict:
       description: State conflict or idempotency key mismatch
       headers:
@@ -779,11 +779,19 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
-          example:
-            error_code: "CONFLICT"
-            message: "Resource conflict detected"
-            correlation_id: "req_01HVG89ABCDEF1234567890"
-            details: null
+          examples:
+            Conflict:
+              summary: Resource state or slug conflict
+              value:
+                error_code: "CONFLICT"
+                message: "Application with slug 'payment-service' already exists in workspace"
+                correlation_id: "req_01HVG89ABCDEF1234567890"
+            IdempotencyConflict:
+              summary: Idempotency key reused with different request payload
+              value:
+                error_code: "IDEMPOTENCY_CONFLICT"
+                message: "Idempotency key reused with different request payload"
+                correlation_id: "req_01HVG89ABCDEF1234567890"
     422UnprocessableEntity:
       description: Request payload failed schema validation
       headers:
@@ -793,29 +801,31 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
-          example:
-            error_code: "VALIDATION_ERROR"
-            message: "Request validation failed"
-            correlation_id: "req_01HVG89ABCDEF1234567890"
-            details:
-              errors:
-                - loc: ["body", "name"]
-                  msg: "Field required"
-                  type: "missing"
-    429RateLimited:
-      description: Workspace quota or rate limit exceeded
-      headers:
-        X-Correlation-ID:
-          $ref: '#/components/headers/X-Correlation-ID'
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/ErrorResponse'
-          example:
-            error_code: "RATE_LIMITED"
-            message: "Concurrent job quota limit reached for workspace"
-            correlation_id: "req_01HVG89ABCDEF1234567890"
-            details: null
+          examples:
+            ValidationError:
+              summary: Validation failure in request body
+              value:
+                error_code: "VALIDATION_ERROR"
+                message: "Request validation failed"
+                correlation_id: "req_01HVG89ABCDEF1234567890"
+                details:
+                  errors:
+                    - loc: ["body", "name"]
+                      msg: "Field required"
+                      type: "missing"
+                      input: null
+            MissingIdempotencyKey:
+              summary: Missing required Idempotency-Key header
+              value:
+                error_code: "VALIDATION_ERROR"
+                message: "Request validation failed"
+                correlation_id: "req_01HVG89ABCDEF1234567890"
+                details:
+                  errors:
+                    - loc: ["header", "idempotency-key"]
+                      msg: "Field required"
+                      type: "missing"
+                      input: null"
     500InternalServerError:
       description: Internal platform error occurred
       headers:
@@ -829,7 +839,6 @@ components:
             error_code: "INTERNAL_SERVER_ERROR"
             message: "An unexpected internal platform error occurred."
             correlation_id: "req_01HVG89ABCDEF1234567890"
-            details: null
     501NotImplemented:
       description: Feature not implemented in this baseline
       headers:
@@ -841,9 +850,8 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
           example:
             error_code: "NOT_IMPLEMENTED"
-            message: "Live operation event streaming lands in milestone M1"
+            message: "Server-Sent Events streaming is not yet implemented in M0 baseline"
             correlation_id: "req_01HVG89ABCDEF1234567890"
-            details: null
 
   schemas:
     HealthResponse:
@@ -901,7 +909,6 @@ components:
             - NOT_FOUND
             - CONFLICT
             - IDEMPOTENCY_CONFLICT
-            - RATE_LIMITED
             - BAD_REQUEST
             - SERVICE_UNAVAILABLE
             - NOT_IMPLEMENTED
@@ -916,12 +923,10 @@ components:
         details:
           type: [object, 'null']
           additionalProperties: true
-          example: null
       example:
         error_code: "NOT_FOUND"
         message: "Resource not found"
         correlation_id: "req_01HVG89ABCDEF1234567890"
-        details: null
 
     CreateWorkspaceRequest:
       type: object
@@ -1125,7 +1130,6 @@ components:
         status: "ACCEPTED"
         status_url: "/v1/operations/309bbd1e-07f4-4bdf-b9b7-e81d48381601"
         created_at: "2026-09-19T12:00:00Z"
-        details: null
 
     RollbackRequest:
       type: object
@@ -1244,10 +1248,10 @@ components:
         state:
           type: string
           enum: [QUEUED, ADMITTED, STARTING, RUNNING, SUCCEEDED, RETRY_WAIT, FAILED, CANCEL_REQUESTED, CANCELLED]
-          example: "RUNNING"
+          example: "QUEUED"
         current_attempt_number:
           type: integer
-          example: 1
+          example: 0
         attempts:
           type: array
           items:
@@ -1260,17 +1264,9 @@ components:
         id: "5ba5fb57-0f6a-485b-a113-fd19d329591f"
         workspace_id: "550e8400-e29b-41d4-a716-446655440000"
         name: "nightly-backup"
-        state: "RUNNING"
-        current_attempt_number: 1
-        attempts:
-          - attempt_number: 1
-            state: "RUNNING"
-            resource_uid: "pod-backup-1"
-            lease_epoch: 1
-            exit_code: null
-            failure_reason: null
-            started_at: "2026-09-19T12:00:00Z"
-            finished_at: null
+        state: "QUEUED"
+        current_attempt_number: 0
+        attempts: []
         created_at: "2026-09-19T12:00:00Z"
 
     JobListResponse:

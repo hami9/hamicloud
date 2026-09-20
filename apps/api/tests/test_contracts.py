@@ -143,7 +143,7 @@ def test_every_tenant_operation_lists_401_and_404():
         spec = yaml.safe_load(f)
 
     paths = spec.get("paths", {})
-    non_tenant_paths = {"/healthz", "/readyz", "/workspaces"}
+    non_tenant_paths = {"/healthz", "/readyz", "/v1/workspaces"}
 
     for path, path_item in paths.items():
         if path in non_tenant_paths:

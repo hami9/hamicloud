@@ -3,13 +3,16 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.core.config import settings
 
+from sqlalchemy.pool import NullPool
+
+is_test = "hamicloud_test" in settings.DATABASE_URL
+engine_kwargs = {"poolclass": NullPool} if is_test else {"pool_size": 10, "max_overflow": 20, "pool_pre_ping": True}
+
 engine = create_async_engine(
     settings.DATABASE_URL,
-    echo=(settings.ENVIRONMENT == "development"),
+    echo=(settings.ENVIRONMENT == "development" and not is_test),
     future=True,
-    pool_pre_ping=True,
-    pool_size=10,
-    max_overflow=20,
+    **engine_kwargs,
 )
 
 AsyncSessionLocal = async_sessionmaker(

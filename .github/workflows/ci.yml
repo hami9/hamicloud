@@ -24,6 +24,15 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - name: Checkout code
@@ -50,10 +59,17 @@ jobs:
         run: |
           alembic -c migrations/alembic.ini upgrade head
 
+      - name: Run Mypy
+        run: |
+          cd apps/api && mypy --explicit-package-bases app
+
       - name: Run Pytest
         env:
           DATABASE_URL: postgresql+asyncpg://hamicloud:hamicloud_secret@localhost:5432/hamicloud
           DATABASE_URL_SYNC: postgresql://hamicloud:hamicloud_secret@localhost:5432/hamicloud
+          # The readiness probe tests (T15) need a live Redis; the service above
+          # publishes it on the default port, not the 6380 used by local compose.
+          REDIS_URL: redis://localhost:6379/0
         run: |
           pytest apps/api/tests/ -v
 

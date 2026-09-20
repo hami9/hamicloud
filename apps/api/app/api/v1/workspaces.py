@@ -1,10 +1,11 @@
 import uuid
-from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import Caller, get_caller
+from app.core.db_errors import violated_constraint
 from app.db.session import get_db
 from app.models.workspace import Workspace, WorkspaceMembership, WorkspaceRole
 from app.schemas.workspace import CreateWorkspaceRequest, WorkspaceResponse
@@ -27,9 +28,8 @@ async def create_workspace(
             detail=f"Workspace with slug '{payload.slug}' already exists",
         )
 
-    workspace = Workspace(name=payload.name, slug=payload.slug)
+    workspace = Workspace(id=uuid.uuid4(), name=payload.name, slug=payload.slug)
     db.add(workspace)
-    await db.flush()
 
     # Record caller as OWNER
     membership = WorkspaceMembership(
@@ -38,7 +38,19 @@ async def create_workspace(
         role=WorkspaceRole.OWNER,
     )
     db.add(membership)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        # The slug pre-check above is not atomic: a concurrent request may have
+        # inserted the same slug in between. Report the documented 409 rather
+        # than letting the unique violation surface as a 500.
+        await db.rollback()
+        if violated_constraint(exc) != "uq_workspace_slug":
+            raise
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Workspace with slug '{payload.slug}' already exists",
+        ) from exc
     await db.refresh(workspace)
 
     return WorkspaceResponse(

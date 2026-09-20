@@ -446,3 +446,85 @@ Every entry follows this standard format:
     - Verified dev database `hamicloud` has exact 0-row delta (368 rows total, unchanged).
 
 
+
+---
+
+### [2026-09-20T12:55:00Z] Phase 3 / Milestone M0: Review and Debug of T9 – T16
+
+Independent review of the committed Phase 3 work (idempotency, contracts, error handling).
+Starting state: 47 tests passing, `mypy` clean. Four defects were reproduced against the
+running API and fixed; two observations are recorded without a code change.
+
+#### Defects found and fixed
+
+1. **Duplicate-slug races returned 500 instead of the documented 409.**
+   `create_workspace` and `create_application` check slug uniqueness with a `SELECT` and then
+   insert, with no handler on the commit. Six overlapping requests for one slug were driven
+   through `httpx.ASGITransport`: one returned 201 and **all five losers returned
+   `500 INTERNAL_SERVER_ERROR`**, although the published contract declares 409 for both
+   operations. Both endpoints now catch `IntegrityError`, confirm the violated constraint is
+   `uq_workspace_slug` / `uq_application_workspace_slug` (re-raising anything else), and return
+   the same 409 body the non-racing path returns. `create_workspace` also assigns the workspace
+   id up front and drops its pre-commit `flush()`, so the violation surfaces at one place.
+   Added `apps/api/app/core/db_errors.py::violated_constraint`, which reads the constraint name
+   the driver reports and never matches by substring; `is_idempotency_violation` (T11) now uses it.
+
+2. **CI was red on the committed tree.** `ruff check apps/api` — the exact gate in
+   `.github/workflows/ci.yml` — exited 1 with 189 errors, because the installed ruff (0.16.7)
+   defaults to a wider rule set than the one the work was linted against. The lint rule set is
+   now pinned in `apps/api/pyproject.toml` (`select = ["E4", "E7", "E9", "F"]`, with `E402`
+   ignored in `conftest.py`, which must set the test database URL before importing the app), and
+   the 33 genuine `F` findings were cleared: 27 unused imports and one redefinition removed, and
+   the six `F821` forward references in the ORM models replaced with real `TYPE_CHECKING`
+   imports, which also let the `# type: ignore[name-defined]` comments go.
+
+3. **CI had no Redis service, so T15 could not pass there.** Re-running
+   `test_t15_readyz_healthy_and_unhealthy_and_lifespan_redis` with `REDIS_URL` pointed at a dead
+   port fails, and the workflow provided only Postgres. Added a `redis:7-alpine` service with a
+   `redis-cli ping` healthcheck and `REDIS_URL: redis://localhost:6379/0` for the pytest step
+   (the service publishes 6379; local compose uses 6380). A `mypy` step was added next to ruff.
+
+4. **`Idempotency-Key` was stored verbatim, un-normalized.** `"kk"` and `"kk "` were two distinct
+   keys producing two jobs, and a whitespace-only key passed `min_length=1` and was written to
+   the database. All five mutating routes now depend on `get_idempotency_key`, which strips the
+   value and rejects a key that is blank once stripped with the standard `VALIDATION_ERROR`
+   envelope. The header stays required with the same length bounds and retention wording in the
+   generated spec.
+
+5. **The contract omitted 422 on five operations that return it.** `GET /v1/jobs/{job_id}`,
+   `GET /v1/operations/{operation_id}`, `GET /v1/operations/{operation_id}/events`,
+   `GET /v1/workspaces/{workspace_id}/jobs` and `GET /v1/apps/{app_id}/releases` all return
+   `422 VALIDATION_ERROR` for a malformed UUID or an out-of-range `limit` — the T12 pagination
+   test asserts that 422 itself — but declared only 400/401/404/500. Added
+   `422UnprocessableEntity` to each. A diff of the FastAPI-generated schema against
+   `contracts/openapi/v1.yaml` now reports no undocumented status code on any operation.
+
+6. **The suite only ran from the repository root.** `migrations/alembic.ini` states
+   `script_location`, `version_locations` and `prepend_sys_path` relative to that root, so
+   `pytest` from `apps/api` failed all 47 tests in fixture setup. `conftest.py` now resolves the
+   three paths against `REPO_ROOT`.
+
+#### Observations recorded, not changed
+
+- `GET /v1/operations/{operation_id}/events` documents a `200 text/event-stream` response the M0
+  implementation cannot produce; it always returns 501. The description already says so and the
+  200 is the M1 forward contract, so it was left in place.
+- `tests/test_models.py` and `tests/test_operations.py` still assert values they just set, with
+  no database. T18 replaces the first; the second is worth deleting with it.
+
+#### Verification
+
+| Gate | Result |
+| --- | --- |
+| `ruff check apps/api` (CI gate) | **PASS** — all checks passed |
+| `mypy --explicit-package-bases app` | **PASS** — 29 source files, 0 errors |
+| `pytest apps/api/tests` from repo root | **PASS** — 51 passed |
+| `pytest tests` from `apps/api` | **PASS** — 51 passed (was 47 errors) |
+| `openapi_spec_validator` on `v1.yaml` | **PASS** |
+| Generated-schema vs published-contract status codes | **PASS** — no undocumented code |
+| `go vet ./...` and `go test ./...` | **PASS** |
+
+Four regression tests were added to `test_phase3_contracts_idempotency.py`: the two slug races
+(assert exactly one 201 and the rest 409 with the envelope and correlation ID), key trimming and
+blank-key rejection (asserting the stored key is normalized), and a test that walks every live
+422 path and asserts the contract declares 422 for that operation.

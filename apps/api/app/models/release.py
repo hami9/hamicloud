@@ -1,10 +1,13 @@
 import enum
 import uuid
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 from sqlalchemy import JSON, Enum, ForeignKey, Integer, String, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+
+if TYPE_CHECKING:
+    from app.models.application import Application
 
 
 class ReleaseStatus(str, enum.Enum):
@@ -38,7 +41,7 @@ class Release(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     )
     status_reason: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
 
-    application: Mapped["Application"] = relationship("Application", back_populates="releases")  # type: ignore[name-defined]
+    application: Mapped["Application"] = relationship("Application", back_populates="releases")
 
     __table_args__ = (
         UniqueConstraint("application_id", "release_number", name="uq_release_app_number"),

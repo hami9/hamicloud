@@ -1,9 +1,7 @@
 import uuid
-from app.models.application import Application, WorkloadType
 from app.models.execution_intent import ExecutionIntent, IntentResourceType, IntentStatus
 from app.models.job import Job, JobAttempt, JobState
 from app.models.outbox import OutboxEvent, OutboxStatus
-from app.models.quota import QuotaReservation, QuotaResourceClass, QuotaStatus
 from app.models.workspace import Workspace, WorkspaceMembership, WorkspaceRole
 
 

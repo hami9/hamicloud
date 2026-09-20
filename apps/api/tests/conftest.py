@@ -58,6 +58,12 @@ def setup_test_database():
 
     # 2. Run alembic upgrade head on hamicloud_test
     alembic_cfg = Config(ALEMBIC_INI)
+    # alembic.ini states these paths relative to the repository root; resolve
+    # them so the suite runs from any working directory, not just that root.
+    for option in ("script_location", "version_locations", "prepend_sys_path"):
+        value = alembic_cfg.get_main_option(option)
+        if value:
+            alembic_cfg.set_main_option(option, os.path.join(REPO_ROOT, value))
     alembic_cfg.set_main_option("sqlalchemy.url", TEST_DATABASE_URL_SYNC)
     command.upgrade(alembic_cfg, "head")
 

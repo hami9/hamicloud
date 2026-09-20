@@ -1,17 +1,19 @@
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import Caller, authorize_workspace_access, get_caller
+from app.core.db_errors import violated_constraint
 from app.core.events import OutboxTopic
 from app.core.idempotency import (
     check_idempotency,
     compute_payload_hash,
     create_idempotency_record,
+    get_idempotency_key,
     handle_idempotency_race,
 )
 from app.core.pagination import decode_cursor, encode_cursor
@@ -68,7 +70,19 @@ async def create_application(
         desired_generation=1,
     )
     db.add(app)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        # The slug pre-check above is not atomic: a concurrent request may have
+        # inserted the same slug in between. Report the documented 409 rather
+        # than letting the unique violation surface as a 500.
+        await db.rollback()
+        if violated_constraint(exc) != "uq_application_workspace_slug":
+            raise
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Application with slug '{payload.slug}' already exists in this workspace",
+        ) from exc
     await db.refresh(app)
 
     return ApplicationResponse(
@@ -91,7 +105,7 @@ async def create_application(
 async def deploy_release(
     app_id: uuid.UUID,
     payload: DeployReleaseRequest,
-    idempotency_key: str = Header(..., alias="Idempotency-Key", min_length=1, max_length=255),
+    idempotency_key: str = Depends(get_idempotency_key),
     caller: Caller = Depends(get_caller),
     db: AsyncSession = Depends(get_db),
 ) -> AcceptedOperationResponse:
@@ -212,7 +226,7 @@ async def deploy_release(
 async def rollback_release(
     app_id: uuid.UUID,
     payload: RollbackRequest,
-    idempotency_key: str = Header(..., alias="Idempotency-Key", min_length=1, max_length=255),
+    idempotency_key: str = Depends(get_idempotency_key),
     caller: Caller = Depends(get_caller),
     db: AsyncSession = Depends(get_db),
 ) -> AcceptedOperationResponse:

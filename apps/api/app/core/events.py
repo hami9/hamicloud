@@ -1,5 +1,4 @@
 import enum
-from typing import Set
 
 
 class OutboxTopic(str, enum.Enum):

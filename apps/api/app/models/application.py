@@ -1,10 +1,14 @@
 import enum
 import uuid
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional
 from sqlalchemy import Enum, ForeignKey, Integer, String, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+
+if TYPE_CHECKING:
+    from app.models.release import Release
+    from app.models.workspace import Workspace
 
 
 class WorkloadType(str, enum.Enum):
@@ -29,8 +33,8 @@ class Application(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         Uuid, nullable=True
     )
 
-    workspace: Mapped["Workspace"] = relationship("Workspace", back_populates="applications")  # type: ignore[name-defined]
-    releases: Mapped[List["Release"]] = relationship(  # type: ignore[name-defined]
+    workspace: Mapped["Workspace"] = relationship("Workspace", back_populates="applications")
+    releases: Mapped[List["Release"]] = relationship(
         "Release", back_populates="application", cascade="all, delete-orphan"
     )
 

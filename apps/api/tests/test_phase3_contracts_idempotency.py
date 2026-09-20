@@ -1,7 +1,6 @@
 import asyncio
 import base64
 from datetime import datetime, timedelta, timezone
-import glob
 import json
 import os
 import uuid
@@ -12,10 +11,9 @@ import pytest
 import yaml
 from fastapi.testclient import TestClient
 from openapi_spec_validator import validate as validate_openapi
-from referencing import Registry, Resource
+from referencing import Registry
 from referencing.jsonschema import DRAFT202012
 
-from app.core.config import settings
 from app.main import app
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
@@ -1163,3 +1161,111 @@ def test_t16_documented_request_examples_execute_successfully(client: TestClient
         headers={"Idempotency-Key": f"{job_key}-{uuid.uuid4().hex[:4]}", **auth_headers},
     )
     assert r_job.status_code == 202
+
+
+# =============================================================================
+# Review fixes — slug races, key normalization, and 422 in the contract
+# =============================================================================
+
+@pytest.mark.asyncio
+async def test_concurrent_duplicate_workspace_slug_returns_409_not_500(clean_db):
+    """The slug pre-check is not atomic; the losing racers must still get 409, never 500."""
+    transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as async_client:
+        auth_headers = {"X-Dev-Subject": "slug-racer"}
+        slug = f"race-ws-{uuid.uuid4().hex[:8]}"
+        results = await asyncio.gather(*[
+            async_client.post("/v1/workspaces", json={"name": "Race WS", "slug": slug}, headers=auth_headers)
+            for _ in range(6)
+        ])
+
+    codes = sorted(r.status_code for r in results)
+    assert codes.count(201) == 1, f"Expected exactly one winner, got {codes}"
+    assert set(codes) == {201, 409}, f"Losing racers must return 409, got {codes}"
+    for r in results:
+        if r.status_code == 409:
+            body = r.json()
+            assert body["error_code"] == "CONFLICT"
+            assert slug in body["message"]
+            assert r.headers.get("X-Correlation-ID") == body["correlation_id"]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_duplicate_application_slug_returns_409_not_500(clean_db):
+    """Same race on application slugs, which are unique per workspace."""
+    transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as async_client:
+        auth_headers = {"X-Dev-Subject": "slug-racer-2"}
+        ws = await async_client.post(
+            "/v1/workspaces", json={"name": "Race WS2", "slug": f"race-ws2-{uuid.uuid4().hex[:8]}"}, headers=auth_headers
+        )
+        assert ws.status_code == 201
+        ws_id = ws.json()["id"]
+
+        slug = f"race-app-{uuid.uuid4().hex[:8]}"
+        results = await asyncio.gather(*[
+            async_client.post(
+                f"/v1/workspaces/{ws_id}/apps",
+                json={"name": "Race App", "slug": slug, "workload_type": "HTTP_SERVICE"},
+                headers=auth_headers,
+            )
+            for _ in range(6)
+        ])
+
+    codes = sorted(r.status_code for r in results)
+    assert codes.count(201) == 1, f"Expected exactly one winner, got {codes}"
+    assert set(codes) == {201, 409}, f"Losing racers must return 409, got {codes}"
+
+
+def test_idempotency_key_is_trimmed_and_blank_key_rejected(client: TestClient, clean_db):
+    """A padded key is the same key, and a key that is blank once stripped is rejected."""
+    ws_id, app_id, auth_headers = create_test_workspace_and_app(client)
+    body = {
+        "name": "trim-job",
+        "image_digest": "registry.example.com/job@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    }
+    key = f"trim-{uuid.uuid4().hex[:8]}"
+
+    first = client.post(f"/v1/workspaces/{ws_id}/jobs", json=body, headers={"Idempotency-Key": key, **auth_headers})
+    padded = client.post(
+        f"/v1/workspaces/{ws_id}/jobs", json=body, headers={"Idempotency-Key": f"  {key}  ", **auth_headers}
+    )
+    assert first.status_code == 202
+    assert padded.status_code == 202
+    assert padded.json()["operation_id"] == first.json()["operation_id"]
+
+    conn = psycopg2.connect(TEST_DATABASE_URL_SYNC)
+    with conn.cursor() as cur:
+        cur.execute("SELECT idempotency_key FROM idempotency_records WHERE workspace_id = %s", (ws_id,))
+        stored = [row[0] for row in cur.fetchall()]
+    conn.close()
+    assert stored == [key], f"Key stored un-normalized: {stored!r}"
+
+    blank = client.post(f"/v1/workspaces/{ws_id}/jobs", json=body, headers={"Idempotency-Key": "   ", **auth_headers})
+    assert blank.status_code == 422
+    blank_body = blank.json()
+    assert blank_body["error_code"] == "VALIDATION_ERROR"
+    assert blank.headers.get("X-Correlation-ID") == blank_body["correlation_id"]
+
+
+def test_contract_documents_422_on_every_operation_that_can_emit_it(client: TestClient, clean_db):
+    """Malformed path/query parameters return 422, so the published contract must declare it."""
+    with open(OPENAPI_SPEC, "r", encoding="utf-8") as f:
+        spec = yaml.safe_load(f)
+
+    ws_id, app_id, auth_headers = create_test_workspace_and_app(client)
+    bad_id = "not-a-uuid"
+    live_422 = [
+        (f"/v1/jobs/{bad_id}", "/v1/jobs/{job_id}"),
+        (f"/v1/operations/{bad_id}", "/v1/operations/{operation_id}"),
+        (f"/v1/operations/{bad_id}/events", "/v1/operations/{operation_id}/events"),
+        (f"/v1/workspaces/{ws_id}/jobs?limit=101", "/v1/workspaces/{workspace_id}/jobs"),
+        (f"/v1/apps/{app_id}/releases?limit=101", "/v1/apps/{app_id}/releases"),
+    ]
+    for url, spec_path in live_422:
+        resp = client.get(url, headers=auth_headers)
+        assert resp.status_code == 422, f"{url} returned {resp.status_code}"
+        assert resp.json()["error_code"] == "VALIDATION_ERROR"
+        assert "422" in spec["paths"][spec_path]["get"]["responses"], (
+            f"GET {spec_path} returns 422 but the contract does not document it"
+        )

@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +13,7 @@ from app.core.idempotency import (
     check_idempotency,
     compute_payload_hash,
     create_idempotency_record,
+    get_idempotency_key,
     handle_idempotency_race,
 )
 from app.core.pagination import decode_cursor, encode_cursor
@@ -34,7 +35,7 @@ router = APIRouter(tags=["Jobs"])
 async def submit_job(
     workspace_id: uuid.UUID,
     payload: SubmitJobRequest,
-    idempotency_key: str = Header(..., alias="Idempotency-Key", min_length=1, max_length=255),
+    idempotency_key: str = Depends(get_idempotency_key),
     caller: Caller = Depends(get_caller),
     db: AsyncSession = Depends(get_db),
 ) -> AcceptedOperationResponse:
@@ -179,7 +180,7 @@ async def get_job(
 )
 async def cancel_job(
     job_id: uuid.UUID,
-    idempotency_key: str = Header(..., alias="Idempotency-Key", min_length=1, max_length=255),
+    idempotency_key: str = Depends(get_idempotency_key),
     caller: Caller = Depends(get_caller),
     db: AsyncSession = Depends(get_db),
 ) -> AcceptedOperationResponse:
@@ -273,7 +274,7 @@ async def cancel_job(
 )
 async def rerun_job(
     job_id: uuid.UUID,
-    idempotency_key: str = Header(..., alias="Idempotency-Key", min_length=1, max_length=255),
+    idempotency_key: str = Depends(get_idempotency_key),
     caller: Caller = Depends(get_caller),
     db: AsyncSession = Depends(get_db),
 ) -> AcceptedOperationResponse:

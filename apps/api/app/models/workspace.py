@@ -1,10 +1,14 @@
 import enum
 import uuid
-from typing import List
-from sqlalchemy import Enum, ForeignKey, Index, String, UniqueConstraint, Uuid
+from typing import TYPE_CHECKING, List
+from sqlalchemy import Enum, ForeignKey, String, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+
+if TYPE_CHECKING:
+    from app.models.application import Application
+    from app.models.job import Job
 
 
 class WorkspaceRole(str, enum.Enum):
@@ -22,10 +26,10 @@ class Workspace(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     memberships: Mapped[List["WorkspaceMembership"]] = relationship(
         "WorkspaceMembership", back_populates="workspace", cascade="all, delete-orphan"
     )
-    applications: Mapped[List["Application"]] = relationship(  # type: ignore[name-defined]
+    applications: Mapped[List["Application"]] = relationship(
         "Application", back_populates="workspace", cascade="all, delete-orphan"
     )
-    jobs: Mapped[List["Job"]] = relationship(  # type: ignore[name-defined]
+    jobs: Mapped[List["Job"]] = relationship(
         "Job", back_populates="workspace", cascade="all, delete-orphan"
     )
 

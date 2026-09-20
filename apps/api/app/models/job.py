@@ -1,7 +1,7 @@
 import enum
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional
 from sqlalchemy import (
     JSON,
     DateTime,
@@ -15,6 +15,9 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+
+if TYPE_CHECKING:
+    from app.models.workspace import Workspace
 
 
 class JobState(str, enum.Enum):
@@ -49,7 +52,7 @@ class Job(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         index=True,
     )
 
-    workspace: Mapped["Workspace"] = relationship("Workspace", back_populates="jobs")  # type: ignore[name-defined]
+    workspace: Mapped["Workspace"] = relationship("Workspace", back_populates="jobs")
     attempts: Mapped[List["JobAttempt"]] = relationship(
         "JobAttempt", back_populates="job", cascade="all, delete-orphan", order_by="JobAttempt.attempt_number"
     )

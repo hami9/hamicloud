@@ -35,6 +35,16 @@ build-backend = "setuptools.build_meta"
 line-length = 100
 target-version = "py312"
 
+[tool.ruff.lint]
+# Pinned explicitly so a new ruff release cannot turn CI red by widening its
+# default rule set. Matches the gate `ruff check apps/api` runs in CI.
+select = ["E4", "E7", "E9", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+# conftest must set the test DATABASE_URL into the environment before any app
+# module is imported, so its app imports deliberately sit below that code.
+"tests/conftest.py" = ["E402"]
+
 [tool.mypy]
 python_version = "3.12"
 strict = true

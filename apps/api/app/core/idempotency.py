@@ -3,12 +3,14 @@ import json
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
-from fastapi import HTTPException, status
+from fastapi import Header, HTTPException, status
+from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.db_errors import violated_constraint
 from app.models.idempotency import IdempotencyRecord
 from app.schemas.common import AcceptedOperationResponse
 
@@ -103,10 +105,7 @@ def create_idempotency_record(
 
 def is_idempotency_violation(exc: IntegrityError) -> bool:
     """Detect if an IntegrityError was caused specifically by uq_idempotency_workspace_key."""
-    orig = getattr(exc, "orig", None)
-    cause = getattr(orig, "__cause__", None)
-    constraint = getattr(cause, "constraint_name", None) or getattr(orig, "constraint_name", None)
-    return constraint == "uq_idempotency_workspace_key"
+    return violated_constraint(exc) == "uq_idempotency_workspace_key"
 
 
 async def handle_idempotency_race(
@@ -152,3 +151,37 @@ async def handle_idempotency_race(
             "error_code": "IDEMPOTENCY_CONFLICT",
         },
     )
+
+
+async def get_idempotency_key(
+    idempotency_key: str = Header(
+        ...,
+        alias="Idempotency-Key",
+        min_length=1,
+        max_length=255,
+        description=(
+            "Client-generated key that makes this request replay-safe. "
+            "Retained for at least 24 hours; after that the key may be treated as new."
+        ),
+    ),
+) -> str:
+    """Validate and normalize the mandatory Idempotency-Key header.
+
+    Surrounding whitespace is stripped so that a padded key and its bare form
+    are the same key, and a key that is blank once stripped is rejected with
+    the standard validation envelope rather than being stored verbatim.
+    """
+    normalized = idempotency_key.strip()
+    if not normalized:
+        raise RequestValidationError(
+            [
+                {
+                    "type": "string_too_short",
+                    "loc": ("header", "Idempotency-Key"),
+                    "msg": "Idempotency-Key must not be blank",
+                    "input": idempotency_key,
+                    "ctx": {"min_length": 1},
+                }
+            ]
+        )
+    return normalized

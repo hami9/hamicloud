@@ -5,7 +5,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import Caller, get_caller
-from app.core.db_errors import violated_constraint
+from app.core.db_errors import unexpected_integrity_error, violated_constraint
 from app.db.session import get_db
 from app.models.workspace import Workspace, WorkspaceMembership, WorkspaceRole
 from app.schemas.workspace import CreateWorkspaceRequest, WorkspaceResponse
@@ -46,7 +46,7 @@ async def create_workspace(
         # than letting the unique violation surface as a 500.
         await db.rollback()
         if violated_constraint(exc) != "uq_workspace_slug":
-            raise
+            raise unexpected_integrity_error(exc, "createWorkspace") from exc
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Workspace with slug '{payload.slug}' already exists",

@@ -1,5 +1,7 @@
 import asyncio
 import base64
+import logging
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 import json
 import os
@@ -13,7 +15,9 @@ from fastapi.testclient import TestClient
 from openapi_spec_validator import validate as validate_openapi
 from referencing import Registry
 from referencing.jsonschema import DRAFT202012
+from sqlalchemy.exc import IntegrityError
 
+from app.core.db_errors import violated_constraint
 from app.main import app
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
@@ -1269,3 +1273,198 @@ def test_contract_documents_422_on_every_operation_that_can_emit_it(client: Test
         assert "422" in spec["paths"][spec_path]["get"]["responses"], (
             f"GET {spec_path} returns 422 but the contract does not document it"
         )
+
+
+# =============================================================================
+# Integrity handling — every write path, and the constraint-name helper itself
+# =============================================================================
+
+@contextmanager
+def temporary_check_constraint(table: str, name: str, expression: str):
+    """Add a CHECK constraint for the duration of a test, then always drop it."""
+    conn = psycopg2.connect(TEST_DATABASE_URL_SYNC)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"ALTER TABLE {table} ADD CONSTRAINT {name} CHECK ({expression})")
+        conn.commit()
+        yield
+    finally:
+        with conn.cursor() as cur:
+            cur.execute(f"ALTER TABLE {table} DROP CONSTRAINT IF EXISTS {name}")
+        conn.commit()
+        conn.close()
+
+
+def assert_unmapped_integrity_500(resp) -> None:
+    """An integrity violation that no write path claims is a 500, never a 409."""
+    assert resp.status_code == 500, f"Expected 500, got {resp.status_code}: {resp.text}"
+    body = resp.json()
+    assert body["error_code"] == "INTERNAL_SERVER_ERROR"
+    assert resp.headers.get("X-Correlation-ID") == body["correlation_id"]
+    # The constraint name belongs in the log, not in the response body.
+    assert "UQ_" not in body["message"].upper()
+    assert "CHK_" not in body["message"].upper()
+
+
+def test_integrity_submit_job_non_idempotency_violation_returns_500(client: TestClient, clean_db, caplog):
+    ws_id, _, auth_headers = create_test_workspace_and_app(client)
+    digest = "registry.example.com/job@sha256:" + "1" * 64
+    with caplog.at_level(logging.ERROR, logger="app.core.db_errors"):
+        with temporary_check_constraint("jobs", "chk_tmp_job_name", "length(name) >= 5"):
+            resp = client.post(
+                f"/v1/workspaces/{ws_id}/jobs",
+                json={"name": "abc", "image_digest": digest},
+                headers={"Idempotency-Key": f"k-{uuid.uuid4().hex[:8]}", **auth_headers},
+            )
+    assert_unmapped_integrity_500(resp)
+
+    # The violation is invisible to the caller, so it has to reach the log with
+    # the constraint name and the original exception attached.
+    records = [r for r in caplog.records if r.name == "app.core.db_errors"]
+    assert len(records) == 1, f"Expected one logged violation, got {len(records)}"
+    assert "chk_tmp_job_name" in records[0].getMessage()
+    assert records[0].exc_info is not None
+
+
+def test_integrity_rerun_job_non_idempotency_violation_returns_500(client: TestClient, clean_db):
+    ws_id, _, auth_headers = create_test_workspace_and_app(client)
+    digest = "registry.example.com/job@sha256:" + "2" * 64
+    submitted = client.post(
+        f"/v1/workspaces/{ws_id}/jobs",
+        json={"name": "rerun-me", "image_digest": digest},
+        headers={"Idempotency-Key": f"k-{uuid.uuid4().hex[:8]}", **auth_headers},
+    )
+    assert submitted.status_code == 202
+    job_id = submitted.json()["operation_id"]
+
+    conn = psycopg2.connect(TEST_DATABASE_URL_SYNC)
+    with conn.cursor() as cur:
+        cur.execute("UPDATE jobs SET state = 'FAILED' WHERE id = %s", (job_id,))
+    conn.commit()
+    conn.close()
+
+    # The constraint goes on after the original job exists, so only the rerun's
+    # insert, whose name ends in -rerun, can violate it.
+    with temporary_check_constraint("jobs", "chk_tmp_no_rerun", "name NOT LIKE '%-rerun'"):
+        resp = client.post(
+            f"/v1/jobs/{job_id}/reruns",
+            headers={"Idempotency-Key": f"k-{uuid.uuid4().hex[:8]}", **auth_headers},
+        )
+    assert_unmapped_integrity_500(resp)
+
+
+def test_integrity_cancel_job_non_idempotency_violation_returns_500(client: TestClient, clean_db):
+    ws_id, _, auth_headers = create_test_workspace_and_app(client)
+    digest = "registry.example.com/job@sha256:" + "3" * 64
+    submitted = client.post(
+        f"/v1/workspaces/{ws_id}/jobs",
+        json={"name": "cancel-me", "image_digest": digest},
+        headers={"Idempotency-Key": f"k-{uuid.uuid4().hex[:8]}", **auth_headers},
+    )
+    assert submitted.status_code == 202
+    job_id = submitted.json()["operation_id"]
+
+    with temporary_check_constraint(
+        "outbox_events", "chk_tmp_no_cancel_topic", "topic <> 'job.cancellation.requested.v1'"
+    ):
+        resp = client.post(
+            f"/v1/jobs/{job_id}/cancel",
+            headers={"Idempotency-Key": f"k-{uuid.uuid4().hex[:8]}", **auth_headers},
+        )
+    assert_unmapped_integrity_500(resp)
+
+
+def test_integrity_deploy_release_non_idempotency_violation_returns_500(client: TestClient, clean_db):
+    ws_id, app_id, auth_headers = create_test_workspace_and_app(client)
+    digest = "registry.example.com/app@sha256:" + "4" * 64
+    with temporary_check_constraint("releases", "chk_tmp_release_number", "release_number < 0"):
+        resp = client.post(
+            f"/v1/apps/{app_id}/deployments",
+            json={"image_digest": digest, "port": 8080},
+            headers={"Idempotency-Key": f"k-{uuid.uuid4().hex[:8]}", **auth_headers},
+        )
+    assert_unmapped_integrity_500(resp)
+
+
+def test_integrity_rollback_release_non_idempotency_violation_returns_500(client: TestClient, clean_db):
+    ws_id, app_id, auth_headers = create_test_workspace_and_app(client)
+    digest = "registry.example.com/app@sha256:" + "5" * 64
+    deployed = client.post(
+        f"/v1/apps/{app_id}/deployments",
+        json={"image_digest": digest, "port": 8080},
+        headers={"Idempotency-Key": f"k-{uuid.uuid4().hex[:8]}", **auth_headers},
+    )
+    assert deployed.status_code == 202
+    release_id = deployed.json()["operation_id"]
+
+    # Only the rollback's new release can violate this, since the deployed one
+    # already exists with release_number 1.
+    with temporary_check_constraint("releases", "chk_tmp_first_release_only", "release_number <= 1"):
+        resp = client.post(
+            f"/v1/apps/{app_id}/rollbacks",
+            json={"target_release_id": release_id},
+            headers={"Idempotency-Key": f"k-{uuid.uuid4().hex[:8]}", **auth_headers},
+        )
+    assert_unmapped_integrity_500(resp)
+
+
+def test_integrity_create_workspace_non_slug_violation_returns_500_not_409(client: TestClient, clean_db):
+    """A constraint other than uq_workspace_slug must not be reported as a duplicate slug."""
+    with temporary_check_constraint("workspaces", "chk_tmp_ws_name", "length(name) >= 5"):
+        resp = client.post(
+            "/v1/workspaces",
+            json={"name": "ab", "slug": f"int-ws-{uuid.uuid4().hex[:8]}"},
+            headers={"X-Dev-Subject": "integrity-user"},
+        )
+    assert_unmapped_integrity_500(resp)
+
+
+def test_integrity_create_application_non_slug_violation_returns_500_not_409(client: TestClient, clean_db):
+    """A constraint other than uq_application_workspace_slug must not be reported as a duplicate slug."""
+    ws_id, _, auth_headers = create_test_workspace_and_app(client)
+    with temporary_check_constraint("applications", "chk_tmp_app_name", "length(name) >= 5"):
+        resp = client.post(
+            f"/v1/workspaces/{ws_id}/apps",
+            json={"name": "ab", "slug": f"int-app-{uuid.uuid4().hex[:8]}", "workload_type": "HTTP_SERVICE"},
+            headers=auth_headers,
+        )
+    assert_unmapped_integrity_500(resp)
+
+
+def test_violated_constraint_reads_only_the_driver_reported_name():
+    """The helper reads the driver's attribute and never parses the error text."""
+
+    class FakeDriverError(Exception):
+        def __init__(self, constraint_name=None):
+            super().__init__("duplicate key value violates unique constraint")
+            if constraint_name is not None:
+                self.constraint_name = constraint_name
+
+    def wrap(orig):
+        return IntegrityError("INSERT ...", {}, orig)
+
+    # asyncpg shape: SQLAlchemy's dialect wrapper carries the real error as __cause__
+    dialect_wrapper = FakeDriverError()
+    dialect_wrapper.__cause__ = FakeDriverError("uq_idempotency_workspace_key")
+    assert violated_constraint(wrap(dialect_wrapper)) == "uq_idempotency_workspace_key"
+
+    # A driver that exposes the attribute directly
+    assert violated_constraint(wrap(FakeDriverError("uq_workspace_slug"))) == "uq_workspace_slug"
+
+    # No attribute anywhere, even though the message names a constraint
+    named_only_in_text = Exception('violates unique constraint "uq_workspace_slug"')
+    assert violated_constraint(wrap(named_only_in_text)) is None
+
+    # An empty name is no name
+    assert violated_constraint(wrap(FakeDriverError(""))) is None
+
+
+def test_running_migrations_does_not_disable_application_loggers():
+    """alembic's fileConfig must not silence the app.* loggers it finds already created.
+
+    The session fixture runs `alembic upgrade head` in this process before any
+    test, so a regression here makes every application log line vanish without
+    failing anything else.
+    """
+    for name in ("app", "app.core.db_errors", "app.main"):
+        assert logging.getLogger(name).disabled is False, f"logger {name} was disabled"

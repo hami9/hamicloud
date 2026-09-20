@@ -7,7 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import Caller, authorize_workspace_access, get_caller
-from app.core.db_errors import violated_constraint
+from app.core.db_errors import unexpected_integrity_error, violated_constraint
 from app.core.events import OutboxTopic
 from app.core.idempotency import (
     check_idempotency,
@@ -78,7 +78,7 @@ async def create_application(
         # than letting the unique violation surface as a 500.
         await db.rollback()
         if violated_constraint(exc) != "uq_application_workspace_slug":
-            raise
+            raise unexpected_integrity_error(exc, "createApplication") from exc
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Application with slug '{payload.slug}' already exists in this workspace",

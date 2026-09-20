@@ -528,3 +528,59 @@ Four regression tests were added to `test_phase3_contracts_idempotency.py`: the 
 (assert exactly one 201 and the rest 409 with the envelope and correlation ID), key trimming and
 blank-key rejection (asserting the stored key is normalized), and a test that walks every live
 422 path and asserts the contract declares 422 for that operation.
+
+---
+
+### [2026-09-20T13:10:00Z] Phase 3 / Milestone M0: Completing the Integrity-Error Work
+
+The review commit introduced `violated_constraint` and applied it to two write paths. This
+finishes that work: one behavior for every write path, the violation actually logged, and the
+T11 done-when clause covered on all five mutating endpoints instead of one.
+
+#### Changes
+
+1. **One handler for unmapped violations.** `core/db_errors.unexpected_integrity_error(exc,
+   context)` logs the violation with the constraint name the driver reported and the original
+   exception attached, then returns the 500 to raise. `handle_idempotency_race` (the five
+   mutating routes) and the two slug handlers in `create_workspace` / `create_application` now
+   all go through it and chain the cause with `raise ... from exc`. Before this, the five
+   mutating routes raised a bare `HTTPException(500)` that discarded the cause, while the two
+   create routes re-raised the raw `IntegrityError` for the catch-all handler — two shapes, and
+   in neither case was anything written to a log. The constraint name stays out of the response
+   body; the caller still gets the generic envelope.
+
+2. **`alembic`'s `fileConfig` was silencing the entire `app.*` logger tree.**
+   `migrations/env.py` called `fileConfig(config.config_file_name)`, whose
+   `disable_existing_loggers` defaults to `True`. Every logger created before the call is
+   disabled, and the session fixture runs `alembic upgrade head` in-process after `conftest` has
+   imported `app.main` — so in the test process, and in any process that runs migrations
+   in-process, application log lines were discarded silently. Found while asserting that the
+   integrity violation reaches the log: the log assertion failed although the handler ran
+   correctly outside pytest. Now passes `disable_existing_loggers=False`.
+
+#### Tests added
+
+- A non-idempotency integrity violation returns **500 and never 409** on all five mutating
+  endpoints — `submit_job`, `rerun_job`, `cancel_job`, `deploy_release`, `rollback_release` —
+  each forced with a temporary `CHECK` constraint on the table that endpoint writes, installed
+  after its prerequisite rows exist so only the call under test can violate it. T11's done-when
+  clause previously had one endpoint covered.
+- A constraint other than the slug constraint on `create_workspace` / `create_application`
+  returns 500, not a bogus 409 duplicate-slug answer.
+- The `submit_job` case also asserts the violation is logged once by `app.core.db_errors`, with
+  the constraint name in the message and `exc_info` attached.
+- A unit test of `violated_constraint` covering the asyncpg shape (name on `orig.__cause__`), a
+  driver exposing the attribute directly, an error whose *text* names a constraint but exposes
+  no attribute (must be `None`), and an empty name (must be `None`).
+- A regression test that the `app.*` loggers are still enabled after the migration fixture runs.
+
+Both of the last two fail against the pre-fix tree, which was verified by stashing
+`migrations/env.py` and re-running them.
+
+#### Verification
+
+| Gate | Result |
+| --- | --- |
+| `pytest apps/api/tests` | **PASS** — 60 passed (was 51) |
+| `ruff check apps/api` | **PASS** |
+| `mypy --explicit-package-bases app` | **PASS** — 29 source files, 0 errors |

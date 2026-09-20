@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.db_errors import violated_constraint
+from app.core.db_errors import unexpected_integrity_error, violated_constraint
 from app.models.idempotency import IdempotencyRecord
 from app.schemas.common import AcceptedOperationResponse
 
@@ -125,10 +125,7 @@ async def handle_idempotency_race(
 
     if not is_idempotency_violation(exc):
         # Non-idempotency integrity errors must re-raise as 500 internal server error
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Database integrity constraint violation",
-        )
+        raise unexpected_integrity_error(exc, endpoint) from exc
 
     # Re-query the concurrent idempotency record
     stmt = select(IdempotencyRecord).where(

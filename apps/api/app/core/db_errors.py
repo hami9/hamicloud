@@ -1,5 +1,9 @@
+import logging
 from typing import Optional
+from fastapi import HTTPException, status
 from sqlalchemy.exc import IntegrityError
+
+logger = logging.getLogger(__name__)
 
 
 def violated_constraint(exc: IntegrityError) -> Optional[str]:
@@ -15,3 +19,23 @@ def violated_constraint(exc: IntegrityError) -> Optional[str]:
     cause = getattr(orig, "__cause__", None)
     name = getattr(cause, "constraint_name", None) or getattr(orig, "constraint_name", None)
     return name if isinstance(name, str) and name else None
+
+
+def unexpected_integrity_error(exc: IntegrityError, context: str) -> HTTPException:
+    """Log an integrity violation that no write path claims, and build its 500.
+
+    Every mutating endpoint maps the constraints it expects to a status code of
+    its own and hands everything else here, so an unmapped violation is a bug in
+    the schema or in this service rather than something the caller did. The
+    constraint name goes to the log, never to the response body.
+    """
+    logger.error(
+        "Unmapped integrity violation in %s (constraint=%s)",
+        context,
+        violated_constraint(exc),
+        exc_info=exc,
+    )
+    return HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail="Database integrity constraint violation",
+    )

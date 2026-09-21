@@ -33,6 +33,8 @@ paths:
                 status: "ok"
                 version: "0.1.0"
                 timestamp: "2026-09-19T12:00:00Z"
+        '405':
+          $ref: '#/components/responses/405MethodNotAllowed'
 
   /readyz:
     get:
@@ -107,6 +109,8 @@ paths:
           $ref: '#/components/responses/422UnprocessableEntity'
         '500':
           $ref: '#/components/responses/500InternalServerError'
+        '405':
+          $ref: '#/components/responses/405MethodNotAllowed'
 
   /v1/workspaces/{workspace_id}/apps:
     post:
@@ -161,6 +165,8 @@ paths:
           $ref: '#/components/responses/422UnprocessableEntity'
         '500':
           $ref: '#/components/responses/500InternalServerError'
+        '405':
+          $ref: '#/components/responses/405MethodNotAllowed'
 
   /v1/workspaces/{workspace_id}/jobs:
     get:
@@ -228,6 +234,8 @@ paths:
           $ref: '#/components/responses/422UnprocessableEntity'
         '500':
           $ref: '#/components/responses/500InternalServerError'
+        '405':
+          $ref: '#/components/responses/405MethodNotAllowed'
     post:
       summary: Submit a finite background job
       operationId: submitJob
@@ -297,6 +305,8 @@ paths:
           $ref: '#/components/responses/422UnprocessableEntity'
         '500':
           $ref: '#/components/responses/500InternalServerError'
+        '405':
+          $ref: '#/components/responses/405MethodNotAllowed'
 
   /v1/apps/{app_id}/deployments:
     post:
@@ -359,6 +369,8 @@ paths:
           $ref: '#/components/responses/422UnprocessableEntity'
         '500':
           $ref: '#/components/responses/500InternalServerError'
+        '405':
+          $ref: '#/components/responses/405MethodNotAllowed'
 
   /v1/apps/{app_id}/releases:
     get:
@@ -421,6 +433,8 @@ paths:
           $ref: '#/components/responses/422UnprocessableEntity'
         '500':
           $ref: '#/components/responses/500InternalServerError'
+        '405':
+          $ref: '#/components/responses/405MethodNotAllowed'
 
   /v1/apps/{app_id}/rollbacks:
     post:
@@ -477,6 +491,8 @@ paths:
           $ref: '#/components/responses/422UnprocessableEntity'
         '500':
           $ref: '#/components/responses/500InternalServerError'
+        '405':
+          $ref: '#/components/responses/405MethodNotAllowed'
 
   /v1/jobs/{job_id}:
     get:
@@ -504,17 +520,9 @@ paths:
                 id: "5ba5fb57-0f6a-485b-a113-fd19d329591f"
                 workspace_id: "550e8400-e29b-41d4-a716-446655440000"
                 name: "nightly-backup"
-                state: "RUNNING"
-                current_attempt_number: 1
-                attempts:
-                  - attempt_number: 1
-                    state: "RUNNING"
-                    resource_uid: "pod-backup-1"
-                    lease_epoch: 1
-                    exit_code: null
-                    failure_reason: null
-                    started_at: "2026-09-19T12:00:00Z"
-                    finished_at: null
+                state: "QUEUED"
+                current_attempt_number: 0
+                attempts: []
                 created_at: "2026-09-19T12:00:00Z"
         '401':
           $ref: '#/components/responses/401Unauthorized'
@@ -524,6 +532,8 @@ paths:
           $ref: '#/components/responses/422UnprocessableEntity'
         '500':
           $ref: '#/components/responses/500InternalServerError'
+        '405':
+          $ref: '#/components/responses/405MethodNotAllowed'
 
   /v1/jobs/{job_id}/cancel:
     post:
@@ -581,6 +591,8 @@ paths:
           $ref: '#/components/responses/422UnprocessableEntity'
         '500':
           $ref: '#/components/responses/500InternalServerError'
+        '405':
+          $ref: '#/components/responses/405MethodNotAllowed'
 
   /v1/jobs/{job_id}/reruns:
     post:
@@ -629,6 +641,8 @@ paths:
           $ref: '#/components/responses/422UnprocessableEntity'
         '500':
           $ref: '#/components/responses/500InternalServerError'
+        '405':
+          $ref: '#/components/responses/405MethodNotAllowed'
 
   /v1/operations/{operation_id}:
     get:
@@ -655,7 +669,7 @@ paths:
               example:
                 operation_id: "309bbd1e-07f4-4bdf-b9b7-e81d48381601"
                 operation_kind: "RELEASE"
-                status: "ACCEPTED"
+                status: "IMAGE_READY"
                 status_url: "/v1/operations/309bbd1e-07f4-4bdf-b9b7-e81d48381601"
                 created_at: "2026-09-19T12:00:00Z"
         '401':
@@ -666,6 +680,8 @@ paths:
           $ref: '#/components/responses/422UnprocessableEntity'
         '500':
           $ref: '#/components/responses/500InternalServerError'
+        '405':
+          $ref: '#/components/responses/405MethodNotAllowed'
 
   /v1/operations/{operation_id}/events:
     get:
@@ -706,8 +722,12 @@ paths:
           $ref: '#/components/responses/422UnprocessableEntity'
         '500':
           $ref: '#/components/responses/500InternalServerError'
+        '405':
+          $ref: '#/components/responses/405MethodNotAllowed'
         '501':
           $ref: '#/components/responses/501NotImplemented'
+        '405':
+          $ref: '#/components/responses/405MethodNotAllowed'
 
 components:
   securitySchemes:
@@ -774,12 +794,49 @@ components:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
           examples:
-            NotFound:
-              summary: Resource not found
+            JobNotFound:
+              summary: Job not found
               value:
                 error_code: "NOT_FOUND"
                 message: "Job not found"
                 correlation_id: "req_01HVG89ABCDEF1234567890"
+            WorkspaceNotFound:
+              summary: Workspace not found
+              value:
+                error_code: "NOT_FOUND"
+                message: "Workspace not found"
+                correlation_id: "req_01HVG89ABCDEF1234567890"
+            ApplicationNotFound:
+              summary: Application not found
+              value:
+                error_code: "NOT_FOUND"
+                message: "Application not found"
+                correlation_id: "req_01HVG89ABCDEF1234567890"
+            TargetReleaseNotFound:
+              summary: Target release not found
+              value:
+                error_code: "NOT_FOUND"
+                message: "Target release not found for this application"
+                correlation_id: "req_01HVG89ABCDEF1234567890"
+            OperationNotFound:
+              summary: Operation not found
+              value:
+                error_code: "NOT_FOUND"
+                message: "Operation not found"
+                correlation_id: "req_01HVG89ABCDEF1234567890"
+    405MethodNotAllowed:
+      description: HTTP method not allowed for requested endpoint
+      headers:
+        X-Correlation-ID:
+          $ref: '#/components/headers/X-Correlation-ID'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error_code: "METHOD_NOT_ALLOWED"
+            message: "Method Not Allowed"
+            correlation_id: "req_01HVG89ABCDEF1234567890"
     409Conflict:
       description: State conflict or idempotency key mismatch
       headers:
@@ -917,6 +974,7 @@ components:
             - UNAUTHORIZED
             - FORBIDDEN
             - NOT_FOUND
+            - METHOD_NOT_ALLOWED
             - CONFLICT
             - IDEMPOTENCY_CONFLICT
             - BAD_REQUEST
@@ -926,7 +984,7 @@ components:
           example: "NOT_FOUND"
         message:
           type: string
-          example: "Resource not found"
+          example: "Job not found"
         correlation_id:
           type: string
           example: "req_01HVG89ABCDEF1234567890"
@@ -935,7 +993,7 @@ components:
           additionalProperties: true
       example:
         error_code: "NOT_FOUND"
-        message: "Resource not found"
+        message: "Job not found"
         correlation_id: "req_01HVG89ABCDEF1234567890"
 
     CreateWorkspaceRequest:
@@ -1122,7 +1180,7 @@ components:
         status:
           type: string
           enum: [ACCEPTED, QUEUED, ADMITTED, STARTING, RUNNING, SUCCEEDED, RETRY_WAIT, FAILED, CANCEL_REQUESTED, CANCELLED, REQUESTED, BUILDING, IMAGE_READY, DEPLOYING, HEALTHY, BUILD_FAILED, DEPLOY_FAILED]
-          example: "ACCEPTED"
+          example: "IMAGE_READY"
         status_url:
           type: string
           example: "/v1/operations/309bbd1e-07f4-4bdf-b9b7-e81d48381601"
@@ -1137,7 +1195,7 @@ components:
       example:
         operation_id: "309bbd1e-07f4-4bdf-b9b7-e81d48381601"
         operation_kind: "RELEASE"
-        status: "ACCEPTED"
+        status: "IMAGE_READY"
         status_url: "/v1/operations/309bbd1e-07f4-4bdf-b9b7-e81d48381601"
         created_at: "2026-09-19T12:00:00Z"
 

@@ -254,16 +254,6 @@ async def rollback_release(
     )
     app = (await db.execute(lock_stmt)).scalar_one()
 
-    target_rel_stmt = select(Release).where(
-        Release.id == payload.target_release_id, Release.application_id == app.id
-    )
-    target_rel = (await db.execute(target_rel_stmt)).scalar_one_or_none()
-    if not target_rel:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Target release not found for this application",
-        )
-
     endpoint = f"/v1/apps/{app_id}/rollbacks"
     payload_hash = compute_payload_hash(payload)
 
@@ -273,6 +263,16 @@ async def rollback_release(
     )
     if cached_response:
         return cached_response
+
+    target_rel_stmt = select(Release).where(
+        Release.id == payload.target_release_id, Release.application_id == app.id
+    )
+    target_rel = (await db.execute(target_rel_stmt)).scalar_one_or_none()
+    if not target_rel:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Target release not found for this application",
+        )
 
     # 2. Increment generation & determine release number
     app.desired_generation += 1

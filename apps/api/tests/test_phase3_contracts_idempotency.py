@@ -730,7 +730,7 @@ def test_t12_starlette_error_responses_standard_envelope(client: TestClient):
     r405 = client.post("/healthz")
     assert r405.status_code == 405
     d405 = r405.json()
-    assert d405["error_code"] == "BAD_REQUEST"
+    assert d405["error_code"] == "METHOD_NOT_ALLOWED"
     assert "correlation_id" in d405
     assert r405.headers.get("X-Correlation-ID") == d405["correlation_id"]
 
@@ -990,10 +990,10 @@ def test_t15_readyz_healthy_and_unhealthy_and_lifespan_redis(client: TestClient,
 
 
 # =============================================================================
-# T16 Tests — Live Response & Documented Request Examples Validation
+# T13 Tests — Live Response & Documented Request Examples Validation
 # =============================================================================
 
-def test_t16_live_api_responses_validate_against_openapi_schemas(client: TestClient, clean_db):
+def test_t13_live_api_responses_validate_against_openapi_schemas(client: TestClient, clean_db):
     """Validate live responses for every response body type returned by the API against OpenAPI component schemas."""
     with open(OPENAPI_SPEC, "r", encoding="utf-8") as f:
         spec = yaml.safe_load(f)
@@ -1136,7 +1136,7 @@ def test_t16_live_api_responses_validate_against_openapi_schemas(client: TestCli
     validate_body(job_details_data, "JobDetailsResponse")
 
 
-def test_t16_documented_request_examples_execute_successfully(client: TestClient, clean_db):
+def test_t13_documented_request_examples_execute_successfully(client: TestClient, clean_db):
     """Verify that documented example request payloads in the OpenAPI spec execute successfully."""
     with open(OPENAPI_SPEC, "r", encoding="utf-8") as f:
         spec = yaml.safe_load(f)
@@ -1468,3 +1468,382 @@ def test_running_migrations_does_not_disable_application_loggers():
     """
     for name in ("app", "app.core.db_errors", "app.main"):
         assert logging.getLogger(name).disabled is False, f"logger {name} was disabled"
+
+
+# =============================================================================
+# Mutation Guards & Full T13 Live Documented Response Comparison
+# =============================================================================
+
+def test_t11_rollback_release_allocates_max_plus_one_after_deleting_middle_release(client: TestClient, clean_db):
+    """Verify rollback allocates MAX(release_number)+1, not COUNT(*)+1, even when a middle release is deleted."""
+    ws_id, app_id, auth_headers = create_test_workspace_and_app(client)
+
+    # Deploy release 1, 2, 3
+    rel_ids = []
+    for i in range(1, 4):
+        resp = client.post(
+            f"/v1/apps/{app_id}/deployments",
+            json={"image_digest": f"registry.example.com/app@sha256:{str(i)*64}", "port": 8080 + i},
+            headers={"Idempotency-Key": f"k-dep-{i}-{uuid.uuid4().hex[:6]}", **auth_headers},
+        )
+        assert resp.status_code == 202
+        rel_ids.append(resp.json()["operation_id"])
+
+    # Verify releases 1, 2, 3 in DB
+    conn = psycopg2.connect(TEST_DATABASE_URL_SYNC)
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, release_number FROM releases WHERE application_id = %s ORDER BY release_number",
+            (app_id,),
+        )
+        rows = cur.fetchall()
+        assert [r[1] for r in rows] == [1, 2, 3]
+
+        # Delete middle release (release_number 2)
+        cur.execute("DELETE FROM releases WHERE id = %s", (rel_ids[1],))
+    conn.commit()
+    conn.close()
+
+    # Now releases remaining are [1, 3] (count = 2, max = 3)
+    # Roll back targeting release 1
+    rb_resp = client.post(
+        f"/v1/apps/{app_id}/rollbacks",
+        json={"target_release_id": rel_ids[0]},
+        headers={"Idempotency-Key": f"k-rb-{uuid.uuid4().hex[:6]}", **auth_headers},
+    )
+    assert rb_resp.status_code == 202
+    new_release_id = rb_resp.json()["operation_id"]
+
+    conn = psycopg2.connect(TEST_DATABASE_URL_SYNC)
+    with conn.cursor() as cur:
+        cur.execute("SELECT release_number FROM releases WHERE id = %s", (new_release_id,))
+        new_rel_num = cur.fetchone()[0]
+    conn.close()
+
+    # If count(*)+1 was used, new_rel_num would be 2+1=3 (which would violate uniqueness of release_number).
+    # With MAX(release_number)+1, new_rel_num MUST be 3+1 = 4.
+    assert new_rel_num == 4, f"Expected release_number 4 (MAX+1), got {new_rel_num}"
+
+
+def test_t10_idempotency_ttl_minimum_24_hours_on_fresh_record(client: TestClient, clean_db):
+    """Verify that a freshly written idempotency record has expires_at at least 24 hours after created_at."""
+    ws_id, _, auth_headers = create_test_workspace_and_app(client)
+    key = f"ttl-check-{uuid.uuid4().hex[:8]}"
+    resp = client.post(
+        f"/v1/workspaces/{ws_id}/jobs",
+        json={"name": "ttl-job", "image_digest": "registry.example.com/job@sha256:" + "a" * 64},
+        headers={"Idempotency-Key": key, **auth_headers},
+    )
+    assert resp.status_code == 202
+
+    conn = psycopg2.connect(TEST_DATABASE_URL_SYNC)
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT created_at, expires_at FROM idempotency_records WHERE workspace_id = %s AND idempotency_key = %s",
+            (ws_id, key),
+        )
+        row = cur.fetchone()
+    conn.close()
+    assert row is not None, "Idempotency record not found"
+    created_at, expires_at = row
+    ttl_diff = (expires_at - created_at).total_seconds()
+    # 24 hours = 86400 seconds (allow 1 second slop for database timestamp rounding)
+    assert ttl_diff >= 86399, f"Expected idempotency TTL >= 24h (86400s), but got {ttl_diff}s (expires_at={expires_at}, created_at={created_at})"
+
+
+def test_t10_rollback_replay_succeeds_even_if_target_release_deleted(client: TestClient, clean_db):
+    """Verify that an idempotent replay of rollback returns cached 202 even if target release was subsequently deleted."""
+    ws_id, app_id, auth_headers = create_test_workspace_and_app(client)
+
+    # Deploy initial release
+    dep1 = client.post(
+        f"/v1/apps/{app_id}/deployments",
+        json={"image_digest": "registry.example.com/app@sha256:" + "b" * 64, "port": 8080},
+        headers={"Idempotency-Key": f"k-dep-1-{uuid.uuid4().hex[:6]}", **auth_headers},
+    )
+    assert dep1.status_code == 202
+    target_rel_id = dep1.json()["operation_id"]
+
+    # Deploy second release
+    dep2 = client.post(
+        f"/v1/apps/{app_id}/deployments",
+        json={"image_digest": "registry.example.com/app@sha256:" + "c" * 64, "port": 8081},
+        headers={"Idempotency-Key": f"k-dep-2-{uuid.uuid4().hex[:6]}", **auth_headers},
+    )
+    assert dep2.status_code == 202
+
+    # Initial rollback targeting release 1
+    rb_key = f"rb-key-{uuid.uuid4().hex[:8]}"
+    rb_payload = {"target_release_id": target_rel_id}
+    rb_resp = client.post(
+        f"/v1/apps/{app_id}/rollbacks",
+        json=rb_payload,
+        headers={"Idempotency-Key": rb_key, **auth_headers},
+    )
+    assert rb_resp.status_code == 202
+    op_id = rb_resp.json()["operation_id"]
+
+    # Now delete the target release from the database
+    conn = psycopg2.connect(TEST_DATABASE_URL_SYNC)
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM releases WHERE id = %s", (target_rel_id,))
+    conn.commit()
+    conn.close()
+
+    # Replay with same key and payload: must return stored 202, NOT 404
+    replay_resp = client.post(
+        f"/v1/apps/{app_id}/rollbacks",
+        json=rb_payload,
+        headers={"Idempotency-Key": rb_key, **auth_headers},
+    )
+    assert replay_resp.status_code == 202
+    assert replay_resp.json()["operation_id"] == op_id
+
+
+def test_t13_live_responses_match_documented_response_examples(client: TestClient, clean_db):
+    """For each documented behavior in the OpenAPI contract, send request and compare live response body with documented example."""
+    with open(OPENAPI_SPEC, "r", encoding="utf-8") as f:
+        spec = yaml.safe_load(f)
+
+    auth_headers = {"X-Dev-Subject": "spec-comparison-tester"}
+
+    # 1. GET /healthz (200)
+    doc_health = spec["paths"]["/healthz"]["get"]["responses"]["200"]["content"]["application/json"]["example"]
+    res_health = client.get("/healthz")
+    assert res_health.status_code == 200
+    live_health = res_health.json()
+    assert live_health["status"] == doc_health["status"]
+    assert live_health["version"] == doc_health["version"]
+    assert "timestamp" in live_health
+
+    # 2. GET /readyz (200)
+    doc_ready = spec["paths"]["/readyz"]["get"]["responses"]["200"]["content"]["application/json"]["example"]
+    res_ready = client.get("/readyz")
+    assert res_ready.status_code == 200
+    live_ready = res_ready.json()
+    assert live_ready["ready"] == doc_ready["ready"]
+    assert live_ready["database"] == doc_ready["database"]
+    assert live_ready["redis"] == doc_ready["redis"]
+    assert "timestamp" in live_ready
+
+    # 3. POST /v1/workspaces (201)
+    doc_ws_req = spec["paths"]["/v1/workspaces"]["post"]["requestBody"]["content"]["application/json"]["example"]
+    doc_ws_res = spec["paths"]["/v1/workspaces"]["post"]["responses"]["201"]["content"]["application/json"]["example"]
+    res_ws = client.post("/v1/workspaces", json=doc_ws_req, headers=auth_headers)
+    assert res_ws.status_code == 201
+    live_ws = res_ws.json()
+    assert live_ws["name"] == doc_ws_res["name"]
+    assert live_ws["slug"] == doc_ws_res["slug"]
+    assert "id" in live_ws
+    ws_id = live_ws["id"]
+
+    # 4. POST /v1/workspaces/{workspace_id}/apps (201)
+    doc_app_req = spec["paths"]["/v1/workspaces/{workspace_id}/apps"]["post"]["requestBody"]["content"]["application/json"]["example"]
+    doc_app_res = spec["paths"]["/v1/workspaces/{workspace_id}/apps"]["post"]["responses"]["201"]["content"]["application/json"]["example"]
+    res_app = client.post(f"/v1/workspaces/{ws_id}/apps", json=doc_app_req, headers=auth_headers)
+    assert res_app.status_code == 201
+    live_app = res_app.json()
+    assert live_app["name"] == doc_app_res["name"]
+    assert live_app["slug"] == doc_app_res["slug"]
+    assert live_app["workload_type"] == doc_app_res["workload_type"]
+    assert live_app["desired_generation"] == doc_app_res["desired_generation"]
+    assert live_app["current_release_id"] == doc_app_res["current_release_id"]
+    app_id = live_app["id"]
+
+    def get_example_body(content_map: dict) -> dict:
+        json_content = content_map.get("application/json", {})
+        if "example" in json_content:
+            return json_content["example"]
+        if "examples" in json_content:
+            first_val = next(iter(json_content["examples"].values()))
+            if isinstance(first_val, dict) and "value" in first_val:
+                return first_val["value"]
+            return first_val
+        return {}
+
+    # 5. POST /v1/workspaces/{workspace_id}/jobs (202)
+    doc_job_req = spec["paths"]["/v1/workspaces/{workspace_id}/jobs"]["post"]["requestBody"]["content"]["application/json"]["example"]
+    doc_job_res = get_example_body(spec["paths"]["/v1/workspaces/{workspace_id}/jobs"]["post"]["responses"]["202"]["content"])
+    res_job = client.post(
+        f"/v1/workspaces/{ws_id}/jobs",
+        json=doc_job_req,
+        headers={"Idempotency-Key": f"k-job-{uuid.uuid4().hex[:6]}", **auth_headers},
+    )
+    assert res_job.status_code == 202
+    live_job = res_job.json()
+    assert live_job["status"] == doc_job_res["status"]
+    assert live_job["status_url"] == f"/v1/operations/{live_job['operation_id']}"
+    job_id = live_job["operation_id"]
+
+    # 6. GET /v1/jobs/{job_id} (200)
+    doc_job_det = spec["paths"]["/v1/jobs/{job_id}"]["get"]["responses"]["200"]["content"]["application/json"]["example"]
+    res_job_det = client.get(f"/v1/jobs/{job_id}", headers=auth_headers)
+    assert res_job_det.status_code == 200
+    live_job_det = res_job_det.json()
+    assert live_job_det["name"] == doc_job_det["name"]
+    assert live_job_det["state"] == doc_job_det["state"]
+    assert live_job_det["current_attempt_number"] == doc_job_det["current_attempt_number"]
+    assert live_job_det["attempts"] == doc_job_det["attempts"]
+
+    # 7. POST /v1/apps/{app_id}/deployments (202)
+    doc_dep_req = spec["paths"]["/v1/apps/{app_id}/deployments"]["post"]["requestBody"]["content"]["application/json"]["example"]
+    doc_dep_res = get_example_body(spec["paths"]["/v1/apps/{app_id}/deployments"]["post"]["responses"]["202"]["content"])
+    res_dep = client.post(
+        f"/v1/apps/{app_id}/deployments",
+        json=doc_dep_req,
+        headers={"Idempotency-Key": f"k-dep-{uuid.uuid4().hex[:6]}", **auth_headers},
+    )
+    assert res_dep.status_code == 202
+    live_dep = res_dep.json()
+    assert live_dep["status"] == doc_dep_res["status"]
+    assert live_dep["status_url"] == f"/v1/operations/{live_dep['operation_id']}"
+    rel_id = live_dep["operation_id"]
+
+    # 8. GET /v1/operations/{operation_id} (200) - for fresh release operation
+    doc_op_res = spec["paths"]["/v1/operations/{operation_id}"]["get"]["responses"]["200"]["content"]["application/json"]["example"]
+    res_op = client.get(f"/v1/operations/{rel_id}", headers=auth_headers)
+    assert res_op.status_code == 200
+    live_op = res_op.json()
+    assert live_op["operation_kind"] == doc_op_res["operation_kind"]
+    # This verifies the example was corrected from ACCEPTED to IMAGE_READY!
+    assert live_op["status"] == doc_op_res["status"]
+    assert live_op["status"] == "IMAGE_READY"
+    assert live_op["status_url"] == f"/v1/operations/{rel_id}"
+
+    # 9. POST /v1/apps/{app_id}/rollbacks (202)
+    doc_rb_res = get_example_body(spec["paths"]["/v1/apps/{app_id}/rollbacks"]["post"]["responses"]["202"]["content"])
+    res_rb = client.post(
+        f"/v1/apps/{app_id}/rollbacks",
+        json={"target_release_id": rel_id},
+        headers={"Idempotency-Key": f"k-rb-{uuid.uuid4().hex[:6]}", **auth_headers},
+    )
+    assert res_rb.status_code == 202
+    live_rb = res_rb.json()
+    assert live_rb["status"] == doc_rb_res["status"]
+    assert live_rb["status_url"] == f"/v1/operations/{live_rb['operation_id']}"
+
+    # 10. POST /v1/jobs/{job_id}/cancel (202)
+    doc_canc_res = get_example_body(spec["paths"]["/v1/jobs/{job_id}/cancel"]["post"]["responses"]["202"]["content"])
+    res_canc = client.post(
+        f"/v1/jobs/{job_id}/cancel",
+        headers={"Idempotency-Key": f"k-canc-{uuid.uuid4().hex[:6]}", **auth_headers},
+    )
+    assert res_canc.status_code == 202
+    live_canc = res_canc.json()
+    assert live_canc["status"] == doc_canc_res["status"]
+    assert live_canc["status_url"] == f"/v1/operations/{live_canc['operation_id']}"
+
+    # 11. POST /v1/jobs/{job_id}/reruns (202)
+    conn = psycopg2.connect(TEST_DATABASE_URL_SYNC)
+    with conn.cursor() as cur:
+        cur.execute("UPDATE jobs SET state = 'FAILED' WHERE id = %s", (job_id,))
+    conn.commit()
+    conn.close()
+
+    doc_rerun_res = get_example_body(spec["paths"]["/v1/jobs/{job_id}/reruns"]["post"]["responses"]["202"]["content"])
+    res_rerun = client.post(
+        f"/v1/jobs/{job_id}/reruns",
+        headers={"Idempotency-Key": f"k-rerun-{uuid.uuid4().hex[:6]}", **auth_headers},
+    )
+    assert res_rerun.status_code == 202
+    live_rerun = res_rerun.json()
+    assert live_rerun["status"] == doc_rerun_res["status"]
+    assert live_rerun["status_url"] == f"/v1/operations/{live_rerun['operation_id']}"
+
+    # 12. GET /v1/workspaces/{workspace_id}/jobs (200)
+    doc_job_list = spec["paths"]["/v1/workspaces/{workspace_id}/jobs"]["get"]["responses"]["200"]["content"]["application/json"]["example"]
+    res_job_list = client.get(f"/v1/workspaces/{ws_id}/jobs", headers=auth_headers)
+    assert res_job_list.status_code == 200
+    live_job_list = res_job_list.json()
+    assert live_job_list["next_cursor"] == doc_job_list["next_cursor"]
+    assert isinstance(live_job_list["items"], list)
+    assert len(live_job_list["items"]) >= 1
+
+    # 13. GET /v1/apps/{app_id}/releases (200)
+    doc_rel_list = spec["paths"]["/v1/apps/{app_id}/releases"]["get"]["responses"]["200"]["content"]["application/json"]["example"]
+    res_rel_list = client.get(f"/v1/apps/{app_id}/releases", headers=auth_headers)
+    assert res_rel_list.status_code == 200
+    live_rel_list = res_rel_list.json()
+    assert live_rel_list["next_cursor"] == doc_rel_list["next_cursor"]
+    assert isinstance(live_rel_list["items"], list)
+    assert len(live_rel_list["items"]) >= 1
+
+    # 14. Documented 404 Route-Specific Examples:
+    doc_404_examples = spec["components"]["responses"]["404NotFound"]["content"]["application/json"]["examples"]
+
+    # 14a. JobNotFound
+    missing_id = str(uuid.uuid4())
+    res_404_job = client.get(f"/v1/jobs/{missing_id}", headers=auth_headers)
+    assert res_404_job.status_code == 404
+    live_404_job = res_404_job.json()
+    assert live_404_job["error_code"] == doc_404_examples["JobNotFound"]["value"]["error_code"]
+    assert live_404_job["message"] == doc_404_examples["JobNotFound"]["value"]["message"]
+    assert live_404_job["message"] == "Job not found"
+
+    # 14b. WorkspaceNotFound
+    res_404_ws = client.post(
+        f"/v1/workspaces/{missing_id}/apps",
+        json={"name": "Test App", "slug": f"app-{uuid.uuid4().hex[:6]}", "workload_type": "HTTP_SERVICE"},
+        headers=auth_headers,
+    )
+    assert res_404_ws.status_code == 404
+    live_404_ws = res_404_ws.json()
+    assert live_404_ws["error_code"] == doc_404_examples["WorkspaceNotFound"]["value"]["error_code"]
+    assert live_404_ws["message"] == doc_404_examples["WorkspaceNotFound"]["value"]["message"]
+    assert live_404_ws["message"] == "Workspace not found"
+
+    # 14c. ApplicationNotFound
+    res_404_app = client.post(
+        f"/v1/apps/{missing_id}/deployments",
+        json={"image_digest": "registry.example.com/app@sha256:" + "d" * 64, "port": 8080},
+        headers={"Idempotency-Key": f"k-dep-{uuid.uuid4().hex[:6]}", **auth_headers},
+    )
+    assert res_404_app.status_code == 404
+    live_404_app = res_404_app.json()
+    assert live_404_app["error_code"] == doc_404_examples["ApplicationNotFound"]["value"]["error_code"]
+    assert live_404_app["message"] == doc_404_examples["ApplicationNotFound"]["value"]["message"]
+    assert live_404_app["message"] == "Application not found"
+
+    # 14d. TargetReleaseNotFound
+    res_404_tb = client.post(
+        f"/v1/apps/{app_id}/rollbacks",
+        json={"target_release_id": missing_id},
+        headers={"Idempotency-Key": f"k-rb-{uuid.uuid4().hex[:6]}", **auth_headers},
+    )
+    assert res_404_tb.status_code == 404
+    live_404_tb = res_404_tb.json()
+    assert live_404_tb["error_code"] == doc_404_examples["TargetReleaseNotFound"]["value"]["error_code"]
+    assert live_404_tb["message"] == doc_404_examples["TargetReleaseNotFound"]["value"]["message"]
+    assert live_404_tb["message"] == "Target release not found for this application"
+
+    # 14e. OperationNotFound
+    res_404_op = client.get(f"/v1/operations/{missing_id}", headers=auth_headers)
+    assert res_404_op.status_code == 404
+    live_404_op = res_404_op.json()
+    assert live_404_op["error_code"] == doc_404_examples["OperationNotFound"]["value"]["error_code"]
+    assert live_404_op["message"] == doc_404_examples["OperationNotFound"]["value"]["message"]
+    assert live_404_op["message"] == "Operation not found"
+
+    # 15. Documented 401 Unauthorized example
+    doc_401 = spec["components"]["responses"]["401Unauthorized"]["content"]["application/json"]["example"]
+    res_401 = client.get(f"/v1/jobs/{missing_id}")
+    assert res_401.status_code == 401
+    live_401 = res_401.json()
+    assert live_401["error_code"] == doc_401["error_code"]
+    assert live_401["message"] == doc_401["message"]
+
+    # 16. Documented 405 MethodNotAllowed example
+    doc_405 = spec["components"]["responses"]["405MethodNotAllowed"]["content"]["application/json"]["example"]
+    res_405 = client.post("/healthz")
+    assert res_405.status_code == 405
+    live_405 = res_405.json()
+    assert live_405["error_code"] == doc_405["error_code"]
+    assert live_405["message"] == doc_405["message"]
+
+    # 17. Documented 422 ValidationError example
+    doc_422 = spec["components"]["responses"]["422UnprocessableEntity"]["content"]["application/json"]["examples"]["ValidationError"]["value"]
+    res_422 = client.post("/v1/workspaces", json={}, headers=auth_headers)
+    assert res_422.status_code == 422
+    live_422 = res_422.json()
+    assert live_422["error_code"] == doc_422["error_code"]
+    assert live_422["message"] == doc_422["message"]

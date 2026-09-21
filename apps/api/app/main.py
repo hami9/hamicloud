@@ -119,8 +119,10 @@ async def http_exception_handler(request: Request, exc: Exception) -> JSONRespon
 
     if custom_error_code and custom_error_code in ErrorCode.__members__:
         error_code = ErrorCode(custom_error_code)
-    elif http_exc.status_code in (400, 405):
+    elif http_exc.status_code == 400:
         error_code = ErrorCode.BAD_REQUEST
+    elif http_exc.status_code == 405:
+        error_code = ErrorCode.METHOD_NOT_ALLOWED
     elif http_exc.status_code == 401:
         error_code = ErrorCode.UNAUTHORIZED
     elif http_exc.status_code == 403:

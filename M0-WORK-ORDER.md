@@ -73,7 +73,7 @@ Each decision has a default. Unless the owner has changed one, work with the def
 | --- | --- | --- | --- |
 | D1 | How M0 establishes the caller's identity before OIDC arrives in M1 | A single `get_caller` dependency. With `ENVIRONMENT=development` it reads a dev-only subject header; in any other environment it returns 401. The membership lookup behind it is real. Label it in code and in ADR-0004 as a development seam, not a security control. | T7 |
 | D2 | `GET /v1/operations/{operation_id}` is not in the Roadmap's API table | **Approved by the owner on 2026-09-14.** Added to the Roadmap API table with a dated note. | T4 |
-| D3 | Pagination needs at least one list endpoint, and the Roadmap defines none | Add `GET /v1/workspaces/{ws}/jobs` and `GET /v1/apps/{app}/releases` to the Roadmap table. **OWNER** approves. | T12 |
+| D3 | Pagination needs at least one list endpoint, and the Roadmap defines none | **Approved by the owner on 2026-09-19.** Added GET /v1/workspaces/{ws}/jobs and GET /v1/apps/{app}/releases to the Roadmap table with a dated note. | T12 |
 | D4 | A cancellation that races a workload finishing | The logical job ends `CANCELLED`; the attempt keeps `SUCCEEDED` and its exit code. There is no `CANCEL_REQUESTED → SUCCEEDED` edge. | T20, T21 |
 | D5 | Go transitions the Roadmap diagram does not allow: `QUEUED→CANCELLED`, `ADMITTED→CANCELLED`, `ADMITTED→FAILED`, `RETRY_WAIT→CANCELLED`, `CANCEL_REQUESTED→FAILED`, `CANCEL_REQUESTED→SUCCEEDED` | Remove them all, following the Roadmap literally. The owner may keep one only by amending the Roadmap first, with a reason. | T21 |
 | D6 | Python version | 3.12 everywhere. **OWNER** installs 3.12 locally; then recreate `.venv`. | T24 |
@@ -82,6 +82,7 @@ Each decision has a default. Unless the owner has changed one, work with the def
 | D9 | Commit `MASTER-PLAN.md` (currently untracked) | Yes, in the Phase 1 commit. | Phase 1 |
 | D10 | Reset the dev database after the new migrations are tested on it | Yes (`alembic downgrade base && alembic upgrade head`). **OWNER** confirms before you run it. | T29 |
 | D11 | `ON DELETE` for the new `workspace_id` foreign keys | `CASCADE`, like the other tenant tables. `audit_events` keeps `SET NULL` because audit records outlive a workspace; state this in ADR-0004. | T16, T20 |
+| D12 | Ruff lint rule scope pinned to select = ["E4", "E7", "E9", "F"] | Temporarily narrows gate to syntax, runtime errors, and undefined/unused symbols (E4, E7, E9, F) during M0 to avoid blocking on pre-existing style/modernization findings; wider rule set (B, UP, RUF) re-enabled in T24. | T24 |
 
 ---
 

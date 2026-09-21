@@ -618,6 +618,36 @@ def test_tenant_isolation_two_workspaces_and_subjects(client: TestClient):
     r9_job_viewer = client.get(f"/v1/operations/{job_id}/events", headers=headers_charlie)
     assert r9_job_viewer.status_code == 501
 
+    # =========================================================================
+    # Route 10: GET /v1/workspaces/{ws}/jobs (List Workspace Jobs)
+    # =========================================================================
+    r10_missing = client.get(f"/v1/workspaces/{missing_ws}/jobs", headers=headers_alice)
+    r10_non_member = client.get(f"/v1/workspaces/{ws1_id}/jobs", headers=headers_bob)
+    assert_byte_identical_404(r10_missing, r10_non_member, "Workspace not found")
+
+    r10_no_auth = client.get(f"/v1/workspaces/{ws1_id}/jobs")
+    assert_401_unauthorized(r10_no_auth)
+
+    r10_member = client.get(f"/v1/workspaces/{ws1_id}/jobs", headers=headers_alice)
+    assert r10_member.status_code == 200
+    r10_viewer = client.get(f"/v1/workspaces/{ws1_id}/jobs", headers=headers_charlie)
+    assert r10_viewer.status_code == 200
+
+    # =========================================================================
+    # Route 11: GET /v1/apps/{app}/releases (List App Releases)
+    # =========================================================================
+    r11_missing = client.get(f"/v1/apps/{missing_app}/releases", headers=headers_alice)
+    r11_non_member = client.get(f"/v1/apps/{app_id}/releases", headers=headers_bob)
+    assert_byte_identical_404(r11_missing, r11_non_member, "Application not found")
+
+    r11_no_auth = client.get(f"/v1/apps/{app_id}/releases")
+    assert_401_unauthorized(r11_no_auth)
+
+    r11_member = client.get(f"/v1/apps/{app_id}/releases", headers=headers_alice)
+    assert r11_member.status_code == 200
+    r11_viewer = client.get(f"/v1/apps/{app_id}/releases", headers=headers_charlie)
+    assert r11_viewer.status_code == 200
+
 
 def test_all_api_responses_validate_against_openapi_schemas(client: TestClient):
     """Validate live responses for every response body type returned by the API against OpenAPI component schemas.

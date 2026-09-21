@@ -584,3 +584,48 @@ Both of the last two fail against the pre-fix tree, which was verified by stashi
 | `pytest apps/api/tests` | **PASS** — 60 passed (was 51) |
 | `ruff check apps/api` | **PASS** |
 | `mypy --explicit-package-bases app` | **PASS** — 29 source files, 0 errors |
+
+### [2026-09-21T11:45:00Z] Phase 3 Closing Items: D3/D12 in Roadmap & Work Order, Mutation Guards, 405 Method Not Allowed, T13 Live Documented Comparison
+
+- **Status:** PASS (All 7 priority review items implemented and verified with zero regression)
+- **Milestone:** Phase 3 Closing / Milestone M0
+- **Governing Items:** Priority review fixes for Phase 3 closing items 1-7
+
+#### Changes & Implementations
+
+1. **Restored D3 in `HamiCloud-Roadmap.md` & `M0-WORK-ORDER.md` §2 (Item 1):**
+   - Re-added `List workspace jobs²` (`GET /v1/workspaces/{ws}/jobs`) and `List app releases²` (`GET /v1/apps/{app}/releases`) to `HamiCloud-Roadmap.md` API table with footnote 2 noting owner approval on 2026-09-19 per Decision D3.
+   - Updated D3 row in `M0-WORK-ORDER.md` §2 to: `"Approved by the owner on 2026-09-19. Added GET /v1/workspaces/{ws}/jobs and GET /v1/apps/{app}/releases to the Roadmap table with a dated note."`
+2. **Recorded Decision D12 in `M0-WORK-ORDER.md` §2 (Item 7):**
+   - Documented ruff lint rule scope pinned to `select = ["E4", "E7", "E9", "F"]`, explaining that it temporarily narrows the gate to syntax, runtime errors, and undefined/unused symbols during M0, with the wider set (B, UP, RUF) re-enabled in T24.
+3. **Reordered Idempotency Lookup in `rollback_release` (Item 5):**
+   - In `apps/api/app/api/v1/apps.py`, moved `check_idempotency` ahead of `target_release_id` validation. An idempotent replay now reliably returns the cached 202 even if the target release row was deleted subsequent to the original rollback.
+4. **Honest 405 Error Code Mapping & OpenAPI Contract Updates (Item 4):**
+   - Added `METHOD_NOT_ALLOWED` to `ErrorCode` enum in `apps/api/app/schemas/common.py`.
+   - Updated `http_exception_handler` in `apps/api/app/main.py` to map HTTP 405 to `ErrorCode.METHOD_NOT_ALLOWED`.
+   - Added `METHOD_NOT_ALLOWED` to `ErrorCode` enum and defined `405MethodNotAllowed` under `components/responses` in `contracts/openapi/v1.yaml`.
+   - Documented `'405'` across all operations in `contracts/openapi/v1.yaml`.
+   - Updated existing envelope test assertion to expect `error_code == "METHOD_NOT_ALLOWED"`.
+5. **Renamed `test_t16_*` to `test_t13_*` (Item 6):**
+   - Renamed `test_t16_live_api_responses_validate_against_openapi_schemas` and `test_t16_documented_request_examples_execute_successfully` to `test_t13_*` in `apps/api/tests/test_phase3_contracts_idempotency.py` to keep task records accurate.
+6. **Closed Surviving Mutations with Targeted Guards (Item 2):**
+   - Added `test_t11_rollback_release_allocates_max_plus_one_after_deleting_middle_release`: deletes middle release 2 of [1, 2, 3] and verifies rollback allocates `MAX+1` (4), failing any mutation using `COUNT(*)+1` (3).
+   - Added Route 10 (`GET /v1/workspaces/{ws}/jobs`) and Route 11 (`GET /v1/apps/{app}/releases`) to `test_tenant_isolation_two_workspaces_and_subjects` in `apps/api/tests/test_api_flows.py` (member 200, non-member 404 byte-identical to missing ID, unauthenticated 401).
+   - Added `test_t10_idempotency_ttl_minimum_24_hours_on_fresh_record`: asserts `expires_at >= created_at + 24 hours` (86400s) on fresh idempotency records.
+   - Added `test_t10_rollback_replay_succeeds_even_if_target_release_deleted`: verifies replay succeeds after target release deletion.
+7. **Completed T13 Live Documented Response Comparison (Item 3):**
+   - Corrected `getOperationStatus` 200 response example and `OperationStatusResponse` schema example in `contracts/openapi/v1.yaml` from `status: "ACCEPTED"` to `status: "IMAGE_READY"`.
+   - Replaced generic "Resource not found" in `404NotFound` with route-specific examples: `JobNotFound` ("Job not found"), `WorkspaceNotFound` ("Workspace not found"), `ApplicationNotFound` ("Application not found"), `TargetReleaseNotFound` ("Target release not found for this application"), `OperationNotFound` ("Operation not found"), and updated `ErrorResponse` schema example.
+   - Implemented `test_t13_live_responses_match_documented_response_examples` sending documented request examples and validating live response bodies against documented response examples for each documented behavior.
+
+#### Verification & Evidence
+
+| Gate / Check | Result | Details |
+| --- | --- | --- |
+| `pytest apps/api/tests` | **PASS** | 64 passed (was 60), 0 failed in 62.38s |
+| `ruff check apps/api/app` | **PASS** | All checks passed |
+| `mypy --explicit-package-bases app` | **PASS** | 29 source files, 0 errors |
+| `go test ./...` (`runtime`) | **PASS** | All packages pass |
+| Dev DB (`hamicloud`) delta | **PASS** | Exactly 368 rows before and after (0-row delta) |
+| OpenAPI 3.1 Validator | **PASS** | Spec valid per Draft 2020-12 / OAS 3.1.0 |
+

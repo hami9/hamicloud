@@ -28,7 +28,7 @@ func LoadFromEnv() (*Config, error) {
 		}
 	}
 	natsURL := getEnv("NATS_URL", "nats://localhost:4222")
-	env := getEnv("ENVIRONMENT", "development")
+	env := getEnv("ENVIRONMENT", "production")
 	workerID := getEnv("WORKER_ID", "local-worker-1")
 
 	leaseSec, err := strconv.Atoi(getEnv("LEASE_DURATION_SECONDS", "60"))

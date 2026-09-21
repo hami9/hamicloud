@@ -629,3 +629,36 @@ Both of the last two fail against the pre-fix tree, which was verified by stashi
 | Dev DB (`hamicloud`) delta | **PASS** | Exactly 368 rows before and after (0-row delta) |
 | OpenAPI 3.1 Validator | **PASS** | Spec valid per Draft 2020-12 / OAS 3.1.0 |
 
+---
+
+### [2026-09-21T18:20:00Z] Runtime Hardening & Step 0 Contract Example Alignment (`cf5dce5`, Step 0)
+
+- **Status:** PASS
+- **Scope:** Runtime configuration fail-closed alignment (outside the work-order task list) & OpenAPI example precision (Step 0)
+- **Governing Principles:** Decision D1, Contract-First Consistency
+
+#### Changes & Implementations
+
+1. **Go Runtime Fail-Closed Configuration (`cf5dce5`):**
+   - *Context:* This hardening change is outside the work-order task list and aligns the runtime with Decision D1 (fail-closed authentication and environment posture).
+   - In `runtime/internal/config/config.go`, changed default `ENVIRONMENT` from `"development"` to `"production"`.
+   - Added unit test suite `runtime/internal/config/config_test.go` verifying default values (fail-closed environment, lease duration, reconciliation period), environment overrides, URL scheme normalization (`postgresql+asyncpg://` to `postgres://`), and invalid integer error handling.
+   - All tests pass in Go suite (`go test -v ./...`).
+
+2. **Step 0: Precision Alignment for Documented Idempotency Error & Replay Examples:**
+   - Identified and fixed malformed `MissingIdempotencyKey` example in `contracts/openapi/v1.yaml`: corrected `loc: ["header", "idempotency-key"]` to `["header", "Idempotency-Key"]` and removed trailing quote from `input: null"` to produce valid null.
+   - Enhanced `test_t13_live_responses_match_documented_response_examples` in `apps/api/tests/test_phase3_contracts_idempotency.py`:
+     - Added comparison for `MissingIdempotencyKey` (asserts live 422 error details match documented example; verified failure on prior text).
+     - Added comparison for `IdempotencyConflict` (asserts live 409 error code and message match documented example on body divergence).
+     - Added assertion for `IdenticalReplay` (asserts that a replay with identical key and payload produces a byte-equivalent 202 body to the original response).
+
+#### Verification & Evidence
+
+| Gate / Check | Result | Details |
+| --- | --- | --- |
+| `pytest apps/api/tests` | **PASS** | 64 passed, 0 failed |
+| `go test -v ./...` | **PASS** | Both `runtime/internal/config` and `runtime/internal/domain` pass |
+| `ruff check apps/api/app` | **PASS** | Clean |
+| `mypy --explicit-package-bases app` | **PASS** | 29 source files, 0 errors |
+
+

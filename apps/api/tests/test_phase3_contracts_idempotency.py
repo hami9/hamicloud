@@ -1847,3 +1847,44 @@ def test_t13_live_responses_match_documented_response_examples(client: TestClien
     live_422 = res_422.json()
     assert live_422["error_code"] == doc_422["error_code"]
     assert live_422["message"] == doc_422["message"]
+
+    # 18. Documented 422 MissingIdempotencyKey example
+    doc_422_idemp = spec["components"]["responses"]["422UnprocessableEntity"]["content"]["application/json"]["examples"]["MissingIdempotencyKey"]["value"]
+    res_422_idemp = client.post(f"/v1/workspaces/{ws_id}/jobs", json=doc_job_req, headers=auth_headers)
+    assert res_422_idemp.status_code == 422
+    live_422_idemp = res_422_idemp.json()
+    assert live_422_idemp["error_code"] == doc_422_idemp["error_code"]
+    assert live_422_idemp["message"] == doc_422_idemp["message"]
+    assert live_422_idemp["details"]["errors"] == doc_422_idemp["details"]["errors"]
+
+    # 19. Documented 409 IdempotencyConflict and IdenticalReplay
+    doc_409_conflict = spec["components"]["responses"]["409Conflict"]["content"]["application/json"]["examples"]["IdempotencyConflict"]["value"]
+    test_idemp_key = f"k-replay-{uuid.uuid4().hex[:6]}"
+    orig_res = client.post(
+        f"/v1/workspaces/{ws_id}/jobs",
+        json=doc_job_req,
+        headers={"Idempotency-Key": test_idemp_key, **auth_headers},
+    )
+    assert orig_res.status_code == 202
+    orig_body = orig_res.json()
+
+    # IdenticalReplay: replay body equals original 202
+    replay_res = client.post(
+        f"/v1/workspaces/{ws_id}/jobs",
+        json=doc_job_req,
+        headers={"Idempotency-Key": test_idemp_key, **auth_headers},
+    )
+    assert replay_res.status_code == 202
+    assert replay_res.json() == orig_body
+
+    # IdempotencyConflict: same key with different body
+    conflict_res = client.post(
+        f"/v1/workspaces/{ws_id}/jobs",
+        json={**doc_job_req, "name": "conflicting-job-name"},
+        headers={"Idempotency-Key": test_idemp_key, **auth_headers},
+    )
+    assert conflict_res.status_code == 409
+    live_409 = conflict_res.json()
+    assert live_409["error_code"] == doc_409_conflict["error_code"]
+    assert live_409["message"] == doc_409_conflict["message"]
+

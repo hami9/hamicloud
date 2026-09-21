@@ -889,10 +889,10 @@ components:
                 correlation_id: "req_01HVG89ABCDEF1234567890"
                 details:
                   errors:
-                    - loc: ["header", "idempotency-key"]
+                    - loc: ["header", "Idempotency-Key"]
                       msg: "Field required"
                       type: "missing"
-                      input: null"
+                      input: null
     500InternalServerError:
       description: Internal platform error occurred
       headers:

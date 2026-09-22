@@ -1,10 +1,10 @@
 import enum
 import uuid
 from datetime import datetime
-from sqlalchemy import DateTime, Enum, ForeignKey, Integer, Uuid
+from sqlalchemy import DateTime, ForeignKey, Integer, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+from app.db.base import Base, SqlEnum, TimestampMixin, UUIDPrimaryKeyMixin
 
 
 class QuotaResourceClass(str, enum.Enum):
@@ -26,13 +26,13 @@ class QuotaReservation(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         Uuid, ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True
     )
     resource_class: Mapped[QuotaResourceClass] = mapped_column(
-        Enum(QuotaResourceClass, name="quota_resource_class_enum", native_enum=False),
+        SqlEnum(QuotaResourceClass, 50),
         nullable=False,
         index=True,
     )
     units: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     status: Mapped[QuotaStatus] = mapped_column(
-        Enum(QuotaStatus, name="quota_status_enum", native_enum=False),
+        SqlEnum(QuotaStatus, 50),
         nullable=False,
         default=QuotaStatus.ACTIVE,
         index=True,
@@ -40,3 +40,4 @@ class QuotaReservation(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     expires_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True
     )
+

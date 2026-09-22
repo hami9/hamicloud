@@ -52,6 +52,10 @@ HamiCloud locks its technology stack to proven, performant, and well-understood 
 - **NO Service Mesh:** Ingress routing is handled by Traefik; internal workload networking relies on standard Kubernetes Services and NetworkPolicies.
 - **NO gRPC in v1:** Inter-process communication uses PostgreSQL transactional state and versioned JSON events over NATS. gRPC will only be evaluated if a measured synchronous internal bottleneck is demonstrated.
 
+### 3. Schema Ownership and Migration Authority
+- **Migration Owner:** `hami9` is the designated code owner for all database migrations (enforced via `.github/CODEOWNERS` with `/migrations/ @hami9`).
+- **Shared Schema Ownership:** Python Alembic migrations in `/migrations` are the sole authoritative owner of the shared PostgreSQL schema. The Go runtime, CLI, and any auxiliary services consume the shared schema migrated by Python; no secondary migration mechanism, out-of-band DDL, or divergent schema ownership is permitted.
+
 ---
 
 ## Consequences

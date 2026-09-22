@@ -1,10 +1,10 @@
 import enum
 import uuid
 from typing import TYPE_CHECKING, Any, Dict, Optional
-from sqlalchemy import JSON, Enum, ForeignKey, Integer, String, UniqueConstraint, Uuid
+from sqlalchemy import JSON, ForeignKey, Integer, String, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+from app.db.base import Base, SqlEnum, TimestampMixin, UUIDPrimaryKeyMixin
 
 if TYPE_CHECKING:
     from app.models.application import Application
@@ -34,15 +34,20 @@ class Release(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     image_digest: Mapped[str] = mapped_column(String(255), nullable=False)
     config_json: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     status: Mapped[ReleaseStatus] = mapped_column(
-        Enum(ReleaseStatus, name="release_status_enum", native_enum=False),
+        SqlEnum(ReleaseStatus, 50),
         nullable=False,
         default=ReleaseStatus.REQUESTED,
         index=True,
     )
     status_reason: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
 
-    application: Mapped["Application"] = relationship("Application", back_populates="releases")
+    application: Mapped["Application"] = relationship(
+        "Application",
+        back_populates="releases",
+        foreign_keys=[application_id],
+    )
 
     __table_args__ = (
         UniqueConstraint("application_id", "release_number", name="uq_release_app_number"),
     )
+

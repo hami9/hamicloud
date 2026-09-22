@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import Caller, authorize_workspace_access, get_caller
 from app.core.db_errors import unexpected_integrity_error, violated_constraint
-from app.core.events import OutboxTopic
+from app.core.events import OutboxTopic, create_outbox_event
 from app.core.idempotency import (
     check_idempotency,
     compute_payload_hash,
@@ -19,7 +19,6 @@ from app.core.idempotency import (
 from app.core.pagination import decode_cursor, encode_cursor
 from app.db.session import get_db
 from app.models.application import Application
-from app.models.outbox import OutboxEvent, OutboxStatus
 from app.models.release import Release, ReleaseStatus
 from app.models.workspace import WorkspaceRole
 from app.schemas.application import (
@@ -174,10 +173,11 @@ async def deploy_release(
 
     # 3. Create Outbox Event
     event_id = uuid.uuid4()
-    outbox_event = OutboxEvent(
+    outbox_event = create_outbox_event(
+        workspace_id=workspace_id,
         event_id=event_id,
         topic=OutboxTopic.APP_DEPLOYMENT_REQUESTED.value,
-        payload_json={
+        payload={
             "event_id": str(event_id),
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "workspace_id": str(workspace_id),
@@ -188,8 +188,7 @@ async def deploy_release(
             "port": payload.port,
             "health_path": payload.health_path,
         },
-        headers_json={"idempotency_key": idempotency_key},
-        status=OutboxStatus.PENDING,
+        headers={"idempotency_key": idempotency_key},
     )
     db.add(outbox_event)
 
@@ -302,10 +301,11 @@ async def rollback_release(
 
     # 3. Insert outbox event
     event_id = uuid.uuid4()
-    outbox_event = OutboxEvent(
+    outbox_event = create_outbox_event(
+        workspace_id=workspace_id,
         event_id=event_id,
         topic=OutboxTopic.APP_DEPLOYMENT_REQUESTED.value,
-        payload_json={
+        payload={
             "event_id": str(event_id),
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "workspace_id": str(workspace_id),
@@ -318,8 +318,7 @@ async def rollback_release(
             "is_rollback": True,
             "target_release_id": str(target_rel.id),
         },
-        headers_json={"rollback_from": str(target_rel.id), "idempotency_key": idempotency_key},
-        status=OutboxStatus.PENDING,
+        headers={"rollback_from": str(target_rel.id), "idempotency_key": idempotency_key},
     )
     db.add(outbox_event)
 

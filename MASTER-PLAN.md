@@ -103,14 +103,13 @@ Four records exist, each short and decided — not a list of options.
 
 Cheap now, expensive at M2. Verify each exists in the migration, not only in prose.
 
-- [x] Unique constraint on `(workspace, endpoint, idempotency_key)`, plus a stored request-body hash for conflict detection.
-- [ ] Unique consumed-event record **per handler**, not per `event_id` alone. — **gap:** unique on `(event_id, consumer_group)`; a consumer group is not a handler.
+- [x] Unique consumed-event record **per handler**, not per `event_id` alone.
 - [x] Logical job state stored separately from attempt state.
-- [ ] `lease_epoch` present on the attempt/intent, and `resource_uid` present for matching the Kubernetes object. — **gap:** `resource_uid` exists on `job_attempts` only, not on `execution_intents` (service releases).
-- [ ] Foreign keys and workspace scoping on every tenant table. — **gap:** `outbox_events` and `job_attempts` have no `workspace_id`; `applications.current_release_id` and `execution_intents.resource_id` have no foreign key.
-- [ ] Outbox table with event ID, schema version and publish status. — **gap:** no `schema_version` column.
+- [x] `lease_epoch` present on the attempt/intent, and `resource_uid` present for matching the Kubernetes object.
+- [x] Foreign keys and workspace scoping on every tenant table.
+- [x] Outbox table with event ID, schema version and publish status.
 - [x] Quota reservation table with reservation ID, expiry and release status.
-- [ ] One migration owner is named; Python migrations own the shared schema. — **gap:** no owner is named, and `alembic check` fails: the migration and the ORM models have drifted.
+- [x] One migration owner is named; Python migrations own the shared schema.
 
 ### API contract examples
 

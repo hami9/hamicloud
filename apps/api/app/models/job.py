@@ -5,7 +5,6 @@ from typing import TYPE_CHECKING, Dict, List, Optional
 from sqlalchemy import (
     JSON,
     DateTime,
-    Enum,
     ForeignKey,
     Integer,
     String,
@@ -14,7 +13,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+from app.db.base import Base, SqlEnum, TimestampMixin, UUIDPrimaryKeyMixin
 
 if TYPE_CHECKING:
     from app.models.workspace import Workspace
@@ -46,7 +45,7 @@ class Job(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     max_retries: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
     current_attempt_number: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     state: Mapped[JobState] = mapped_column(
-        Enum(JobState, name="job_state_enum", native_enum=False),
+        SqlEnum(JobState, 50),
         nullable=False,
         default=JobState.QUEUED,
         index=True,
@@ -64,13 +63,17 @@ class JobAttempt(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     job_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
     state: Mapped[JobState] = mapped_column(
-        Enum(JobState, name="job_attempt_state_enum", native_enum=False),
+        SqlEnum(JobState, 50),
         nullable=False,
         default=JobState.QUEUED,
         index=True,
     )
+
     resource_uid: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     lease_epoch: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     exit_code: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)

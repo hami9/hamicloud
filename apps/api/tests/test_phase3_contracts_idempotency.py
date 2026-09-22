@@ -1119,11 +1119,11 @@ def test_t13_live_api_responses_validate_against_openapi_schemas(client: TestCli
     with conn.cursor() as cur:
         cur.execute("""
             INSERT INTO job_attempts (
-                id, job_id, attempt_number, state, resource_uid, lease_epoch,
+                id, job_id, workspace_id, attempt_number, state, resource_uid, lease_epoch,
                 exit_code, failure_reason, started_at, finished_at, created_at, updated_at
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
-            attempt_id, job_id, 1, 'RUNNING', 'pod-exec-worker-1', 1,
+            attempt_id, job_id, ws_id, 1, 'RUNNING', 'pod-exec-worker-1', 1,
             None, None, now, None, now, now
         ))
     conn.commit()

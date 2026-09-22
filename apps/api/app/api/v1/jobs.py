@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.auth import Caller, authorize_workspace_access, get_caller
-from app.core.events import OutboxTopic
+from app.core.events import OutboxTopic, create_outbox_event
 from app.core.idempotency import (
     check_idempotency,
     compute_payload_hash,
@@ -19,7 +19,6 @@ from app.core.idempotency import (
 from app.core.pagination import decode_cursor, encode_cursor
 from app.db.session import get_db
 from app.models.job import Job, JobAttempt, JobState
-from app.models.outbox import OutboxEvent, OutboxStatus
 from app.models.workspace import WorkspaceRole
 from app.schemas.common import AcceptedOperationResponse
 from app.schemas.job import JobAttemptItem, JobDetailsResponse, JobListResponse, SubmitJobRequest
@@ -71,10 +70,11 @@ async def submit_job(
 
     # Prepare outbox event
     event_id = uuid.uuid4()
-    outbox_event = OutboxEvent(
+    outbox_event = create_outbox_event(
+        workspace_id=workspace_id,
         event_id=event_id,
         topic=OutboxTopic.JOB_SUBMITTED.value,
-        payload_json={
+        payload={
             "event_id": str(event_id),
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "workspace_id": str(workspace_id),
@@ -85,8 +85,7 @@ async def submit_job(
             "timeout_seconds": payload.timeout_seconds,
             "max_retries": payload.max_retries,
         },
-        headers_json={"idempotency_key": idempotency_key},
-        status=OutboxStatus.PENDING,
+        headers={"idempotency_key": idempotency_key},
     )
     db.add(outbox_event)
 
@@ -229,17 +228,17 @@ async def cancel_job(
     if job.state != JobState.CANCEL_REQUESTED:
         job.state = JobState.CANCEL_REQUESTED
         event_id = uuid.uuid4()
-        outbox_event = OutboxEvent(
+        outbox_event = create_outbox_event(
+            workspace_id=workspace_id,
             event_id=event_id,
             topic=OutboxTopic.JOB_CANCELLATION_REQUESTED.value,
-            payload_json={
+            payload={
                 "event_id": str(event_id),
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "workspace_id": str(workspace_id),
                 "job_id": str(job.id),
             },
-            headers_json={"idempotency_key": idempotency_key},
-            status=OutboxStatus.PENDING,
+            headers={"idempotency_key": idempotency_key},
         )
         db.add(outbox_event)
 
@@ -338,10 +337,11 @@ async def rerun_job(
 
     # Insert outbox event
     event_id = uuid.uuid4()
-    outbox_event = OutboxEvent(
+    outbox_event = create_outbox_event(
+        workspace_id=workspace_id,
         event_id=event_id,
         topic=OutboxTopic.JOB_SUBMITTED.value,
-        payload_json={
+        payload={
             "event_id": str(event_id),
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "workspace_id": str(workspace_id),
@@ -353,8 +353,7 @@ async def rerun_job(
             "max_retries": new_job.max_retries,
             "parent_job_id": str(original_job.id),
         },
-        headers_json={"rerun_from": str(original_job.id), "idempotency_key": idempotency_key},
-        status=OutboxStatus.PENDING,
+        headers={"rerun_from": str(original_job.id), "idempotency_key": idempotency_key},
     )
     db.add(outbox_event)
 

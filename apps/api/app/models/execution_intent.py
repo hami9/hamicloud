@@ -2,10 +2,10 @@ import enum
 import uuid
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, Uuid
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+from app.db.base import Base, SqlEnum, TimestampMixin, UUIDPrimaryKeyMixin
 
 
 class IntentStatus(str, enum.Enum):
@@ -27,14 +27,20 @@ class ExecutionIntent(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         Uuid, ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True
     )
     resource_type: Mapped[IntentResourceType] = mapped_column(
-        Enum(IntentResourceType, name="intent_resource_type_enum", native_enum=False),
+        SqlEnum(IntentResourceType, 50),
         nullable=False,
     )
-    resource_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False, index=True)
+    job_attempt_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        Uuid, ForeignKey("job_attempts.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    release_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        Uuid, ForeignKey("releases.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    resource_uid: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     target_generation: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     deterministic_resource_name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     status: Mapped[IntentStatus] = mapped_column(
-        Enum(IntentStatus, name="intent_status_enum", native_enum=False),
+        SqlEnum(IntentStatus, 50),
         nullable=False,
         default=IntentStatus.PENDING,
         index=True,
@@ -44,3 +50,20 @@ class ExecutionIntent(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     lease_expires_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True, index=True
     )
+
+    __table_args__ = (
+        CheckConstraint(
+            "(resource_type = 'JOB_ATTEMPT' AND job_attempt_id IS NOT NULL AND release_id IS NULL) OR "
+            "(resource_type = 'SERVICE_RELEASE' AND release_id IS NOT NULL AND job_attempt_id IS NULL)",
+            name="ck_execution_intents_typed_resource",
+        ),
+        UniqueConstraint(
+            "resource_type",
+            "job_attempt_id",
+            "release_id",
+            "target_generation",
+            name="uq_execution_intents_target",
+            postgresql_nulls_not_distinct=True,
+        ),
+    )
+

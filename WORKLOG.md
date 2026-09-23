@@ -1135,6 +1135,63 @@ Scratch database dropped cleanly.
 - **Go Vet (`runtime`):** Clean
 - **Dev Database (`hamicloud`):** All 368 rows across 14 tables intact
 
+---
+
+### Phase 5 — Design Records (T20: ADR Fixes)
+
+**Commit:** Pending Phase 5 Commit  
+**Status:** COMPLETED & VERIFIED  
+**Milestone Position:** 28 of 45 boxes pass (+5 boxes closed)
+
+#### 1. ADR-0002: Durable State and Transactional Outbox
+- **Lost Notification Handling:** Documented that accepted work is never lost on notification loss because PostgreSQL owns truth.
+- **Reconciliation Scans Defined:** Named specific queries and periods for all four categories of accepted work:
+  1. Queued jobs: 30s period (Go scheduler)
+  2. Unapplied release generations: 30s period (Go scheduler / controller)
+  3. Pending cancellations: 15s period (Go executor / reconciler)
+  4. Stale PENDING outbox events: 10s period (outbox dispatcher worker)
+- **Outbox Purge Ownership:** Documented 7-day retention for published outbox events and assigned physical deletion ownership to the daily control-plane maintenance worker (02:00 UTC).
+- **Unblocks:** "Describes what happens when a notification is lost, and names the periodic reconciliation scan that repairs it."
+
+#### 2. ADR-0003: Delivery Semantics and Idempotent Execution
+- **Workload Multi-Start Tolerance:** Added explicit requirement that Kubernetes can start containers more than once, requiring workload code to tolerate multiple starts and external systems to implement their own destination fencing/idempotency keys.
+- **Eliminated Erroneous Duplicate Execution Claim:** Replaced claim of "eliminating duplicate execution" with guarantee of idempotent control-plane state transitions and fenced database commits.
+- **Clarified Fencing Boundaries:** Clarified that database lease fencing prevents stale database commits but does not prevent a partitioned process from making external API calls prior to lease expiration.
+- **Job State Machine & Decision D4:** Added the complete job lifecycle state machine including `RECOVERY_PENDING` and Decision D4 (racing cancellation leaves logical job `CANCELLED` while attempt record preserves `SUCCEEDED` with exit code 0; no `CANCEL_REQUESTED → SUCCEEDED` transition).
+- **Idempotency Key Retention:** Documented 24h retention, active check on read (delete-on-read for expired keys), and sweeper ownership in Milestone M1.
+- **Unblocks:** "States that workload code must tolerate being started more than once."
+
+#### 3. ADR-0004: Trust Model, Tenant Isolation, and Security Boundaries
+- **v1 Security Posture:** Stated explicitly: invited users only, reviewed container image allowlist, single Kubernetes cluster, and no anonymous code execution before Milestone M4.
+- **Workload Hardening Baseline:** Renamed §2 to "Workload Hardening Baseline" and added explicit note: *a Kubernetes namespace is a management, naming, and resource quota boundary, NOT a hostile-code security sandbox; tenant pods share the host node's Linux kernel.*
+- **Limits Section (What v1 Does NOT Defend Against):** Added §5 documenting lack of defense against container escapes via shared kernel, CPU/microarchitectural side channels, noisy neighbors beyond standard quotas, malicious code inside allowlisted images, and compromised platform operators/keys.
+- **Test-Proven Isolation Goal:** Replaced absolute isolation assertion with an explicit design goal to be proven in Milestone M4 by end-to-end two-workspace adversarial negative test suites.
+- **Real Tenant Tables Verified Against `pg_constraint`:** Updated §7 to list the exact 10 tenant tables: `applications`, `releases`, `jobs`, `job_attempts`, `execution_intents`, `outbox_events`, `idempotency_records`, `workspace_memberships`, `secret_references`, `quota_reservations`. Noted absence of `deployments`, and that `secrets` is `secret_references` and `quotas` is `quota_reservations`. Documented `audit_events` `ON DELETE SET NULL` (D11) and `consumed_events` non-tenant scope.
+- **Unblocks:** All three ADR-4 boxes.
+
+#### 4. ADR-0005: Technology Stack and Compatibility Matrix
+- **Policy Role vs Tested Matrix:** Added clarification note that ADR-0005 defines architectural policy floors (`3.12+`, `1.23+`, etc.), while the exact tested compatibility matrix with pinned runtime versions, lockfiles, and container digests is maintained in `docs/compatibility-matrix.md` (Task T26).
+
+#### 5. Quality Gates & Done-When Verification
+
+| Done-When Criterion | Scope | Command / Evidence | Status |
+| :--- | :--- | :--- | :---: |
+| ADR-0002 reconciliation matrix | T20 | Scan queries & periods for 4 work categories + outbox purge | **PASS** |
+| ADR-0003 multi-start & state machine | T20 | Workload multi-start requirement, D4, RECOVERY_PENDING | **PASS** |
+| ADR-0004 posture, limits, baseline | T20 | v1 posture, limits section, namespace note, 10 real tables | **PASS** |
+| ADR-0005 policy clarification | T20 | Tested matrix separated to T26 | **PASS** |
+| MASTER-PLAN checklist updated | T20 | 5 ADR boxes ticked, count updated to 28 of 45 | **PASS** |
+| Python test suite | All | `pytest apps/api/tests` (67 passed in 75.97s) | **PASS** |
+| Alembic check (dev DB) | All | `alembic check` on `hamicloud` (0 warnings, no upgrade ops) | **PASS** |
+| Alembic check (test DB) | All | `alembic check` on `hamicloud_test` (0 warnings, no upgrade ops) | **PASS** |
+| Python linter | All | `ruff check apps/api` (0 errors) | **PASS** |
+| Python type checker | All | `mypy --explicit-package-bases app` (29 files, 0 errors) | **PASS** |
+| OpenAPI spec validation | All | `openapi-spec-validator` (contracts/openapi/v1.yaml) | **PASS** |
+| Go runtime tests | All | `go test -v ./...` in `runtime` (all pass) | **PASS** |
+| Go runtime vet | All | `go vet ./...` in `runtime` (clean) | **PASS** |
+| Dev DB row count (D10) | D10 | 368 rows across 14 tables intact (no reset) | **PASS** |
+
+
 
 
 

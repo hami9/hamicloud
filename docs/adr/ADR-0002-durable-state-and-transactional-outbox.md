@@ -70,7 +70,56 @@ We adopt the **Transactional Outbox Pattern** with **Periodic Reconciliation Fal
 
 1. **Atomic Request Acceptance:** An API request is accepted and returned to the caller (`202 Accepted`) ONLY AFTER the single transaction encompassing desired state, idempotency record, and outbox event has successfully committed.
 2. **At-Least-Once Broker Notification:** The outbox dispatcher publishes events to NATS JetStream with stable deterministic UUIDs (`event_id`). If the dispatcher crashes before recording publication, it may publish the event again on restart. Consumers handle duplicates idempotently.
-3. **Reconciliation Fallback:** If NATS is temporarily unavailable, down, or drops a packet, accepted work remains safely recorded in PostgreSQL. The Go scheduler runs a periodic reconciliation query (`SELECT ... WHERE status = 'QUEUED' AND updated_at < NOW() - INTERVAL '30s'`) to recover missed notifications.
+3. **Lost Notification Behavior and Periodic Reconciliation Scans:**
+   If NATS JetStream is temporarily unavailable, drops a notification, partitions from consumers, or the outbox dispatcher crashes before publishing, **accepted work is never lost** because PostgreSQL is the single durable system of record. Notification loss merely delays processing until the next reconciliation tick. To guarantee self-healing convergence, the control plane and runtime run dedicated periodic reconciliation scans covering every category of accepted work:
+   - **Queued Jobs (Period: 30s, Go Scheduler):**
+     ```sql
+     SELECT id, workspace_id, current_attempt_number 
+     FROM jobs 
+     WHERE state = 'QUEUED' 
+       AND updated_at < NOW() - INTERVAL '30 seconds';
+     ```
+     Repairs jobs whose initial `job.submitted.v1` notification was lost, queuing them for execution intent generation.
+   - **Releases with Unapplied Desired Generations (Period: 30s, Go Scheduler/Controller):**
+     ```sql
+     SELECT a.id, a.workspace_id, a.desired_generation, a.current_release_id 
+     FROM applications a
+     LEFT JOIN execution_intents ei 
+       ON ei.release_id = a.current_release_id 
+      AND ei.target_generation = a.desired_generation 
+      AND ei.status IN ('PENDING', 'APPLIED')
+     WHERE a.current_release_id IS NOT NULL 
+       AND ei.id IS NULL 
+       AND a.updated_at < NOW() - INTERVAL '30 seconds';
+     ```
+     Repairs deployments and rollbacks whose `app.deployment.requested.v1` notification was dropped, creating the missing workload execution intent.
+   - **Pending Cancellations (Period: 15s, Go Executor/Reconciler):**
+     ```sql
+     SELECT id, workspace_id, current_attempt_number 
+     FROM jobs 
+     WHERE state = 'CANCEL_REQUESTED' 
+       AND updated_at < NOW() - INTERVAL '15 seconds';
+     ```
+     Repairs jobs whose `job.cancellation.requested.v1` notification was lost or whose container termination timed out, re-asserting teardown against the Kubernetes API.
+   - **Stale PENDING Outbox Events (Period: 10s, Outbox Dispatcher Worker):**
+     ```sql
+     SELECT id, event_id, topic, payload_json 
+     FROM outbox_events 
+     WHERE status = 'PENDING' 
+       AND created_at < NOW() - INTERVAL '10 seconds'
+     ORDER BY created_at ASC 
+     LIMIT 100 
+     FOR UPDATE SKIP LOCKED;
+     ```
+     Repairs events that were committed to the outbox but never received an initial dispatch ACK from NATS JetStream due to dispatcher process restarts.
+
+4. **Outbox Retention and Purge Ownership:**
+   Published outbox events are retained in `outbox_events` for exactly 7 days to facilitate operational troubleshooting, auditing, and re-delivery verification. A dedicated control-plane housekeeping cron worker (owned by the API background maintenance service, running daily at 02:00 UTC) physically purges expired rows:
+   ```sql
+   DELETE FROM outbox_events 
+   WHERE status = 'PUBLISHED' 
+     AND published_at < NOW() - INTERVAL '7 days';
+   ```
 
 ---
 
@@ -79,8 +128,8 @@ We adopt the **Transactional Outbox Pattern** with **Periodic Reconciliation Fal
 ### Positive
 - Guaranteed zero work loss: database failure rolls back the entire request cleanly, and message broker failure never loses committed work.
 - Decoupled latency: API responses are not bound to broker latency or cluster health.
-- Self-healing platform that automatically recovers after broker outages.
+- Self-healing platform that automatically recovers after broker outages across all workloads (jobs, releases, cancellations, outbox).
 
 ### Negative / Tradeoffs
 - Slight latency between database commit and worker wake-up (typically < 15ms with outbox polling/LISTEN-NOTIFY).
-- Outbox table requires periodic vacuuming and cleanup of published events (retained for 7 days for audit/debugging).
+- Outbox table requires periodic vacuuming and cleanup of published events (retained for 7 days, purged by the background housekeeping worker).

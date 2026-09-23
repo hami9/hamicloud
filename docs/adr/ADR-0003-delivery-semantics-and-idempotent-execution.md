@@ -13,18 +13,19 @@ In distributed orchestration systems, network failures, node reboots, and proces
 
 Furthermore, message brokers deliver messages multiple times during network hiccups, and clients submit duplicate HTTP requests when network timeouts occur.
 
-HamiCloud must define mathematically sound delivery and execution semantics that eliminate race conditions, duplicate execution, and state corruption.
+HamiCloud must define mathematically sound delivery and execution semantics that guarantee idempotent control-plane state transitions and fence stale database commits, while acknowledging that physical workload execution is at-least-once.
 
 ---
 
 ## Decision Drivers
 
 1. **Honesty on Distributed Guarantees:** Never claim "exactly-once" execution. Kubernetes workloads and network I/O cannot guarantee exactly-once side effects; the control plane must enforce at-least-once delivery with idempotent transitions.
-2. **Clear Separation of Retry vs. Redelivery:**
+2. **Workload Tolerance of Multiple Starts:** Kubernetes can start a job's program or container more than once (e.g. node evictions, kubelet restarts, API server resyncs). Workload code must tolerate being started more than once, and applications that modify external systems need their own idempotency keys or destination fencing.
+3. **Clear Separation of Retry vs. Redelivery:**
    - **Application Retry:** Failure of a workload run. Creates a brand-new `JobAttempt` with incremented attempt number, logs, and exponential jittered backoff.
    - **Broker Redelivery:** Re-delivery of a message notification for an existing attempt due to worker crash or unacknowledged message. Must NOT consume the application retry budget or increment attempt count.
-3. **Lease Epoch Fencing:** Guard against zombie processes committing updates after losing their lease.
-4. **Deterministic Kubernetes Resource Identifiers:** Repeated create calls must discover existing cluster resources rather than spawning duplicates.
+4. **Lease Epoch Fencing:** Guard against zombie processes committing updates after losing their lease.
+5. **Deterministic Kubernetes Resource Identifiers:** Repeated create calls must discover existing cluster resources rather than spawning duplicates.
 
 ---
 
@@ -33,14 +34,50 @@ HamiCloud must define mathematically sound delivery and execution semantics that
 ### 1. Delivery & Transition Invariants
 - All control-plane events and state transitions are **strictly at-least-once delivered and idempotent**.
 - Re-processing an identical event produces identical database state without side effects.
+- **Workload Multi-Start Invariant:** Because Kubernetes can start a container more than once during cluster disruptions, **workload code must tolerate being started more than once**. Applications that write to external systems must implement their own idempotency mechanisms or fencing at the destination.
 - Idempotency records store `(workspace_id, endpoint, idempotency_key, request_hash, response_code, response_body, expires_at)`.
   - **Retention Contract:** Records are retained for at least 24 hours (`expires_at = NOW() + INTERVAL '24 hours'`).
-  - Active check: The read path checks `expires_at`. If an existing record is expired (`expires_at <= NOW()`), the read path deletes the expired record upon read so the key can be reused immediately, and the incoming request is admitted as a fresh operation.
+  - **Active read check:** The read path checks `expires_at`. If an existing record is expired (`expires_at <= NOW()`), the read path deletes the expired record upon read so the key can be reused immediately, and the incoming request is admitted as a fresh operation.
   - Same key + same hash (unexpired): returns cached `202 Accepted` response immediately.
   - Same key + different hash (unexpired): returns `409 Conflict` (`IDEMPOTENCY_CONFLICT`).
-  - **Sweeper Ownership:** Untouched expired idempotency records that are never read again are physically purged by an asynchronous background sweeper task, owned and scheduled by Milestone M1.
+  - **Sweeper Ownership (T10):** Untouched expired idempotency records that are never read again are physically purged by an asynchronous background sweeper task, owned and scheduled by Milestone M1.
 
-### 2. Execution Lease & Epoch Fencing
+### 2. Job State Machine & Lifecycle (Decision D4)
+The logical job lifecycle is governed by an explicit state transition table shared across the Python control API and Go runtime:
+
+- **States:**
+  - `QUEUED`: Job submitted and persisted, awaiting scheduler evaluation.
+  - `ADMITTED`: Quotas reserved and scheduling constraints satisfied.
+  - `STARTING`: Workload specification submitted to the Kubernetes cluster.
+  - `RUNNING`: Container workload actively executing on an assigned node.
+  - `RETRY_WAIT`: Attempt failed with retry budget remaining; waiting for exponential backoff delay.
+  - `RECOVERY_PENDING`: Node or executor lost contact / lease; awaiting lease timeout or node recovery.
+  - `CANCEL_REQUESTED`: Cancellation requested by client, awaiting container SIGTERM/SIGKILL termination.
+  - `SUCCEEDED`: Terminal success (container exited with status code 0).
+  - `FAILED`: Terminal failure (retry budget exhausted or non-retryable execution error).
+  - `CANCELLED`: Terminal cancellation confirmed.
+
+- **Legal State Transitions:**
+  - `QUEUED → ADMITTED`
+  - `ADMITTED → STARTING`
+  - `STARTING → RUNNING`
+  - `RUNNING → SUCCEEDED`
+  - `RUNNING → RETRY_WAIT` (when `attempt_number < max_retries`)
+  - `RUNNING → FAILED` (when `attempt_number >= max_retries`)
+  - `RETRY_WAIT → QUEUED` (after backoff duration elapses)
+  - `RUNNING → RECOVERY_PENDING` (node lost or lease heartbeat expired)
+  - `RECOVERY_PENDING → RUNNING` (node recovered and lease reacquired)
+  - `RECOVERY_PENDING → FAILED` (recovery timeout exceeded without heartbeat)
+  - `QUEUED → CANCEL_REQUESTED`
+  - `ADMITTED → CANCEL_REQUESTED`
+  - `STARTING → CANCEL_REQUESTED`
+  - `RUNNING → CANCEL_REQUESTED`
+  - `CANCEL_REQUESTED → CANCELLED`
+
+- **Decision D4 (Cancellation Racing Workload Completion):**
+  If a cancellation request races with a finishing workload: the logical job ends in `CANCELLED`; the attempt record retains its true outcome (`SUCCEEDED`) and its actual process `exit_code: 0`. There is explicitly **no** `CANCEL_REQUESTED → SUCCEEDED` edge on the logical job.
+
+### 3. Execution Lease & Epoch Fencing
 To execute a job attempt or reconcile a release, a worker must claim the `ExecutionIntent` in PostgreSQL:
 ```sql
 UPDATE execution_intents
@@ -67,7 +104,7 @@ WHERE id = :attempt_id
 ```
 If zero rows are updated, the worker knows its lease was revoked and its claim was reclaimed by another worker; it aborts without committing.
 
-### 3. Generation-Scoped Kubernetes Resource Naming
+### 4. Generation-Scoped Kubernetes Resource Naming
 Resource names created in Kubernetes follow deterministic conventions:
 - For HTTP Services: `hc-svc-{app_id}-{generation}`
 - For Finite Jobs: `hc-job-{job_id}-{attempt_number}`
@@ -78,7 +115,7 @@ When an executor prepares to create a Kubernetes resource:
 3. If not found, it creates the resource and records the returned `UID`.
 4. Subsequent updates pass Kubernetes `resourceVersion` preconditions.
 
-### 4. Retry Budget & Backoff Policy
+### 5. Retry Budget & Backoff Policy
 - Maximum attempts: 3 attempts total per logical job.
 - Backoff formula: Full-jitter exponential delay:
   $$\text{delay} = \min(\text{cap}, \text{base} \times 2^{\text{attempt}}) \times \text{random}(0, 1)$$
@@ -90,10 +127,13 @@ When an executor prepares to create a Kubernetes resource:
 ## Consequences
 
 ### Positive
-- Total protection against zombie executor updates.
+- Database lease fencing protects database state against stale executor commits (though it cannot prevent a partitioned process from performing external network I/O before lease expiry).
 - Transparent tracking of actual container failures versus platform delivery events.
 - Deterministic reconciliation recovery without orphan Kubernetes resources.
+- Clear expectations for workload developers regarding multi-start tolerance and external side effects.
 
 ### Negative / Tradeoffs
 - Workers must maintain active heartbeats to extend leases for long-running reconciliations.
+- Workloads must be architected to handle repeated starts gracefully or provide external idempotency.
 - Schema requires dedicated columns for `lease_epoch`, `lease_expires_at`, and `claimed_by`.
+

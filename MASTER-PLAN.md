@@ -4,7 +4,7 @@ Single tracking file for both projects. It links the two roadmaps, fixes the exe
 
 **Status legend:** `[ ]` not started · `[~]` in progress · `[x]` closed with a committed evidence record
 
-**Current position:** HamiCloud M0 — open. 23 of 45 boxes pass.
+**Current position:** HamiCloud M0 — open. 28 of 45 boxes pass.
 
 ---
 
@@ -83,21 +83,21 @@ Four records exist, each short and decided — not a list of options.
 **ADR-2 — Durable state**
 
 - [x] States that PostgreSQL owns truth and NATS only wakes processing up.
-- [ ] Describes what happens when a notification is lost, and names the periodic reconciliation scan that repairs it. — **gap:** the named scan (`status = 'QUEUED'`) covers jobs only; a lost deployment or cancellation notification has no repair.
+- [x] Describes what happens when a notification is lost, and names the periodic reconciliation scan that repairs it.
 - [x] States that a missing notification must never erase accepted work.
 
 **ADR-3 — Delivery semantics**
 
 - [x] States **at-least-once** delivery with idempotent control-plane transitions, explicitly.
 - [x] Explicitly rejects any claim of exactly-once execution or exactly-once external side effects.
-- [ ] States that workload code must tolerate being started more than once. — **gap:** absent from ADR-0003, which instead promises to "eliminate … duplicate execution".
+- [x] States that workload code must tolerate being started more than once.
 - [x] Distinguishes an application retry (new attempt) from a broker redelivery (no new attempt).
 
 **ADR-4 — Trust model**
 
-- [ ] States the v1 posture: invited users, reviewed image allowlist, single cluster. — **gap:** none of the three appears in ADR-0004.
-- [ ] Documents the **limits**, not only the controls — what this design does *not* defend against. — **gap:** "Tradeoffs" lists feature limits only; no threats are named.
-- [ ] States that a namespace is a management boundary, not a hostile-code sandbox. — **gap:** ADR-0004 §2 is titled "Workload Sandboxing" and presents the namespace as the sandbox.
+- [x] States the v1 posture: invited users, reviewed image allowlist, single cluster.
+- [x] Documents the **limits**, not only the controls — what this design does *not* defend against.
+- [x] States that a namespace is a management boundary, not a hostile-code sandbox.
 
 ### Initial schema
 

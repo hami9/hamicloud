@@ -26,9 +26,11 @@ HamiCloud locks its technology stack to proven, performant, and well-understood 
 
 ## Decision
 
-### 1. Technology Matrix
+### 1. Technology Policy and Architectural Floors
 
-| Component | Technology | Baseline Version | Rationale & Responsibility |
+*Note: This architecture record defines technology selection policies, architectural responsibilities, and baseline compatibility floors (e.g. `3.12+`, `1.23+`). It is not the empirical test matrix. The exact tested compatibility matrix—recording the specific runtime versions, lockfile hashes, and container image digests proven in green CI runs—is maintained in `docs/compatibility-matrix.md` (Task T26).*
+
+| Component | Technology | Baseline Policy Floor | Rationale & Responsibility |
 | --- | --- | --- | --- |
 | **Control API** | Python / FastAPI | Python 3.12+, FastAPI 0.115+, Pydantic v2 | High developer ergonomics for API validation, auth, and schema migrations. |
 | **ORM & Migrations** | SQLAlchemy & Alembic | SQLAlchemy 2.0+, Alembic 1.14+ | Authoritative owner of database schemas, explicit relational constraints. |

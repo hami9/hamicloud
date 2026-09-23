@@ -72,6 +72,11 @@ HamiCloud must define clear, verifiable security boundaries from day one.
 - **Status:** In M0, tenant membership is enforced against real database `workspace_memberships` records for every tenant route, returning byte-identical 404s for non-members.
 - **Development Seam Notice:** In development mode (`ENVIRONMENT=development`), caller identity is established via the `X-Dev-Subject` header. This is strictly an engineering and development seam (Decision D1) to enable automated test suites and local workflows without an external IdP, and is **NOT a security control**. In any non-development environment (`ENVIRONMENT=production` or `staging`), or when `ENVIRONMENT` is unset, the seam is inactive and the API rejects requests with HTTP 401 Unauthorized until OIDC bearer token authentication lands in Milestone M1.
 
+### 6. Relational Workspace Scoping and Deletion Semantics (Decision D11)
+- **Tenant Table Foreign Keys (`ON DELETE CASCADE`):** All tenant-scoped entities (`applications`, `releases`, `deployments`, `jobs`, `job_attempts`, `execution_intents`, `outbox_events`, `idempotency_records`, `workspace_memberships`, `secrets`, `quotas`) have a mandatory `workspace_id NOT NULL` referencing `workspaces(id)` with `ON DELETE CASCADE`. When a workspace is deleted, all tenant resources, queue intents, idempotency records, and pending/published outbox events are automatically and atomically cascaded.
+- **Audit Event Retention (`ON DELETE SET NULL`):** `audit_events.workspace_id` is nullable and references `workspaces(id)` with `ON DELETE SET NULL`. Audit records must outlive tenant workspace deletion for regulatory compliance, security forensics, and operational audit history.
+- **Deduplication Ledger Scope (`consumed_events`):** `consumed_events` is explicitly exempt from `workspace_id` scoping. It serves exclusively as an internal broker-level deduplication ledger tracking processed NATS JetStream event IDs per handler (`(event_id, handler)`). It is not tenant-owned data, carries no tenant state, and must guarantee handler idempotency across system-level and multi-workspace event processing without tenant coupling.
+
 ---
 
 ## Consequences

@@ -30,7 +30,7 @@ class Application(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     )
     desired_generation: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     current_release_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        Uuid, ForeignKey("releases.id", ondelete="SET NULL"), nullable=True
+        Uuid, ForeignKey("releases.id", ondelete="SET NULL", use_alter=True), nullable=True
     )
 
     workspace: Mapped["Workspace"] = relationship("Workspace", back_populates="applications")

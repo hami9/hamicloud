@@ -947,13 +947,14 @@ def test_t14_outbox_payloads_validate_against_event_schemas(client: TestClient, 
 
     conn = psycopg2.connect(TEST_DATABASE_URL_SYNC)
     with conn.cursor() as cur:
-        cur.execute("SELECT topic, payload_json FROM outbox_events")
+        cur.execute("SELECT topic, payload_json, schema_version FROM outbox_events")
         rows = cur.fetchall()
     conn.close()
 
     assert len(rows) >= 4
 
-    for topic, payload in rows:
+    for topic, payload, schema_version in rows:
+        assert schema_version == 1, f"Expected schema_version == 1 for topic {topic}, got {schema_version}"
         schema_file = os.path.join(EVENTS_DIR, f"{topic}.json")
         assert os.path.exists(schema_file), f"Missing schema for topic {topic}"
         with open(schema_file, "r", encoding="utf-8") as f:

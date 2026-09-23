@@ -103,40 +103,46 @@ def test_constraint_attempt_number_uniqueness(clean_db):
     conn.close()
 
 
-def test_constraint_consumed_event_per_handler():
+def test_constraint_consumed_event_per_handler(clean_db):
     conn = _get_connection()
     cur = conn.cursor()
     event_id = str(uuid.uuid4())
 
-    # Handler A consumes event -> succeeds
-    cur.execute(
-        "INSERT INTO consumed_events (id, event_id, handler, processed_at) VALUES (%s, %s, %s, NOW())",
-        (str(uuid.uuid4()), event_id, "handler_alpha"),
-    )
-    conn.commit()
-
-    # Handler B consumes same event -> succeeds (per-handler uniqueness)
-    cur.execute(
-        "INSERT INTO consumed_events (id, event_id, handler, processed_at) VALUES (%s, %s, %s, NOW())",
-        (str(uuid.uuid4()), event_id, "handler_beta"),
-    )
-    conn.commit()
-
-    # Handler A consumes same event again -> must be rejected
-    with pytest.raises(psycopg2.IntegrityError) as exc_info:
+    try:
+        # Handler A consumes event -> succeeds
         cur.execute(
             "INSERT INTO consumed_events (id, event_id, handler, processed_at) VALUES (%s, %s, %s, NOW())",
             (str(uuid.uuid4()), event_id, "handler_alpha"),
         )
         conn.commit()
 
-    assert "uq_consumed_event_handler" in str(exc_info.value)
-    conn.rollback()
+        # Handler B consumes same event -> succeeds (per-handler uniqueness)
+        cur.execute(
+            "INSERT INTO consumed_events (id, event_id, handler, processed_at) VALUES (%s, %s, %s, NOW())",
+            (str(uuid.uuid4()), event_id, "handler_beta"),
+        )
+        conn.commit()
 
-    # Cleanup
-    cur.execute("DELETE FROM consumed_events WHERE event_id = %s", (event_id,))
-    conn.commit()
-    conn.close()
+        # Handler A consumes same event again -> must be rejected
+        with pytest.raises(psycopg2.IntegrityError) as exc_info:
+            cur.execute(
+                "INSERT INTO consumed_events (id, event_id, handler, processed_at) VALUES (%s, %s, %s, NOW())",
+                (str(uuid.uuid4()), event_id, "handler_alpha"),
+            )
+            conn.commit()
+
+        assert "uq_consumed_event_handler" in str(exc_info.value)
+        conn.rollback()
+    finally:
+        try:
+            conn.rollback()
+            cur.execute("DELETE FROM consumed_events WHERE event_id = %s", (event_id,))
+            conn.commit()
+        except Exception:
+            pass
+        finally:
+            cur.close()
+            conn.close()
 
 
 def test_constraint_intent_uniqueness(clean_db):
@@ -190,41 +196,52 @@ def test_constraint_intent_uniqueness(clean_db):
     conn.close()
 
 
-def test_constraint_orphan_workspace_id():
+def test_constraint_orphan_workspace_id(clean_db):
     conn = _get_connection()
     cur = conn.cursor()
     orphan_ws_id = str(uuid.uuid4())
 
-    # Attempting to insert an application with non-existent workspace_id must fail
-    with pytest.raises(psycopg2.IntegrityError) as exc_info:
-        cur.execute(
-            """
-            INSERT INTO applications 
-            (id, workspace_id, name, slug, workload_type, desired_generation, current_release_id, created_at, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
-            """,
-            (str(uuid.uuid4()), orphan_ws_id, "Orphan App", "orphan-app", "HTTP_SERVICE", 1, None),
-        )
-        conn.commit()
+    try:
+        # Attempting to insert an application with non-existent workspace_id must fail
+        with pytest.raises(psycopg2.IntegrityError) as exc_info:
+            cur.execute(
+                """
+                INSERT INTO applications 
+                (id, workspace_id, name, slug, workload_type, desired_generation, current_release_id, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+                """,
+                (str(uuid.uuid4()), orphan_ws_id, "Orphan App", f"orphan-{orphan_ws_id[:8]}", "HTTP_SERVICE", 1, None),
+            )
+            conn.commit()
 
-    assert "foreign key constraint" in str(exc_info.value).lower()
-    conn.rollback()
+        assert "foreign key constraint" in str(exc_info.value).lower()
+        conn.rollback()
 
-    # Attempting to insert an outbox_event with non-existent workspace_id must fail
-    with pytest.raises(psycopg2.IntegrityError) as exc_info:
-        cur.execute(
-            """
-            INSERT INTO outbox_events 
-            (id, event_id, workspace_id, schema_version, topic, payload_json, headers_json, status, retry_count, created_at, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
-            """,
-            (str(uuid.uuid4()), str(uuid.uuid4()), orphan_ws_id, 1, "test.topic", json.dumps({}), json.dumps({}), "PENDING", 0),
-        )
-        conn.commit()
+        # Attempting to insert an outbox_event with non-existent workspace_id must fail
+        with pytest.raises(psycopg2.IntegrityError) as exc_info:
+            cur.execute(
+                """
+                INSERT INTO outbox_events 
+                (id, event_id, workspace_id, schema_version, topic, payload_json, headers_json, status, retry_count, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+                """,
+                (str(uuid.uuid4()), str(uuid.uuid4()), orphan_ws_id, 1, "test.topic", json.dumps({}), json.dumps({}), "PENDING", 0),
+            )
+            conn.commit()
 
-    assert "foreign key constraint" in str(exc_info.value).lower()
-    conn.rollback()
-    conn.close()
+        assert "foreign key constraint" in str(exc_info.value).lower()
+        conn.rollback()
+    finally:
+        try:
+            conn.rollback()
+            cur.execute("DELETE FROM applications WHERE workspace_id = %s", (orphan_ws_id,))
+            cur.execute("DELETE FROM outbox_events WHERE workspace_id = %s", (orphan_ws_id,))
+            conn.commit()
+        except Exception:
+            pass
+        finally:
+            cur.close()
+            conn.close()
 
 
 def test_constraint_invalid_state_value(clean_db):

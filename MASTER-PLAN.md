@@ -4,7 +4,7 @@ Single tracking file for both projects. It links the two roadmaps, fixes the exe
 
 **Status legend:** `[ ]` not started · `[~]` in progress · `[x]` closed with a committed evidence record
 
-**Current position:** HamiCloud M0 — open. 18 of 45 boxes pass.
+**Current position:** HamiCloud M0 — open. 23 of 45 boxes pass.
 
 ---
 
@@ -103,6 +103,7 @@ Four records exist, each short and decided — not a list of options.
 
 Cheap now, expensive at M2. Verify each exists in the migration, not only in prose.
 
+- [x] Unique constraint on `(workspace, endpoint, idempotency_key)`, plus a stored request-body hash for conflict detection.
 - [x] Unique consumed-event record **per handler**, not per `event_id` alone.
 - [x] Logical job state stored separately from attempt state.
 - [x] `lease_epoch` present on the attempt/intent, and `resource_uid` present for matching the Kubernetes object.

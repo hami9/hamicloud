@@ -1102,5 +1102,39 @@ Scratch database dropped cleanly.
 | Go runtime vet | All | `go vet ./...` in `runtime` (clean) | **PASS** |
 | Dev database row delta | D10 | 368 rows pre-migration -> 368 rows post-migration (0 delta) | **PASS** |
 
+---
+
+### Phase 4 Review Corrections (Post-Review Engineering Refinements)
+
+#### Review Items Addressed & Verified:
+1. **Restored Deleted Checkbox in `MASTER-PLAN.md` §A.1:**
+   - Restored `- [x] Unique constraint on `(workspace, endpoint, idempotency_key)`, plus a stored request-body hash for conflict detection.` under `### Initial schema`.
+   - Preserved all 45 boxes without shrinking the checklist.
+2. **Synchronized `MASTER-PLAN.md` Position Count:**
+   - Updated Current position to: `HamiCloud M0 — open. 23 of 45 boxes pass.`
+3. **Residue-Free & Order-Independent Constraints Suite:**
+   - Added `clean_db` fixture and explicit `try...finally` cleanup blocks to `test_constraint_consumed_event_per_handler` and `test_constraint_orphan_workspace_id` in `apps/api/tests/test_models.py`.
+   - Verified that even under negative testing / constraint falsification (dropped constraints), any inserted rows are cleaned up with 0 residual rows left in `hamicloud_test`.
+4. **Guarded Outbox `schema_version` Invariant:**
+   - Updated `test_t14_outbox_payloads_validate_against_event_schemas` in `apps/api/tests/test_phase3_contracts_idempotency.py` to query and assert `schema_version == 1` across all events emitted by mutating endpoints.
+   - Performed mutation testing: setting `create_outbox_event` default to `schema_version = 0` reliably causes `test_t14` to FAIL (`AssertionError: Expected schema_version == 1 for topic app.deployment.requested.v1, got 0`).
+5. **Documented Decision D11 & Deduplication Ledger Scope in ADR-0004:**
+   - Added Section 6 to `docs/adr/ADR-0004-trust-model-and-tenant-isolation.md` documenting Decision D11: `workspace_id NOT NULL` with `ON DELETE CASCADE` across all tenant entities, and `ON DELETE SET NULL` on `audit_events.workspace_id` (audit records outlive workspaces).
+   - Documented explicit exemption of `consumed_events` from `workspace_id` scoping: internal control-plane broker deduplication ledger, not tenant state.
+6. **Eliminated SQLAlchemy Circular Dependency Warning on `applications` / `releases`:**
+   - Added `use_alter=True` to `Application.current_release_id` foreign key in `apps/api/app/models/application.py`.
+   - Verified that `alembic check` runs completely clean on both `hamicloud` and `hamicloud_test` with zero `SAWarning` emissions and `No new upgrade operations detected.`.
+
+#### Final Verification Summary:
+- **Pytest:** 67 passed in 63.86s
+- **Alembic Check (hamicloud):** Clean, 0 warnings, "No new upgrade operations detected."
+- **Alembic Check (hamicloud_test):** Clean, 0 warnings, "No new upgrade operations detected."
+- **Ruff:** Clean (`All checks passed!`)
+- **Mypy:** Clean (29 source files, 0 errors)
+- **Go Tests (`runtime`):** All packages PASS
+- **Go Vet (`runtime`):** Clean
+- **Dev Database (`hamicloud`):** All 368 rows across 14 tables intact
+
+
 
 

@@ -61,18 +61,22 @@ The logical job lifecycle is governed by an explicit state transition table shar
   - `QUEUED → ADMITTED`
   - `ADMITTED → STARTING`
   - `STARTING → RUNNING`
-  - `RUNNING → SUCCEEDED`
-  - `RUNNING → RETRY_WAIT` (when `attempt_number < max_retries`)
-  - `RUNNING → FAILED` (when `attempt_number >= max_retries`)
-  - `RETRY_WAIT → QUEUED` (after backoff duration elapses)
-  - `RUNNING → RECOVERY_PENDING` (node lost or lease heartbeat expired)
-  - `RECOVERY_PENDING → RUNNING` (node recovered and lease reacquired)
-  - `RECOVERY_PENDING → FAILED` (recovery timeout exceeded without heartbeat)
-  - `QUEUED → CANCEL_REQUESTED`
-  - `ADMITTED → CANCEL_REQUESTED`
-  - `STARTING → CANCEL_REQUESTED`
-  - `RUNNING → CANCEL_REQUESTED`
-  - `CANCEL_REQUESTED → CANCELLED`
+  - `STARTING → RETRY_WAIT` (pod creation or scheduling failure with retries remaining)
+  - `STARTING → FAILED` (pod specification rejected or retry budget exhausted)
+  - `RUNNING → SUCCEEDED` (workload process exited with status code 0)
+  - `RUNNING → RETRY_WAIT` (workload failed with retries remaining)
+  - `RUNNING → FAILED` (workload failed with retries exhausted)
+  - `RETRY_WAIT → QUEUED` (backoff duration elapsed; re-entering queue for next attempt)
+  - `QUEUED → CANCEL_REQUESTED` (cancellation requested before admission)
+  - `ADMITTED → CANCEL_REQUESTED` (cancellation requested before pod start)
+  - `STARTING → CANCEL_REQUESTED` (cancellation requested while pod is starting)
+  - `RUNNING → CANCEL_REQUESTED` (cancellation requested while container is running)
+  - `RETRY_WAIT → CANCEL_REQUESTED` (cancellation requested while waiting out retry backoff)
+  - `RUNNING → RECOVERY_PENDING`: Active attempt's node becomes unreachable or loses lease heartbeat before termination is confirmed.
+  - `RECOVERY_PENDING → RETRY_WAIT`: Previous workload on the lost node is confirmed terminated and retries remain for a new attempt.
+  - `RECOVERY_PENDING → FAILED`: Recovery timeout expires without termination confirmation or retry budget is exhausted.
+  - `RECOVERY_PENDING → CANCEL_REQUESTED`: Client requests cancellation while the job is in recovery pending state.
+  - `CANCEL_REQUESTED → CANCELLED` (workload termination confirmed)
 
 - **Decision D4 (Cancellation Racing Workload Completion):**
   If a cancellation request races with a finishing workload: the logical job ends in `CANCELLED`; the attempt record retains its true outcome (`SUCCEEDED`) and its actual process `exit_code: 0`. There is explicitly **no** `CANCEL_REQUESTED → SUCCEEDED` edge on the logical job.

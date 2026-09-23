@@ -82,14 +82,16 @@ We adopt the **Transactional Outbox Pattern** with **Periodic Reconciliation Fal
      Repairs jobs whose initial `job.submitted.v1` notification was lost, queuing them for execution intent generation.
    - **Releases with Unapplied Desired Generations (Period: 30s, Go Scheduler/Controller):**
      ```sql
-     SELECT a.id, a.workspace_id, a.desired_generation, a.current_release_id 
+     SELECT a.id, a.workspace_id, a.desired_generation 
      FROM applications a
-     LEFT JOIN execution_intents ei 
-       ON ei.release_id = a.current_release_id 
-      AND ei.target_generation = a.desired_generation 
-      AND ei.status IN ('PENDING', 'APPLIED')
-     WHERE a.current_release_id IS NOT NULL 
-       AND ei.id IS NULL 
+     WHERE EXISTS (SELECT 1 FROM releases r WHERE r.application_id = a.id)
+       AND NOT EXISTS (
+           SELECT 1 FROM execution_intents ei 
+           JOIN releases r ON r.id = ei.release_id
+           WHERE r.application_id = a.id 
+             AND ei.target_generation = a.desired_generation
+             AND ei.status IN ('PENDING', 'CLAIMED', 'APPLIED')
+       )
        AND a.updated_at < NOW() - INTERVAL '30 seconds';
      ```
      Repairs deployments and rollbacks whose `app.deployment.requested.v1` notification was dropped, creating the missing workload execution intent.

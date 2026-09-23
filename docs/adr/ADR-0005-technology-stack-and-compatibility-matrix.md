@@ -28,7 +28,7 @@ HamiCloud locks its technology stack to proven, performant, and well-understood 
 
 ### 1. Technology Policy and Architectural Floors
 
-*Note: This architecture record defines technology selection policies, architectural responsibilities, and baseline compatibility floors (e.g. `3.12+`, `1.23+`). It is not the empirical test matrix. The exact tested compatibility matrix—recording the specific runtime versions, lockfile hashes, and container image digests proven in green CI runs—is maintained in `docs/compatibility-matrix.md` (Task T26).*
+*Note: This architecture record defines technology selection policies, architectural responsibilities, and baseline compatibility floors (e.g. `3.12+`, `1.23+`). It is not the empirical test matrix. The exact tested compatibility matrix—recording the specific runtime versions, lockfile hashes, and container image digests proven in green CI runs—is created by Task T26 and maintained in `docs/compatibility-matrix.md`.*
 
 | Component | Technology | Baseline Policy Floor | Rationale & Responsibility |
 | --- | --- | --- | --- |

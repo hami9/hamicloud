@@ -1139,7 +1139,7 @@ Scratch database dropped cleanly.
 
 ### Phase 5 — Design Records (T20: ADR Fixes)
 
-**Commit:** Pending Phase 5 Commit  
+**Commit:** `878c0f4`  
 **Status:** COMPLETED & VERIFIED  
 **Milestone Position:** 28 of 45 boxes pass (+5 boxes closed)
 

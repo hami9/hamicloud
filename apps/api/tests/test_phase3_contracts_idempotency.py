@@ -1889,3 +1889,139 @@ def test_t13_live_responses_match_documented_response_examples(client: TestClien
     assert live_409["error_code"] == doc_409_conflict["error_code"]
     assert live_409["message"] == doc_409_conflict["message"]
 
+
+def test_t20_adr0002_reconciliation_scans_match_live_database(client: TestClient, clean_db):
+    """Verify all four documented ADR-0002 periodic reconciliation queries discover real accepted work."""
+    ws_id, app_id, auth_headers = create_test_workspace_and_app(client)
+
+    conn = psycopg2.connect(TEST_DATABASE_URL_SYNC)
+    conn.autocommit = True
+    cur = conn.cursor()
+
+    # 1. Release reconciliation scan (ADR-0002 §3.2)
+    # Perform a real deploy via client
+    deploy_key = f"k-dep-{uuid.uuid4().hex[:6]}"
+    dep_res = client.post(
+        f"/v1/apps/{app_id}/deployments",
+        json={
+            "image_digest": "registry.example.com/app@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "port": 8080,
+        },
+        headers={"Idempotency-Key": deploy_key, **auth_headers},
+    )
+    assert dep_res.status_code == 202
+
+    # Query desired_generation from applications
+    cur.execute("SELECT desired_generation FROM applications WHERE id = %s", (app_id,))
+    desired_gen = cur.fetchone()[0]
+
+    # Age the application record beyond the 30-second reconciliation threshold
+    cur.execute("UPDATE applications SET updated_at = NOW() - INTERVAL '35 seconds' WHERE id = %s", (app_id,))
+
+    # Run the exact documented query from ADR-0002:
+    scan_releases_sql = """
+    SELECT a.id, a.workspace_id, a.desired_generation 
+    FROM applications a
+    WHERE EXISTS (SELECT 1 FROM releases r WHERE r.application_id = a.id)
+      AND NOT EXISTS (
+          SELECT 1 FROM execution_intents ei 
+          JOIN releases r ON r.id = ei.release_id
+          WHERE r.application_id = a.id 
+            AND ei.target_generation = a.desired_generation
+            AND ei.status IN ('PENDING', 'CLAIMED', 'APPLIED')
+      )
+      AND a.updated_at < NOW() - INTERVAL '30 seconds';
+    """
+    cur.execute(scan_releases_sql)
+    unapplied_apps = [(str(r[0]), str(r[1]), r[2]) for r in cur.fetchall()]
+    assert (app_id, ws_id, desired_gen) in unapplied_apps
+
+    # Verify that claiming/applying an intent eliminates it from the scan results
+    cur.execute("SELECT id FROM releases WHERE application_id = %s ORDER BY created_at DESC LIMIT 1", (app_id,))
+    release_id = cur.fetchone()[0]
+    intent_id = str(uuid.uuid4())
+    cur.execute(
+        """
+        INSERT INTO execution_intents 
+        (id, workspace_id, resource_type, job_attempt_id, release_id, target_generation, deterministic_resource_name, status, lease_epoch, created_at, updated_at)
+        VALUES (%s, %s, 'SERVICE_RELEASE', NULL, %s, %s, %s, 'CLAIMED', 0, NOW(), NOW())
+        """,
+        (intent_id, ws_id, release_id, desired_gen, f"intent-{release_id}-{desired_gen}"),
+    )
+    cur.execute(scan_releases_sql)
+    assert (app_id, ws_id, desired_gen) not in [(str(r[0]), str(r[1]), r[2]) for r in cur.fetchall()]
+
+    # 2. Queued jobs reconciliation scan (ADR-0002 §3.1)
+    # Perform a real job submission via client
+    job_key = f"k-job-{uuid.uuid4().hex[:6]}"
+    j_res = client.post(
+        f"/v1/workspaces/{ws_id}/jobs",
+        json={
+            "name": "scan-test-job",
+            "image_digest": "registry.example.com/job@sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        },
+        headers={"Idempotency-Key": job_key, **auth_headers},
+    )
+    assert j_res.status_code == 202
+    job_id = j_res.json()["operation_id"]
+
+    # Age the job record beyond the 30-second threshold
+    cur.execute("UPDATE jobs SET updated_at = NOW() - INTERVAL '35 seconds' WHERE id = %s", (job_id,))
+
+    scan_jobs_sql = """
+    SELECT id, workspace_id, current_attempt_number 
+    FROM jobs 
+    WHERE state = 'QUEUED' 
+      AND updated_at < NOW() - INTERVAL '30 seconds';
+    """
+    cur.execute(scan_jobs_sql)
+    queued_jobs = [(str(r[0]), str(r[1]), r[2]) for r in cur.fetchall()]
+    assert (job_id, ws_id, 0) in queued_jobs
+
+    # 3. Pending cancellations reconciliation scan (ADR-0002 §3.3)
+    # Perform a real cancellation on that job via client
+    cancel_key = f"k-cancel-{uuid.uuid4().hex[:6]}"
+    c_res = client.post(
+        f"/v1/jobs/{job_id}/cancel",
+        headers={"Idempotency-Key": cancel_key, **auth_headers},
+    )
+    assert c_res.status_code == 202
+
+    # Age the cancelled job beyond the 15-second threshold
+    cur.execute("UPDATE jobs SET updated_at = NOW() - INTERVAL '20 seconds' WHERE id = %s", (job_id,))
+
+    scan_cancels_sql = """
+    SELECT id, workspace_id, current_attempt_number 
+    FROM jobs 
+    WHERE state = 'CANCEL_REQUESTED' 
+      AND updated_at < NOW() - INTERVAL '15 seconds';
+    """
+    cur.execute(scan_cancels_sql)
+    cancellations = [(str(r[0]), str(r[1]), r[2]) for r in cur.fetchall()]
+    assert (job_id, ws_id, 0) in cancellations
+
+    # 4. Stale PENDING outbox events scan (ADR-0002 §3.4)
+    # Query a pending outbox event created by the job/deploy calls
+    cur.execute("SELECT id FROM outbox_events WHERE workspace_id = %s AND status = 'PENDING' LIMIT 1", (ws_id,))
+    outbox_id = cur.fetchone()[0]
+
+    # Age the outbox event beyond the 10-second threshold
+    cur.execute("UPDATE outbox_events SET created_at = NOW() - INTERVAL '15 seconds' WHERE id = %s", (outbox_id,))
+
+    scan_outbox_sql = """
+    SELECT id, event_id, topic, payload_json 
+    FROM outbox_events 
+    WHERE status = 'PENDING' 
+      AND created_at < NOW() - INTERVAL '10 seconds'
+    ORDER BY created_at ASC 
+    LIMIT 100 
+    FOR UPDATE SKIP LOCKED;
+    """
+    cur.execute(scan_outbox_sql)
+    stale_outbox = [str(row[0]) for row in cur.fetchall()]
+    assert str(outbox_id) in stale_outbox
+
+    cur.close()
+    conn.close()
+
+

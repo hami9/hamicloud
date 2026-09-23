@@ -1,215 +1,169 @@
-# HamiCloud — Distributed Application Runtime
+# HamiCloud
 
-[![CI](https://github.com/hami9/hamicloud/actions/workflows/ci.yml/badge.svg)](https://github.com/hami9/hamicloud/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![Milestone](https://img.shields.io/badge/Milestone-M0%3A%20Design%20Baseline-orange.svg)](#milestones)
+HamiCloud is a self-hosted distributed application runtime designed to run HTTP services and finite background jobs on Kubernetes. It provides a control plane backed by PostgreSQL with durable execution intents, transactional outbox events, and deterministic state machine transitions. The system focuses on explicit operational boundaries, durable audit trails, and automated recovery when components fail.
 
-> **Deploy an HTTP service, run a finite background job, observe what happened, and recover when something fails.**
+## Current Status
 
-HamiCloud is a self-hosted distributed application runtime built for developers operating internal services and background tasks on a single Kubernetes cluster. It provides a hardened control plane with durable execution intents, transactional outbox dispatch, at-least-once notifications, and automated failure recovery.
+HamiCloud is in an early, design-baseline stage (Milestone M0). Currently implemented in the repository:
 
----
+- Control API skeleton built with FastAPI, providing core tenant, application, job, deployment, and idempotency endpoints.
+- PostgreSQL schema and Alembic migrations defining durable state, attempts, execution intents, and the transactional outbox.
+- Published OpenAPI 3.1 specification for the v1 control plane API.
+- Go domain model stubs and state machine transition rules for the runtime executor and scheduler.
 
-## 1. System Architecture & Ownership Boundaries
+Features such as secret encryption, rate limiting, the web dashboard, and Helm packaging are planned for subsequent milestones and do not exist yet.
+
+## How this project is built
+
+HamiCloud is designed and directed by @hami9 and implemented with AI coding agents.
+
+- The owner writes the roadmap, sets the scope of each milestone and makes the design
+  decisions. Open questions are recorded as numbered decisions and wait for the owner's
+  answer before work continues (see M0-WORK-ORDER.md, section 2).
+- Antigravity, an AI coding agent, implements each phase from a written work order.
+- Claude Code reviews every phase independently: it re-runs the tests, runs mutation
+  tests and live probes, and rejects work whose claims it cannot reproduce.
+- Each phase is accepted by the owner before the next one starts.
+
+Progress is tracked in MASTER-PLAN.md. The engineering log is WORKLOG.md.
+
+## Target Architecture
+
+The following diagram represents the planned target architecture for the system:
 
 ```mermaid
 flowchart TB
-    U[Developer] --> UI[Web Dashboard\nReact / Vite / Tailwind]
-    UI --> API[Control API\nFastAPI / Pydantic / SQLAlchemy]
-    IDP[OIDC Identity Provider\nKeycloak] --> API
-    API --> DB[(PostgreSQL 16\nDesired State & Outbox)]
-    API --> REDIS[(Redis 7.2\nRate Limits & Cache)]
+    U[Developer / Client] --> API[Control API\nFastAPI]
+    API --> DB[(PostgreSQL 16\nState & Outbox)]
     DB --> DISPATCH[Outbox Dispatcher]
-    DISPATCH --> BUS[NATS JetStream 2.10\nWork Notifications]
-    BUS --> SCHED[Go Scheduler\nAdmission & Fair Quotas]
+    DISPATCH --> BUS[NATS JetStream\nWork Notifications]
+    BUS --> SCHED[Go Scheduler]
     SCHED --> DB
-    SCHED --> EXEC[Durable Execution Intents]
-    EXEC --> WORK[Go Execution Workers\nReconciliation Loop]
-    WORK --> KAPI[Kubernetes API 1.30+]
-    KAPI --> APP[HTTP Services\nDeployment & Service]
-    KAPI --> JOB[Finite Workloads\nKubernetes Job]
-    WORK --> BUILD[Isolated BuildKit\nContainer Builds]
-    BUILD --> REG[OCI Image Registry]
-    REG --> APP
-    REG --> JOB
-    JOB --> STORE[(Object Storage / S3\nJob Artifacts)]
+    SCHED --> EXEC[Execution Intents]
+    EXEC --> WORK[Go Execution Workers]
+    WORK --> KAPI[Kubernetes API]
+    KAPI --> APP[HTTP Services]
+    KAPI --> JOB[Finite Jobs]
     WORK --> DB
-    APP --> ROUTE[Traefik HTTPS Routing]
-    ROUTE --> CLIENT[Application Traffic]
-    API -.-> OTEL[OpenTelemetry Collector]
-    SCHED -.-> OTEL
-    WORK -.-> OTEL
-    OTEL --> OBS[Prometheus / Grafana / Loki / Tempo]
 ```
 
-### Strict Responsibility Boundaries
+### Component Responsibilities
 
-| Component | Responsibility | Non-Negotiable Boundary |
-| --- | --- | --- |
-| **FastAPI Control API** | Product access, authentication, authorization, input validation, desired-state transactions, public API contract. | Never schedules workloads directly or interacts with Kubernetes APIs. |
-| **Go Scheduler** | Admission control, workspace quota reservation, fair queuing, retry backoff timing, execution intent creation. | Decides *what* and *when* work is eligible; never decides *where* pods run. |
-| **Go Execution Workers** | Reconciles execution intents with Kubernetes API, observes container status, updates actual state. | Claims work via bounded leases; generation & epoch fenced against stale updates. |
-| **Kubernetes** | Pod placement, container lifecycle, node scheduling, resource enforcement. | Managed via deterministic, generation-scoped resources; does not own application retry semantics. |
-| **PostgreSQL** | Single source of durable truth (state, attempts, releases, outbox, idempotency). | Queue messages only wake workers up; lost notifications never erase accepted work. |
-| **NATS JetStream** | Durable at-least-once message delivery with explicit acknowledgment. | Not a database; consumers acknowledge only after durable intent is committed. |
-| **Redis** | Atomic token buckets for rate limiting, short-lived cache. | Never used as a durable queue; database quotas remain authoritative across cache loss. |
+- **Control API (FastAPI):** Validates input, records tenant requests, writes desired state and outbox events within PostgreSQL transactions, and serves the public HTTP contract. It does not schedule workloads or call Kubernetes APIs directly.
+- **Scheduler (Go):** Evaluates queued jobs and unapplied releases, reserves workspace quotas, and creates durable execution intents in PostgreSQL. It determines when work is eligible to run, while Kubernetes handles pod placement.
+- **Execution Workers (Go):** Reconciles execution intents with the Kubernetes API using lease epochs, updates attempt outcomes, and cleans up terminated workloads.
+- **PostgreSQL:** Authoritative store of system truth (state, attempts, releases, outbox events, and idempotency records). Queue messages only serve as wake-up notifications.
+- **NATS JetStream:** Transports at-least-once notifications between the control plane and background workers.
+- **Kubernetes:** Runs containers, manages pod lifecycles, and enforces resource limits.
 
----
+## Local Setup
 
-## 2. Workload Lifecycles & State Machines
+### Prerequisites
 
-### Job State Lifecycle
-```text
-QUEUED -> ADMITTED -> STARTING -> RUNNING -> SUCCEEDED
-                         |          |
-                         +----------+-> RETRY_WAIT -> QUEUED
-                         +----------+-> FAILED -> Dead-Letter Entry
-Any active state -> CANCEL_REQUESTED -> CANCELLED
+- Python 3.12+
+- Go 1.23+
+- Docker and Docker Compose
+- PostgreSQL 16 (local installation or via Docker Compose)
+
+### 1. Start Infrastructure Services
+
+Start the local background services (PostgreSQL, NATS JetStream, MinIO):
+
+```bash
+docker compose -f deploy/compose/docker-compose.yml up -d
 ```
 
-- **Logical Job vs. Attempt:** A logical job tracks overall intent; each run execution is an immutable `JobAttempt`.
-- **Application Retry vs. Broker Redelivery:** An application retry creates a new attempt with backoff; a broker redelivery reprocesses the current notification without incrementing attempts.
-- **Lease Epoch & Fencing:** Workers acquire intent claims using bounded lease epochs. A stale process cannot commit state past its epoch expiration.
+### 2. Configure Python Environment
 
-### Service Release Lifecycle
-```text
-REQUESTED -> BUILDING -> IMAGE_READY -> DEPLOYING -> HEALTHY
-                |                         |
-                +-> BUILD_FAILED          +-> DEPLOY_FAILED
-Rollback:
-New Release -> Previous Image Digest + Prior Config -> Verification
+Create a virtual environment and install the API package with development dependencies:
+
+```bash
+python -m venv .venv
+
+# On Linux/macOS:
+source .venv/bin/activate
+
+# On Windows:
+.venv\Scripts\activate
+
+pip install -e "./apps/api[dev]"
 ```
 
----
+### 3. Run Database Migrations
 
-## 3. Technology Stack & Pinned Baseline
+Apply database migrations using Alembic:
 
-| Layer | Technology | Pinned Version | Responsibility |
-| --- | --- | --- | --- |
-| **Control Plane API** | Python / FastAPI / SQLAlchemy / Pydantic | Python 3.12+, FastAPI 0.115+, Pydantic v2 | Public API, validation, auth, transactional outbox |
-| **Orchestration Runtime** | Go / `client-go` / `pgx` | Go 1.23+, `client-go` v0.31+, `pgx` v5 | Admission, quota enforcement, Kubernetes reconciliation |
-| **Durable Database** | PostgreSQL | PostgreSQL 16 Alpine | Primary datastore, ACID transactions, outbox table |
-| **Message Broker** | NATS JetStream | NATS 2.10+ | Durable work dispatch with at-least-once delivery |
-| **Rate Limiter & Cache** | Redis | Redis 7.2 Alpine | Atomic token-bucket rate limits, non-durable cache |
-| **Execution Platform** | Kubernetes / containerd | Kubernetes 1.30+ | Containerized pod lifecycle, scheduling |
-| **Routing / Ingress** | Traefik | Traefik v3.1+ | Ingress routing, TLS termination, path routing |
-| **Telemetry** | OpenTelemetry | OTel Collector, Prometheus, Loki, Tempo | Traces, metrics, structured logs |
-| **Identity & Auth** | OIDC (OAuth2 / PKCE) | Keycloak 24+ (or mock OIDC in dev) | Workspaces, tenant identity, JWT bearer tokens |
+```bash
+# On Linux/macOS:
+DATABASE_URL="postgresql+asyncpg://postgres:postgres@localhost:5432/hamicloud" alembic -c migrations/alembic.ini upgrade head
 
----
+# On Windows (PowerShell):
+$env:DATABASE_URL="postgresql+asyncpg://postgres:postgres@localhost:5432/hamicloud"
+alembic -c migrations/alembic.ini upgrade head
+```
 
-## 4. Repository Structure
+### 4. Run Verification Gates
+
+Verify tests, types, linting, specs, and database alignment:
+
+```bash
+# Run API test suite
+pytest apps/api/tests
+
+# Check formatting and linting
+ruff check apps/api
+
+# Type check
+cd apps/api && mypy --explicit-package-bases app && cd ../..
+
+# Verify database migrations are aligned with models
+alembic -c migrations/alembic.ini check
+
+# Validate OpenAPI contract
+openapi-spec-validator contracts/openapi/v1.yaml
+
+# Run Go runtime checks and tests
+cd runtime
+go vet ./...
+go test -v ./...
+cd ..
+```
+
+### 5. Start the Control API
+
+Run the development API server:
+
+```bash
+cd apps/api
+uvicorn app.main:app --reload --port 8000
+```
+
+In development (`ENVIRONMENT=development`), requests authenticate using the header `X-Dev-Subject: <username>`. In production, this header is disabled and the API requires Bearer authentication.
+
+## Repository Layout
 
 ```text
 hamicloud/
   apps/
-    api/                    # FastAPI control plane service
-    web/                    # React / TypeScript / Vite dashboard
+    api/                      # FastAPI control plane service and test suite
+  contracts/
+    events/                   # NATS JetStream event schemas
+    openapi/                  # OpenAPI 3.1 specification
+  deploy/
+    compose/                  # Local development compose definitions
+  docs/
+    adr/                      # Architecture Decision Records
+  migrations/                 # Alembic database migrations
+    versions/                 # Migration version scripts
   runtime/
     cmd/
-      hamicloud-scheduler/  # Scheduler process entry point
-      hamicloud-executor/   # Executor process entry point
+      hamicloud-executor/     # Worker daemon entry point
+      hamicloud-scheduler/    # Scheduler daemon entry point
     internal/
-      admission/            # Quota checking & fair admission
-      domain/               # Core state machines & domain models
-      reconciliation/       # Kubernetes controller reconciliation
-      outbox/               # Event dispatch & deduplication
-  contracts/
-    openapi/                # OpenAPI 3.1 contracts
-    events/                 # NATS JetStream JSON Schemas
-  migrations/               # Alembic database migrations
-  deploy/
-    compose/                # Local development stack (Postgres, Redis, NATS)
-    helm/                   # Production Kubernetes packaging
-  examples/
-    http-service/           # Sample stateless HTTP service
-    finite-job/             # Sample finite processing job
-  tests/
-    concurrency/            # Go race condition & lease conflict tests
-    e2e/                    # End-to-end user journey tests
-    isolation/              # Multi-tenant boundary tests
-  docs/
-    adr/                    # Architecture Decision Records
-    runbooks/               # Incident and recovery procedures
-    evidence/               # Milestone exit verification records
-  WORKLOG.md                # Real-time engineering activity and audit log
+      config/                 # Runtime configuration and environment parsing
+      domain/                 # Workload state machine and domain definitions
 ```
 
----
-
-## 5. Local Quickstart (Development Environment)
-
-### Prerequisites
-- Docker & Docker Compose (v2.20+)
-- Python 3.12+ (or run via container)
-- Go 1.23+ (or run via container)
-- Git
-
-### 1. Start Core Infrastructure
-```bash
-# Clone the repository
-git clone https://github.com/hami9/hamicloud.git
-cd hamicloud
-
-# Copy local environment settings
-cp .env.example .env
-
-# Start PostgreSQL, Redis, and NATS JetStream
-docker compose -f deploy/compose/docker-compose.yml up -d
-```
-
-### 2. Apply Database Migrations
-```bash
-cd apps/api
-python -m venv .venv
-# On Linux/macOS: source .venv/bin/activate
-# On Windows: .venv\Scripts\activate
-pip install -e ".[dev]"
-alembic -c ../../migrations/alembic.ini upgrade head
-```
-
-### 3. Start Control API
-```bash
-uvicorn app.main:app --reload --port 8000
-```
-### 4. Development Authentication Seam (M0)
-In Milestone M0, before full OIDC authentication arrives in M1, the Control API provides a development seam (Decision D1):
-- **Header:** `X-Dev-Subject: <subject-identifier>`
-- **Condition:** Active **only** when `ENVIRONMENT=development`. In any other environment (`production`, `staging`) or when unset, the API rejects requests with `401 Unauthorized` (`WWW-Authenticate: Bearer`).
-- **Example request:**
-```bash
-# Create a workspace as authenticated subject "alice" (recorded as OWNER):
-curl -s -X POST http://localhost:8000/v1/workspaces \
-  -H "Content-Type: application/json" \
-  -H "X-Dev-Subject: alice" \
-  -d '{"name": "Engineering", "slug": "engineering"}' | jq
-```
-
----
-
-## 6. Milestones & Progress
-
-| Phase | Milestone | Focus | Target Evidence | Status |
-| --- | --- | --- | --- | --- |
-| **P0** | **M0: Design Baseline** | Contracts, ADRs, schema, initial skeletons, CI | ADRs approved, passing baseline tests, OpenAPI spec | **IN PROGRESS** |
-| **P1** | **M1: First Live Application** | OIDC, workspace API, Kubernetes service deployment | Working HTTP service URL via UI; rollout visibility | PLANNED |
-| **P2** | **M2: Usable MVP** | JetStream dispatch, finite jobs, retries, rollback | MVP checklist passes; failure recovery demos | PLANNED |
-| **P3** | **M3: Source-to-URL** | Git webhooks, BuildKit executor, immutable digest deploy | Reproducible source builds; failed build recovery | PLANNED |
-| **P4** | **M4: Multi-User Readiness** | RBAC, namespace isolation, quotas, encrypted secrets | Two-workspace isolation & negative tests pass | PLANNED |
-| **P5** | **M5: Operational Evidence** | Telemetry, benchmarks, restore drill, runbooks | Benchmark report, RTO <= 60m restore drill | PLANNED |
-| **P6** | **M6: HamiCloud v1.0** | Helm packaging, verification gates, public release | Definition of Done complete with linked evidence | PLANNED |
-
----
-
-## 7. Security & Tenant Isolation Model
-
-- **Workload Sandboxing:** Namespaces enforce tenant separation with Kubernetes `Restricted` Pod Security Standards. Host mounts, host namespaces, and privileged containers are strictly forbidden.
-- **Secrets Management:** Secrets are encrypted at rest using AES-256-GCM. Plaintext secrets are NEVER written to event bodies, logs, traces, or database audit trails.
-- **Origin Separation:** Tenant applications are served from isolated origins separate from the control dashboard. Dashboard cookies are strictly host-scoped with `HttpOnly` and `SameSite=Lax`.
-- **Untrusted Outputs:** All application logs and build outputs are sanitized before dashboard rendering to prevent stored XSS.
-
----
-
-## 8. License
+## License
 
 Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.

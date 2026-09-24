@@ -1266,7 +1266,7 @@ components:
           example: 1
         state:
           type: string
-          enum: [QUEUED, ADMITTED, STARTING, RUNNING, SUCCEEDED, RETRY_WAIT, FAILED, CANCEL_REQUESTED, CANCELLED]
+          enum: [QUEUED, ADMITTED, STARTING, RUNNING, SUCCEEDED, RETRY_WAIT, RECOVERY_PENDING, FAILED, CANCEL_REQUESTED, CANCELLED]
           example: "RUNNING"
         resource_uid:
           type: [string, 'null']
@@ -1315,7 +1315,7 @@ components:
           example: "nightly-backup"
         state:
           type: string
-          enum: [QUEUED, ADMITTED, STARTING, RUNNING, SUCCEEDED, RETRY_WAIT, FAILED, CANCEL_REQUESTED, CANCELLED]
+          enum: [QUEUED, ADMITTED, STARTING, RUNNING, SUCCEEDED, RETRY_WAIT, RECOVERY_PENDING, FAILED, CANCEL_REQUESTED, CANCELLED]
           example: "QUEUED"
         current_attempt_number:
           type: integer

@@ -86,7 +86,7 @@ def upgrade() -> None:
     op.create_check_constraint(
         "ck_job_attempts_state",
         "job_attempts",
-        "state IN ('QUEUED', 'ADMITTED', 'STARTING', 'RUNNING', 'SUCCEEDED', 'RETRY_WAIT', 'FAILED', 'CANCEL_REQUESTED', 'CANCELLED')",
+        "state IN ('QUEUED', 'ADMITTED', 'STARTING', 'RUNNING', 'SUCCEEDED', 'RETRY_WAIT', 'RECOVERY_PENDING', 'FAILED', 'CANCEL_REQUESTED', 'CANCELLED')",
     )
 
     # ---------------------------------------------------------
@@ -207,7 +207,7 @@ def upgrade() -> None:
     op.create_check_constraint(
         "ck_jobs_state",
         "jobs",
-        "state IN ('QUEUED', 'ADMITTED', 'STARTING', 'RUNNING', 'SUCCEEDED', 'RETRY_WAIT', 'FAILED', 'CANCEL_REQUESTED', 'CANCELLED')",
+        "state IN ('QUEUED', 'ADMITTED', 'STARTING', 'RUNNING', 'SUCCEEDED', 'RETRY_WAIT', 'RECOVERY_PENDING', 'FAILED', 'CANCEL_REQUESTED', 'CANCELLED')",
     )
     op.create_check_constraint(
         "ck_workspace_memberships_role",

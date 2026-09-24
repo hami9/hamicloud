@@ -13,10 +13,11 @@ const (
 	StateAdmitted        JobState = "ADMITTED"
 	StateStarting        JobState = "STARTING"
 	StateRunning         JobState = "RUNNING"
-	StateSucceeded       JobState = "SUCCEEDED"
 	StateRetryWait       JobState = "RETRY_WAIT"
-	StateFailed          JobState = "FAILED"
+	StateRecoveryPending JobState = "RECOVERY_PENDING"
 	StateCancelRequested JobState = "CANCEL_REQUESTED"
+	StateSucceeded       JobState = "SUCCEEDED"
+	StateFailed          JobState = "FAILED"
 	StateCancelled       JobState = "CANCELLED"
 )
 
@@ -30,13 +31,10 @@ var legalTransitions = map[JobState]map[JobState]bool{
 	StateQueued: {
 		StateAdmitted:        true,
 		StateCancelRequested: true,
-		StateCancelled:       true,
 	},
 	StateAdmitted: {
 		StateStarting:        true,
 		StateCancelRequested: true,
-		StateCancelled:       true,
-		StateFailed:          true,
 	},
 	StateStarting: {
 		StateRunning:         true,
@@ -49,20 +47,36 @@ var legalTransitions = map[JobState]map[JobState]bool{
 		StateRetryWait:       true,
 		StateFailed:          true,
 		StateCancelRequested: true,
+		StateRecoveryPending: true,
 	},
 	StateRetryWait: {
 		StateQueued:          true,
 		StateCancelRequested: true,
-		StateCancelled:       true,
+	},
+	StateRecoveryPending: {
+		StateRetryWait:       true,
+		StateFailed:          true,
+		StateCancelRequested: true,
 	},
 	StateCancelRequested: {
 		StateCancelled: true,
-		StateFailed:    true,
-		StateSucceeded: true,
 	},
 	StateSucceeded: {},
 	StateFailed:    {},
 	StateCancelled: {},
+}
+
+// LegalTransitions returns a deep copy of the legal transitions table.
+func LegalTransitions() map[JobState]map[JobState]bool {
+	copyMap := make(map[JobState]map[JobState]bool, len(legalTransitions))
+	for k, v := range legalTransitions {
+		dest := make(map[JobState]bool, len(v))
+		for dk, dv := range v {
+			dest[dk] = dv
+		}
+		copyMap[k] = dest
+	}
+	return copyMap
 }
 
 // IsTerminal returns true if the state cannot transition to any other state.

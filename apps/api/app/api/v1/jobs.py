@@ -17,6 +17,11 @@ from app.core.idempotency import (
     handle_idempotency_race,
 )
 from app.core.pagination import decode_cursor, encode_cursor
+from app.core.state_machine import (
+    JobTransitionError,
+    is_terminal_job_state,
+    validate_job_transition,
+)
 from app.db.session import get_db
 from app.models.job import Job, JobAttempt, JobState
 from app.models.workspace import WorkspaceRole
@@ -217,15 +222,16 @@ async def cancel_job(
     if cached_response:
         return cached_response
 
-    # Terminal jobs cannot be cancelled
-    if job.state in (JobState.SUCCEEDED, JobState.FAILED, JobState.CANCELLED):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Cannot cancel job in terminal state '{job.state.value}'",
-        )
-
-    # If already CANCEL_REQUESTED, do not emit duplicate outbox event (T9)
+    # 2. State transition validation
     if job.state != JobState.CANCEL_REQUESTED:
+        try:
+            validate_job_transition(job.state, JobState.CANCEL_REQUESTED)
+        except JobTransitionError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Cannot cancel job: {exc}",
+            ) from exc
+
         job.state = JobState.CANCEL_REQUESTED
         event_id = uuid.uuid4()
         outbox_event = create_outbox_event(
@@ -311,7 +317,7 @@ async def rerun_job(
     if cached_response:
         return cached_response
 
-    if original_job.state not in (JobState.FAILED, JobState.CANCELLED, JobState.SUCCEEDED):
+    if not is_terminal_job_state(original_job.state):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Cannot rerun job while active in state '{original_job.state.value}'",

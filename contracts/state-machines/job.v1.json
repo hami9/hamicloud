@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "name": "job",
+  "version": "v1",
+  "states": [
+    "QUEUED",
+    "ADMITTED",
+    "STARTING",
+    "RUNNING",
+    "RETRY_WAIT",
+    "RECOVERY_PENDING",
+    "CANCEL_REQUESTED",
+    "SUCCEEDED",
+    "FAILED",
+    "CANCELLED"
+  ],
+  "terminal_states": [
+    "SUCCEEDED",
+    "FAILED",
+    "CANCELLED"
+  ],
+  "transitions": {
+    "QUEUED": [
+      "ADMITTED",
+      "CANCEL_REQUESTED"
+    ],
+    "ADMITTED": [
+      "STARTING",
+      "CANCEL_REQUESTED"
+    ],
+    "STARTING": [
+      "RUNNING",
+      "RETRY_WAIT",
+      "FAILED",
+      "CANCEL_REQUESTED"
+    ],
+    "RUNNING": [
+      "SUCCEEDED",
+      "RETRY_WAIT",
+      "FAILED",
+      "CANCEL_REQUESTED",
+      "RECOVERY_PENDING"
+    ],
+    "RETRY_WAIT": [
+      "QUEUED",
+      "CANCEL_REQUESTED"
+    ],
+    "RECOVERY_PENDING": [
+      "RETRY_WAIT",
+      "FAILED",
+      "CANCEL_REQUESTED"
+    ],
+    "CANCEL_REQUESTED": [
+      "CANCELLED"
+    ],
+    "SUCCEEDED": [],
+    "FAILED": [],
+    "CANCELLED": []
+  }
+}

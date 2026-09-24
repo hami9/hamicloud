@@ -20,23 +20,23 @@ type Config struct {
 
 // LoadFromEnv loads runtime configuration from environment variables with safe defaults.
 func LoadFromEnv() (*Config, error) {
-	dbURL := getEnv("DATABASE_URL", "postgres://hamicloud:hamicloud_secret@localhost:5432/hamicloud?sslmode=disable")
+	dbURL := getEnv("RUNTIME_DATABASE_URL", "postgres://hamicloud:hamicloud_secret@localhost:5432/hamicloud?sslmode=disable")
 	if strings.HasPrefix(dbURL, "postgresql+") {
-		idx := strings.Index(dbURL, "://")
-		if idx != -1 {
-			dbURL = "postgres://" + dbURL[idx+3:]
-		}
+		return nil, fmt.Errorf("invalid RUNTIME_DATABASE_URL: SQLAlchemy driver format is rejected (%s)", dbURL)
 	}
+
 	natsURL := getEnv("NATS_URL", "nats://localhost:4222")
 	env := getEnv("ENVIRONMENT", "production")
 	workerID := getEnv("WORKER_ID", "local-worker-1")
 
-	leaseSec, err := strconv.Atoi(getEnv("LEASE_DURATION_SECONDS", "60"))
+	leaseSecStr := getEnv("LEASE_DURATION_SECONDS", "60")
+	leaseSec, err := strconv.Atoi(leaseSecStr)
 	if err != nil {
 		return nil, fmt.Errorf("invalid LEASE_DURATION_SECONDS: %w", err)
 	}
 
-	reconSec, err := strconv.Atoi(getEnv("RECONCILIATION_PERIOD_SECONDS", "30"))
+	reconSecStr := getEnv("RECONCILIATION_PERIOD_SECONDS", "30")
+	reconSec, err := strconv.Atoi(reconSecStr)
 	if err != nil {
 		return nil, fmt.Errorf("invalid RECONCILIATION_PERIOD_SECONDS: %w", err)
 	}

@@ -22,12 +22,12 @@ All container images are pinned by immutable cryptographic digest. Multi-archite
 
 | Service | Pinned Image Reference & Digest | Source / Evidence | Status |
 | :--- | :--- | :--- | :---: |
-| **PostgreSQL** | `postgres:16-alpine@sha256:064bc392816ef114fa815456f9175d27d7301d0442ce79034fffaae81b93f1aa` | `docker buildx imagetools inspect postgres:16-alpine`; CI service `postgres` | **TESTED** |
-| **Redis (Compose)** | `redis:7.2-alpine@sha256:9be18fa2bfab5d778d91a134a6efc689945bfb41a9ff62d14cb3501a357ce2ef` | `docker buildx imagetools inspect redis:7.2-alpine`; `deploy/compose/docker-compose.yml` | **TESTED** |
-| **Redis (CI)** | `redis:7-alpine@sha256:49c071a9ee0793b89b4f9972338f32aa0845db88ce58bbf408bfbc29b688d0fe` | `docker buildx imagetools inspect redis:7-alpine`; `.github/workflows/ci.yml` | **TESTED** |
-| **NATS JetStream** | `nats:2.10-alpine@sha256:591e1d033efb25055b854378f8cb0f5db21d7b054231b578c772cb621ee1cf3f` | `docker buildx imagetools inspect nats:2.10-alpine`; `deploy/compose/docker-compose.yml` | **TESTED** |
-| **MinIO** | `quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e` | `docker inspect hamicloud-minio`; `deploy/compose/docker-compose.yml` | **TESTED** |
-| **Keycloak (IdP)** | `quay.io/keycloak/keycloak:24.0.5@sha256:f8ade94c1d0ad2f2fa7734a455fee5392764f402c43ca35e9af6bf63a2541dc9` | Decision D7 (pinned by owner); `deploy/compose/docker-compose.yml` | **TESTED** |
+| **PostgreSQL** | `postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685` | `docker pull postgres:16-alpine`; CI service `postgres`; `deploy/compose/docker-compose.yml` | **TESTED** |
+| **Redis (Compose)** | `redis:7.2-alpine@sha256:ccd6aa8d45ff3f033d6fa15b8cc1a50579f65c89f38cf9bb607a954c4f2128ed` | `docker pull redis:7.2-alpine`; `deploy/compose/docker-compose.yml` | **TESTED** |
+| **Redis (CI)** | `redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499` | `docker pull redis:7-alpine`; `.github/workflows/ci.yml` | **TESTED** |
+| **NATS JetStream** | `nats:2.10-alpine@sha256:b83efabe3e7def1e0a4a31ec6e078999bb17c80363f881df35edc70fcb6bb927` | `docker pull nats:2.10-alpine`; `deploy/compose/docker-compose.yml` | **TESTED** |
+| **MinIO** | `quay.io/minio/minio:latest@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e` | `docker inspect hamicloud-minio`; `deploy/compose/docker-compose.yml` | **TESTED** |
+| **Keycloak (IdP)** | `quay.io/keycloak/keycloak:24.0.5@sha256:f8ade94c1d0ad2f2fa7734a455fee5392764f402c43ca35e9af6bf63a2541dc9` | Decision D7 (pinned by owner); `docker pull quay.io/keycloak/keycloak:24.0.5`; `deploy/compose/docker-compose.yml` | **TESTED** |
 
 ---
 

@@ -1191,6 +1191,37 @@ Scratch database dropped cleanly.
 | Go runtime vet | All | `go vet ./...` in `runtime` (clean) | **PASS** |
 | Dev DB row count (D10) | D10 | 368 rows across 14 tables intact (no reset) | **PASS** |
 
+---
+
+### Phase 6 — Go Runtime & State Machine Harmonization (T21, T22, T23)
+
+**Commit:** `5658182`  
+**Status:** COMPLETED & VERIFIED  
+**Branch:** `main` (merged from `phase6`)  
+**CI Run:** [36019331980](https://github.com/hami9/hamicloud/actions/runs/36019331980) (PASS: Python 1m12s, Go 30s)
+
+#### 1. T21 · Authoritative Job State Machine (`contracts/state-machines/job.v1.json`)
+- Created authoritative JSON contract `contracts/state-machines/job.v1.json` defining all 10 states (`QUEUED`, `ADMITTED`, `STARTING`, `RUNNING`, `RETRY_WAIT`, `RECOVERY_PENDING`, `CANCEL_REQUESTED`, `SUCCEEDED`, `FAILED`, `CANCELLED`) and the 19 legal edges from the Roadmap, ADR-0003, and Decisions D4/D5.
+- Explicitly rejected forbidden edges per D4 (`CANCEL_REQUESTED → SUCCEEDED`) and D5 (`QUEUED → CANCELLED`, `ADMITTED → CANCELLED`, `ADMITTED → FAILED`, `RETRY_WAIT → CANCELLED`, `CANCEL_REQUESTED → FAILED`).
+- Updated Go domain model (`runtime/internal/domain/job_state.go`) with `StateRecoveryPending` and `LegalTransitions()`.
+- Added Go contract equality test `TestJobStateMachineContractEquality` verifying exact equality with JSON contract.
+- Added Python transition table `LEGAL_JOB_TRANSITIONS` and validation function `validate_job_transition()` in `apps/api/app/core/state_machine.py`.
+- Added Python contract equality test `test_python_state_machine_contract_equality` in `apps/api/tests/test_job_state_machine.py`.
+- Proven falsification: adding an extra edge (`QUEUED → RUNNING`) makes both Go and Python contract equality tests fail as expected.
+- Wired transition validation into API routes (`cancel_job` and `rerun_job` in `apps/api/app/api/v1/jobs.py`); added API test proving illegal transition attempts return 409 Conflict.
+- Added `RECOVERY_PENDING` to Go enum, Python enum, both OpenAPI schemas (`JobResponse` and `JobAttemptResponse`), and database check constraints (`ck_jobs_state` and `ck_job_attempts_state`).
+
+#### 2. T22 · Dedicated `RUNTIME_DATABASE_URL` Configuration
+- Replaced silent SQLAlchemy prefix rewrite with dedicated `RUNTIME_DATABASE_URL` in `runtime/internal/config/config.go`.
+- If `RUNTIME_DATABASE_URL` uses SQLAlchemy prefix `postgresql+...://`, it returns an explicit error naming the variable.
+- Added `RUNTIME_DATABASE_URL` to `.env.example`.
+- Created comprehensive table-driven tests in `runtime/internal/config/config_test.go` covering defaults, overrides, rejected SQLAlchemy prefixes, and invalid integer durations.
+
+#### 3. T23 · Go Sum & Module Verification
+- Executed `go mod tidy` in `runtime/`.
+- Committed `runtime/go.sum` and verified `go build ./...` succeeds cleanly.
+
+
 
 
 

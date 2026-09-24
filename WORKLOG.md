@@ -1221,6 +1221,50 @@ Scratch database dropped cleanly.
 - Executed `go mod tidy` in `runtime/`.
 - Committed `runtime/go.sum` and verified `go build ./...` succeeds cleanly.
 
+#### 4. Phase 6 Review Required Fixes & Verification
+
+Following project review of `18a3a4e..816cc4a`, all required fixes were implemented and verified:
+
+1. **Security — Database URL Credential Sanitization (Fix 1):**
+   - In `runtime/internal/config/config.go`, removed printing of the raw `dbURL` value in error formatting (`fmt.Errorf("... (%s)", dbURL)` was printing embedded credentials).
+   - Replaced with: `fmt.Errorf("invalid RUNTIME_DATABASE_URL: SQLAlchemy driver format is rejected")`, naming only the variable name and never the value.
+   - Added unit test `TestLoadFromEnv_PasswordNotLeakedInError` in `runtime/internal/config/config_test.go` asserting that an invalid URL containing a sensitive password does not leak the password in the returned error.
+2. **Fail-Closed Configuration (Fix 6):**
+   - In `runtime/internal/config/config.go`, if `ENVIRONMENT != "development"` and `RUNTIME_DATABASE_URL` is empty, configuration returns an error (`RUNTIME_DATABASE_URL is required when ENVIRONMENT is not development`) rather than falling back to the local dev DSN.
+   - Added table test cases in `config_test.go` validating that `ENVIRONMENT=production` or omitted `ENVIRONMENT` without `RUNTIME_DATABASE_URL` returns an error.
+3. **Migration 0002 Revert & Migration 0003 (Fix 2):**
+   - Reverted `migrations/versions/0002_close_schema_gaps.py` to its exact applied state at commit `878c0f4` (CHECK constraints without `RECOVERY_PENDING`).
+   - Created new migration `migrations/versions/0003_add_recovery_pending_state.py` (`down_revision = "0002_close_schema_gaps"`):
+     - `upgrade()`: drops and recreates `ck_jobs_state` and `ck_job_attempts_state` with `RECOVERY_PENDING`.
+     - `downgrade()`: drops and recreates both CHECK constraints restoring the previous 9 states.
+   - Tested full cycle on scratch database `hamicloud_scratch`: `upgrade head -> downgrade 0002_close_schema_gaps -> upgrade head`:
+     - Verified `RECOVERY_PENDING` row insert succeeds at 0003.
+     - Verified `RECOVERY_PENDING` row insert fails with `CheckViolation` at 0002.
+     - Verified `RECOVERY_PENDING` row insert succeeds after re-upgrade to 0003.
+   - Applied `alembic upgrade head` to dev DB `hamicloud` and test DB `hamicloud_test`.
+   - Verified dev DB row count: 368 rows across all 14 tables strictly preserved (D10).
+   - Verified `alembic check` clean on both databases ("No new upgrade operations detected.").
+   - **Established Project Rule:** *Never edit a migration that has been applied or pushed.*
+4. **RECOVERY_PENDING Multi-Layer Guard (Fix 3):**
+   - Added `test_job_states_contract_equality_across_all_layers` in `apps/api/tests/test_job_state_machine.py`.
+   - Asserts that states in `contracts/state-machines/job.v1.json` equal exactly:
+     - Python `JobState` enum values
+     - Both OpenAPI job-state enums (`JobDetailsResponse` and `JobAttemptItem`)
+     - Database `ck_jobs_state` and `ck_job_attempts_state` constraints (parsed from PostgreSQL system catalogs via `pg_get_constraintdef` on `hamicloud_test`).
+   - **Falsification Evidence:**
+     - Removing `RECOVERY_PENDING` from Python `JobState`: fails test (`{'RECOVERY_PENDING'}`).
+     - Removing `RECOVERY_PENDING` from OpenAPI `JobDetailsResponse`: fails test (`{'RECOVERY_PENDING'}`).
+     - Removing `RECOVERY_PENDING` from OpenAPI `JobAttemptItem`: fails test (`{'RECOVERY_PENDING'}`).
+     - Removing `RECOVERY_PENDING` from DB `ck_jobs_state`: fails test (`{'RECOVERY_PENDING'}`).
+     - Removing `RECOVERY_PENDING` from DB `ck_job_attempts_state`: fails test (`{'RECOVERY_PENDING'}`).
+5. **ADR-0002 Live Query Extraction & 7-Day Purge Coverage (Fix 4):**
+   - Updated `test_t20_adr0002_reconciliation_scans_match_live_database` in `apps/api/tests/test_phase3_contracts_idempotency.py` to extract all 5 SQL blocks directly from `docs/adr/ADR-0002-durable-state-and-transactional-outbox.md` using regex (`re.findall(r'```sql\s*(.*?)\s*```', ...)`).
+   - Executed each query against live database state.
+   - Tested 7-day outbox retention purge: inserted published events at 1 day old (fresh) and 8 days old (expired); executed the extracted purge SQL; verified expired event is deleted and fresh event is preserved.
+6. **Branch Cleanup (Fix 5):**
+   - Deleted leftover `phase6` branch locally (`git branch -D phase6`) and on remote (`git push origin --delete phase6`).
+
+
 
 
 

@@ -17,6 +17,7 @@ from referencing import Registry
 from referencing.jsonschema import DRAFT202012
 from sqlalchemy.exc import IntegrityError
 
+import re
 from app.core.db_errors import violated_constraint
 from app.main import app
 
@@ -24,6 +25,7 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", 
 CONTRACTS_DIR = os.path.join(REPO_ROOT, "contracts")
 OPENAPI_SPEC = os.path.join(CONTRACTS_DIR, "openapi", "v1.yaml")
 EVENTS_DIR = os.path.join(CONTRACTS_DIR, "events")
+ADR_0002 = os.path.join(REPO_ROOT, "docs", "adr", "ADR-0002-durable-state-and-transactional-outbox.md")
 ADR_0003 = os.path.join(REPO_ROOT, "docs", "adr", "ADR-0003-delivery-semantics-and-idempotent-execution.md")
 TEST_DATABASE_URL_SYNC = "postgresql://hamicloud:hamicloud_secret@localhost:5432/hamicloud_test"
 
@@ -1891,7 +1893,21 @@ def test_t13_live_responses_match_documented_response_examples(client: TestClien
 
 
 def test_t20_adr0002_reconciliation_scans_match_live_database(client: TestClient, clean_db):
-    """Verify all four documented ADR-0002 periodic reconciliation queries discover real accepted work."""
+    """Verify all four documented ADR-0002 periodic reconciliation queries and the outbox purge query discover/operate on real database state."""
+    # Extract the exact SQL queries from ADR-0002 ```sql blocks
+    assert os.path.exists(ADR_0002), f"ADR-0002 not found at {ADR_0002}"
+    with open(ADR_0002, "r", encoding="utf-8") as f:
+        adr_content = f.read()
+
+    adr_queries = [q.strip() for q in re.findall(r"```sql\s*(.*?)\s*```", adr_content, re.DOTALL)]
+    assert len(adr_queries) == 5, f"Expected 5 SQL queries in ADR-0002, found {len(adr_queries)}"
+
+    scan_jobs_sql = [q for q in adr_queries if "state = 'QUEUED'" in q][0]
+    scan_releases_sql = [q for q in adr_queries if "applications a" in q][0]
+    scan_cancels_sql = [q for q in adr_queries if "state = 'CANCEL_REQUESTED'" in q][0]
+    scan_outbox_sql = [q for q in adr_queries if "status = 'PENDING'" in q][0]
+    purge_outbox_sql = [q for q in adr_queries if "DELETE FROM outbox_events" in q][0]
+
     ws_id, app_id, auth_headers = create_test_workspace_and_app(client)
 
     conn = psycopg2.connect(TEST_DATABASE_URL_SYNC)
@@ -1918,20 +1934,7 @@ def test_t20_adr0002_reconciliation_scans_match_live_database(client: TestClient
     # Age the application record beyond the 30-second reconciliation threshold
     cur.execute("UPDATE applications SET updated_at = NOW() - INTERVAL '35 seconds' WHERE id = %s", (app_id,))
 
-    # Run the exact documented query from ADR-0002:
-    scan_releases_sql = """
-    SELECT a.id, a.workspace_id, a.desired_generation 
-    FROM applications a
-    WHERE EXISTS (SELECT 1 FROM releases r WHERE r.application_id = a.id)
-      AND NOT EXISTS (
-          SELECT 1 FROM execution_intents ei 
-          JOIN releases r ON r.id = ei.release_id
-          WHERE r.application_id = a.id 
-            AND ei.target_generation = a.desired_generation
-            AND ei.status IN ('PENDING', 'CLAIMED', 'APPLIED')
-      )
-      AND a.updated_at < NOW() - INTERVAL '30 seconds';
-    """
+    # Run the extracted release scan query from ADR-0002:
     cur.execute(scan_releases_sql)
     unapplied_apps = [(str(r[0]), str(r[1]), r[2]) for r in cur.fetchall()]
     assert (app_id, ws_id, desired_gen) in unapplied_apps
@@ -1968,12 +1971,6 @@ def test_t20_adr0002_reconciliation_scans_match_live_database(client: TestClient
     # Age the job record beyond the 30-second threshold
     cur.execute("UPDATE jobs SET updated_at = NOW() - INTERVAL '35 seconds' WHERE id = %s", (job_id,))
 
-    scan_jobs_sql = """
-    SELECT id, workspace_id, current_attempt_number 
-    FROM jobs 
-    WHERE state = 'QUEUED' 
-      AND updated_at < NOW() - INTERVAL '30 seconds';
-    """
     cur.execute(scan_jobs_sql)
     queued_jobs = [(str(r[0]), str(r[1]), r[2]) for r in cur.fetchall()]
     assert (job_id, ws_id, 0) in queued_jobs
@@ -1990,12 +1987,6 @@ def test_t20_adr0002_reconciliation_scans_match_live_database(client: TestClient
     # Age the cancelled job beyond the 15-second threshold
     cur.execute("UPDATE jobs SET updated_at = NOW() - INTERVAL '20 seconds' WHERE id = %s", (job_id,))
 
-    scan_cancels_sql = """
-    SELECT id, workspace_id, current_attempt_number 
-    FROM jobs 
-    WHERE state = 'CANCEL_REQUESTED' 
-      AND updated_at < NOW() - INTERVAL '15 seconds';
-    """
     cur.execute(scan_cancels_sql)
     cancellations = [(str(r[0]), str(r[1]), r[2]) for r in cur.fetchall()]
     assert (job_id, ws_id, 0) in cancellations
@@ -2008,18 +1999,30 @@ def test_t20_adr0002_reconciliation_scans_match_live_database(client: TestClient
     # Age the outbox event beyond the 10-second threshold
     cur.execute("UPDATE outbox_events SET created_at = NOW() - INTERVAL '15 seconds' WHERE id = %s", (outbox_id,))
 
-    scan_outbox_sql = """
-    SELECT id, event_id, topic, payload_json 
-    FROM outbox_events 
-    WHERE status = 'PENDING' 
-      AND created_at < NOW() - INTERVAL '10 seconds'
-    ORDER BY created_at ASC 
-    LIMIT 100 
-    FOR UPDATE SKIP LOCKED;
-    """
     cur.execute(scan_outbox_sql)
     stale_outbox = [str(row[0]) for row in cur.fetchall()]
     assert str(outbox_id) in stale_outbox
+
+    # 5. 7-day outbox purge query (ADR-0002 §4)
+    fresh_event_id = str(uuid.uuid4())
+    expired_event_id = str(uuid.uuid4())
+    cur.execute(
+        """
+        INSERT INTO outbox_events (id, event_id, workspace_id, topic, payload_json, headers_json, status, published_at, created_at, updated_at, schema_version)
+        VALUES 
+            (%s, %s, %s, 'test.fresh', '{}', '{}', 'PUBLISHED', NOW() - INTERVAL '1 day', NOW(), NOW(), 1),
+            (%s, %s, %s, 'test.expired', '{}', '{}', 'PUBLISHED', NOW() - INTERVAL '8 days', NOW(), NOW(), 1)
+        """,
+        (str(uuid.uuid4()), fresh_event_id, ws_id, str(uuid.uuid4()), expired_event_id, ws_id),
+    )
+
+    # Execute the extracted outbox purge query from ADR-0002
+    cur.execute(purge_outbox_sql)
+
+    cur.execute("SELECT event_id FROM outbox_events WHERE event_id IN (%s, %s)", (fresh_event_id, expired_event_id))
+    remaining_events = [str(r[0]) for r in cur.fetchall()]
+    assert fresh_event_id in remaining_events
+    assert expired_event_id not in remaining_events
 
     cur.close()
     conn.close()

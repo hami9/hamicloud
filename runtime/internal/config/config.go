@@ -20,13 +20,20 @@ type Config struct {
 
 // LoadFromEnv loads runtime configuration from environment variables with safe defaults.
 func LoadFromEnv() (*Config, error) {
-	dbURL := getEnv("RUNTIME_DATABASE_URL", "postgres://hamicloud:hamicloud_secret@localhost:5432/hamicloud?sslmode=disable")
+	env := getEnv("ENVIRONMENT", "production")
+
+	dbURL := getEnv("RUNTIME_DATABASE_URL", "")
+	if dbURL == "" {
+		if env != "development" {
+			return nil, fmt.Errorf("RUNTIME_DATABASE_URL is required when ENVIRONMENT is not development")
+		}
+		dbURL = "postgres://hamicloud:hamicloud_secret@localhost:5432/hamicloud?sslmode=disable"
+	}
 	if strings.HasPrefix(dbURL, "postgresql+") {
-		return nil, fmt.Errorf("invalid RUNTIME_DATABASE_URL: SQLAlchemy driver format is rejected (%s)", dbURL)
+		return nil, fmt.Errorf("invalid RUNTIME_DATABASE_URL: SQLAlchemy driver format is rejected")
 	}
 
 	natsURL := getEnv("NATS_URL", "nats://localhost:4222")
-	env := getEnv("ENVIRONMENT", "production")
 	workerID := getEnv("WORKER_ID", "local-worker-1")
 
 	leaseSecStr := getEnv("LEASE_DURATION_SECONDS", "60")

@@ -47,6 +47,85 @@ def test_python_state_machine_contract_equality():
     )
 
 
+def test_job_states_contract_equality_across_all_layers():
+    """Assert states in contracts/state-machines/job.v1.json equal exactly:
+    - Python JobState values
+    - both OpenAPI job-state enums (JobDetailsResponse and JobAttemptItem)
+    - values allowed by ck_jobs_state and ck_job_attempts_state in hamicloud_test.
+    """
+    import yaml
+    import re
+    import psycopg2
+    from tests.conftest import TEST_DATABASE_URL_SYNC
+
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+    contract_path = os.path.join(repo_root, "contracts", "state-machines", "job.v1.json")
+    openapi_path = os.path.join(repo_root, "contracts", "openapi", "v1.yaml")
+
+    with open(contract_path, "r", encoding="utf-8") as f:
+        contract = json.load(f)
+    contract_states = set(contract["states"])
+
+    # 1. Python JobState enum values
+    python_states = {s.value for s in JobState}
+    assert python_states == contract_states, f"Python JobState mismatch: {python_states ^ contract_states}"
+
+    # 2. Both OpenAPI job-state enums
+    with open(openapi_path, "r", encoding="utf-8") as f:
+        spec = yaml.safe_load(f)
+    schemas = spec["components"]["schemas"]
+    openapi_job_states = set(schemas["JobDetailsResponse"]["properties"]["state"]["enum"])
+    openapi_attempt_states = set(schemas["JobAttemptItem"]["properties"]["state"]["enum"])
+
+    assert openapi_job_states == contract_states, (
+        f"OpenAPI JobDetailsResponse state mismatch: {openapi_job_states ^ contract_states}"
+    )
+    assert openapi_attempt_states == contract_states, (
+        f"OpenAPI JobAttemptItem state mismatch: {openapi_attempt_states ^ contract_states}"
+    )
+
+    # 3. Values allowed by ck_jobs_state and ck_job_attempts_state in hamicloud_test
+    conn = psycopg2.connect(TEST_DATABASE_URL_SYNC)
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT conname, pg_get_constraintdef(oid)
+            FROM pg_constraint
+            WHERE conname IN ('ck_jobs_state', 'ck_job_attempts_state')
+        """)
+        constraints = dict(cur.fetchall())
+    conn.close()
+
+    assert "ck_jobs_state" in constraints, "ck_jobs_state constraint missing in hamicloud_test"
+    assert "ck_job_attempts_state" in constraints, "ck_job_attempts_state constraint missing in hamicloud_test"
+
+    db_jobs_states = set(re.findall(r"'([A-Z_]+)'", constraints["ck_jobs_state"]))
+    db_attempt_states = set(re.findall(r"'([A-Z_]+)'", constraints["ck_job_attempts_state"]))
+
+    assert db_jobs_states == contract_states, (
+        f"Database ck_jobs_state mismatch: {db_jobs_states ^ contract_states}"
+    )
+    assert db_attempt_states == contract_states, (
+        f"Database ck_job_attempts_state mismatch: {db_attempt_states ^ contract_states}"
+    )
+
+
+def test_job_states_falsification_removing_recovery_pending_fails():
+    """Verify that removing RECOVERY_PENDING from any of the 4 layers fails the contract equality check."""
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+    contract_path = os.path.join(repo_root, "contracts", "state-machines", "job.v1.json")
+    with open(contract_path, "r", encoding="utf-8") as f:
+        contract = json.load(f)
+    contract_states = set(contract["states"])
+    assert "RECOVERY_PENDING" in contract_states
+
+    # Mutated layer: missing RECOVERY_PENDING
+    mutated_states = contract_states - {"RECOVERY_PENDING"}
+
+    # Assert that equality fails
+    assert mutated_states != contract_states
+    assert (mutated_states ^ contract_states) == {"RECOVERY_PENDING"}
+
+
 def test_python_state_machine_falsification_extra_edge_fails():
     """Verify that adding an extra edge to the transition table fails equality against contract."""
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))

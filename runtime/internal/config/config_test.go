@@ -34,12 +34,14 @@ func TestLoadFromEnv_TableDriven(t *testing.T) {
 		validateCfg   func(t *testing.T, cfg *config.Config)
 	}{
 		{
-			name:      "missing values fall back to safe defaults",
-			env:       map[string]string{},
+			name: "missing values in development fall back to safe dev defaults",
+			env: map[string]string{
+				"ENVIRONMENT": "development",
+			},
 			expectErr: false,
 			validateCfg: func(t *testing.T, cfg *config.Config) {
-				if cfg.Environment != "production" {
-					t.Errorf("expected Environment 'production', got %q", cfg.Environment)
+				if cfg.Environment != "development" {
+					t.Errorf("expected Environment 'development', got %q", cfg.Environment)
 				}
 				expectedDB := "postgres://hamicloud:hamicloud_secret@localhost:5432/hamicloud?sslmode=disable"
 				if cfg.DatabaseURL != expectedDB {
@@ -58,6 +60,20 @@ func TestLoadFromEnv_TableDriven(t *testing.T) {
 					t.Errorf("expected ReconciliationPeriod 30s, got %v", cfg.ReconciliationPeriod)
 				}
 			},
+		},
+		{
+			name: "missing RUNTIME_DATABASE_URL in production returns error",
+			env: map[string]string{
+				"ENVIRONMENT": "production",
+			},
+			expectErr:    true,
+			errSubstring: "RUNTIME_DATABASE_URL",
+		},
+		{
+			name:         "missing RUNTIME_DATABASE_URL when ENVIRONMENT is omitted defaults to production and returns error",
+			env:          map[string]string{},
+			expectErr:    true,
+			errSubstring: "RUNTIME_DATABASE_URL",
 		},
 		{
 			name: "valid custom values are loaded",
@@ -110,6 +126,7 @@ func TestLoadFromEnv_TableDriven(t *testing.T) {
 		{
 			name: "invalid integer for LEASE_DURATION_SECONDS",
 			env: map[string]string{
+				"ENVIRONMENT":            "development",
 				"LEASE_DURATION_SECONDS": "invalid-int",
 			},
 			expectErr:    true,
@@ -118,6 +135,7 @@ func TestLoadFromEnv_TableDriven(t *testing.T) {
 		{
 			name: "invalid integer for RECONCILIATION_PERIOD_SECONDS",
 			env: map[string]string{
+				"ENVIRONMENT":                   "development",
 				"RECONCILIATION_PERIOD_SECONDS": "xyz",
 			},
 			expectErr:    true,
@@ -154,3 +172,25 @@ func TestLoadFromEnv_TableDriven(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadFromEnv_PasswordNotLeakedInError(t *testing.T) {
+	clearEnv(t)
+	defer clearEnv(t)
+
+	secretPassword := "SuperSecretP@ssword987#"
+	t.Setenv("RUNTIME_DATABASE_URL", "postgresql+asyncpg://hamicloud:"+secretPassword+"@localhost:5432/hamicloud")
+
+	_, err := config.LoadFromEnv()
+	if err == nil {
+		t.Fatal("expected error for SQLAlchemy format, got nil")
+	}
+
+	if strings.Contains(err.Error(), secretPassword) {
+		t.Fatalf("returned error leaked the database password: %q", err.Error())
+	}
+
+	if !strings.Contains(err.Error(), "RUNTIME_DATABASE_URL") {
+		t.Fatalf("expected error to name the variable RUNTIME_DATABASE_URL, got: %q", err.Error())
+	}
+}
+

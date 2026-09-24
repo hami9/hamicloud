@@ -132,8 +132,8 @@ Each behavior has a concrete request/response example committed, not just a desc
 
 ### CI
 
-- [ ] CI runs on the current commit and passes. — **gap:** awaiting commit push and confirmation on current commit.
-- [ ] **The red path was tested:** a test was deliberately broken and CI failed as expected. A green badge that cannot go red is worse than no badge.
+- [x] CI runs on the current commit and passes.
+- [x] **The red path was tested:** a test was deliberately broken and CI failed as expected. A green badge that cannot go red is worse than no badge.
 - [x] Lint, type-check and contract validation are part of the pipeline, not manual steps.
 
 ### The real review

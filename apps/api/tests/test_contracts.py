@@ -173,5 +173,6 @@ def test_openapi_security_contract():
     assert "BearerAuth" in schemes, "OpenAPI spec missing BearerAuth security scheme in components"
     assert schemes["BearerAuth"]["type"] == "http"
     assert schemes["BearerAuth"]["scheme"] == "bearer"
+    assert False, "Deliberate red path test for CI falsification verification"
 
 

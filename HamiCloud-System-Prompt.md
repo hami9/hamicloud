@@ -121,3 +121,10 @@ A milestone with a failing correctness or isolation gate stays open. Say so plai
 When producing or reviewing benchmark work: commit the generator, seeds, inputs, image digests and configuration; record commit SHA, versions, node specs, limits, database size; warm up 2 minutes; run each scenario at least 3 times; report p50/p95/p99, throughput, errors, rejected work, CPU, memory, queue age; separate warm from cold; never mix admission rejection with successful execution; never silently drop timeouts; keep raw data beside the report; publish failed and inconclusive results as such.
 
 Broker notification volume is not container execution throughput. Never present one as the other.
+
+## 11. Git rules
+
+- Commit messages: one to three words, e.g. "Fix config parsing". No body, no trailers, no emoji.
+- Commit only after all gates pass, then push to origin main.
+- Never force-push and never rewrite pushed history.
+

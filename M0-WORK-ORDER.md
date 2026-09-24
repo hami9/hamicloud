@@ -78,7 +78,7 @@ Each decision has a default. Unless the owner has changed one, work with the def
 | D5 | Go transitions the Roadmap diagram does not allow: `QUEUED→CANCELLED`, `ADMITTED→CANCELLED`, `ADMITTED→FAILED`, `RETRY_WAIT→CANCELLED`, `CANCEL_REQUESTED→FAILED`, `CANCEL_REQUESTED→SUCCEEDED` | Remove them all, following the Roadmap literally. The owner may keep one only by amending the Roadmap first, with a reason. | T21 |
 | D6 | Python version | 3.12 everywhere. **OWNER** installs 3.12 locally; then recreate `.venv`. | T24 |
 | D7 | Keycloak version for the local reference identity provider | **OWNER** pins it. Do not guess a version. | T27 |
-| D8 | GitHub repository and remote | **OWNER** creates and pushes. | T28 |
+| D8 | GitHub repository and remote | **Resolved (owner, 2026-09-23).** Published to origin main. | None |
 | D9 | Commit `MASTER-PLAN.md` (currently untracked) | Yes, in the Phase 1 commit. | Phase 1 |
 | D10 | Reset the dev database after the new migrations are tested on it | Yes (`alembic downgrade base && alembic upgrade head`). **OWNER** confirms before you run it. | T29 |
 | D11 | `ON DELETE` for the new `workspace_id` foreign keys | `CASCADE`, like the other tenant tables. `audit_events` keeps `SET NULL` because audit records outlive a workspace; state this in ADR-0004. | T16, T20 |

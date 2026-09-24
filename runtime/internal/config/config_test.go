@@ -27,11 +27,11 @@ func clearEnv(t *testing.T) {
 
 func TestLoadFromEnv_TableDriven(t *testing.T) {
 	tests := []struct {
-		name          string
-		env           map[string]string
-		expectErr     bool
-		errSubstring  string
-		validateCfg   func(t *testing.T, cfg *config.Config)
+		name         string
+		env          map[string]string
+		expectErr    bool
+		errSubstring string
+		validateCfg  func(t *testing.T, cfg *config.Config)
 	}{
 		{
 			name: "missing values in development fall back to safe dev defaults",
@@ -193,4 +193,3 @@ func TestLoadFromEnv_PasswordNotLeakedInError(t *testing.T) {
 		t.Fatalf("expected error to name the variable RUNTIME_DATABASE_URL, got: %q", err.Error())
 	}
 }
-

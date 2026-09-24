@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres:16-alpine@sha256:064bc392816ef114fa815456f9175d27d7301d0442ce79034fffaae81b93f1aa
     container_name: hamicloud-postgres
     environment:
       POSTGRES_USER: hamicloud
@@ -19,7 +19,7 @@ services:
     restart: unless-stopped
 
   redis:
-    image: redis:7.2-alpine
+    image: redis:7.2-alpine@sha256:9be18fa2bfab5d778d91a134a6efc689945bfb41a9ff62d14cb3501a357ce2ef
     container_name: hamicloud-redis
     command: ["redis-server", "--appendonly", "yes", "--loglevel", "warning"]
     ports:
@@ -34,7 +34,7 @@ services:
     restart: unless-stopped
 
   nats:
-    image: nats:2.10-alpine
+    image: nats:2.10-alpine@sha256:591e1d033efb25055b854378f8cb0f5db21d7b054231b578c772cb621ee1cf3f
     container_name: hamicloud-nats
     command: ["-c", "/etc/nats/nats.conf", "-js"]
     ports:
@@ -51,7 +51,7 @@ services:
     restart: unless-stopped
 
   minio:
-    image: quay.io/minio/minio:latest
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
     container_name: hamicloud-minio
     command: ["server", "/data", "--console-address", ":9001"]
     environment:
@@ -65,6 +65,25 @@ services:
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:9000/minio/health/live || exit 1"]
       interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0.5@sha256:f8ade94c1d0ad2f2fa7734a455fee5392764f402c43ca35e9af6bf63a2541dc9
+    container_name: hamicloud-keycloak
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: adminpassword
+      KC_HEALTH_ENABLED: "true"
+    ports:
+      - "${KEYCLOAK_PORT:-8080}:8080"
+    volumes:
+      - ./realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/8080 && echo -e 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && cat <&3 | grep -q '200 OK' || exit 1"]
+      interval: 10s
       timeout: 5s
       retries: 5
     restart: unless-stopped

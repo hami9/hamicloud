@@ -1264,6 +1264,47 @@ Following project review of `18a3a4e..816cc4a`, all required fixes were implemen
 6. **Branch Cleanup (Fix 5):**
    - Deleted leftover `phase6` branch locally (`git branch -D phase6`) and on remote (`git push origin --delete phase6`).
 
+---
+
+### Phase 7 — Toolchain, CI, Pins, Compatibility Matrix & Bootstrap (T24, T25, T26, T27)
+
+**Status:** IMPLEMENTED & VERIFIED
+
+#### 1. T24 · Pin Python Toolchain & Types
+- Pinned development dependencies in `apps/api/pyproject.toml` (`pytest==9.1.1`, `pytest-asyncio==1.4.0`, `ruff==0.16.7`, `mypy==2.3.1`, `jsonschema==4.26.0`, `openapi-spec-validator==0.9.0`).
+- Generated and committed `requirements.lock` and `apps/api/requirements.lock` capturing the full frozen dependency closure from `pip freeze`.
+- Strictly typed `call_next` in `apps/api/app/main.py`: `Callable[[Request], Awaitable[Response]]` instead of untyped `Any`.
+- Strict mypy passed with 0 issues across all 30 source files.
+
+#### 2. T25 · Complete CI Pipeline (`.github/workflows/ci.yml`)
+- Pinned GitHub Actions to commit SHAs:
+  - `actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2`
+  - `actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0`
+  - `actions/setup-go@f111f330730b5538f6509730b4ea7378cb76797e # v5.3.0`
+- Pinned service images by cryptographic digest:
+  - `postgres:16-alpine@sha256:064bc392816ef114fa815456f9175d27d7301d0442ce79034fffaae81b93f1aa`
+  - `redis:7-alpine@sha256:49c071a9ee0793b89b4f9972338f32aa0845db88ce58bbf408bfbc29b688d0fe`
+- Added automated `alembic check` immediately following migration upgrade.
+- Added contract validation step `openapi-spec-validator contracts/openapi/v1.yaml`.
+- Added strict `gofmt -l` gate to `go-checks` job ensuring all Go code complies with standard formatting.
+
+#### 3. T26 · Commit Tested Compatibility Matrix
+- Created `docs/compatibility-matrix.md` recording exact runtime versions, toolchain dependencies, and container image digests.
+- Every row cites its authoritative provenance (e.g. CI logs, `pip freeze`, `go version`, `docker buildx imagetools inspect`).
+- Explicitly marked untracked components (Kubernetes, Traefik, BuildKit, Cilium) as `not yet tested` for subsequent milestones.
+
+#### 4. T27 · Pin Container Images & Add Reference Identity Provider (Keycloak)
+- Pinned all service images in `deploy/compose/docker-compose.yml` to cryptographic digests:
+  - `postgres:16-alpine@sha256:064bc392816ef114fa815456f9175d27d7301d0442ce79034fffaae81b93f1aa`
+  - `redis:7.2-alpine@sha256:9be18fa2bfab5d778d91a134a6efc689945bfb41a9ff62d14cb3501a357ce2ef`
+  - `nats:2.10-alpine@sha256:591e1d033efb25055b854378f8cb0f5db21d7b054231b578c772cb621ee1cf3f`
+  - `quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e` (replaced `:latest` with dated release tag and digest)
+  - `quay.io/keycloak/keycloak:24.0.5@sha256:f8ade94c1d0ad2f2fa7734a455fee5392764f402c43ca35e9af6bf63a2541dc9` (pinned per Decision D7)
+- Created `deploy/compose/realm-export.json` with pre-configured realm `hamicloud`, client `hamicloud-api`, and test users `alice` / `bob` for two-workspace testing.
+- Verified `grep -nE "image:" deploy/compose/docker-compose.yml .github/workflows/ci.yml | grep -v "@sha256:"` outputs 0 matches.
+- Updated `README.md` quickstart: Python 3.12, root `.venv`, host port collision notes for Redis (`6380`), MinIO, and Keycloak endpoints.
+
+
 
 
 

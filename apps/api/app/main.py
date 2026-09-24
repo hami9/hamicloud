@@ -1,7 +1,7 @@
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Any, AsyncGenerator
+from typing import Any, AsyncGenerator, Awaitable, Callable
 from fastapi import FastAPI, HTTPException, Request, Response, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
@@ -75,7 +75,9 @@ app.add_middleware(
 
 # Correlation ID Middleware
 @app.middleware("http")
-async def correlation_id_middleware(request: Request, call_next: Any) -> Response:
+async def correlation_id_middleware(
+    request: Request, call_next: Callable[[Request], Awaitable[Response]]
+) -> Response:
     correlation_id = request.headers.get("X-Correlation-ID") or f"req_{uuid.uuid4().hex}"
     request.state.correlation_id = correlation_id
     response: Response = await call_next(request)

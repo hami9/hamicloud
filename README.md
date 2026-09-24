@@ -67,15 +67,20 @@ flowchart TB
 
 ### 1. Start Infrastructure Services
 
-Start the local background services (PostgreSQL, NATS JetStream, MinIO):
+Start the local background services (PostgreSQL 16, Redis 7, NATS JetStream, MinIO, Keycloak):
 
 ```bash
 docker compose -f deploy/compose/docker-compose.yml up -d
 ```
 
+> [!NOTE]
+> - **Redis Port:** Published on host port `6380` (via `${REDIS_HOST_PORT:-6380}`) to avoid collisions with any existing local Redis services (e.g. `aegis-redis` on port 6379).
+> - **Keycloak (Reference IdP):** Runs on `http://localhost:8080` with admin credentials (`admin` / `adminpassword`) and pre-configured realm `hamicloud` with test users `alice` and `bob`.
+> - **MinIO (S3 compatible):** Runs on `http://localhost:9000` (API) and `http://localhost:9001` (Console) with credentials `minioadmin` / `minioadminpassword`.
+
 ### 2. Configure Python Environment
 
-Create a virtual environment and install the API package with development dependencies:
+Create a virtual environment at repository root (`.venv`) with Python 3.12 and install the API package with pinned development dependencies:
 
 ```bash
 python -m venv .venv
@@ -95,10 +100,10 @@ Apply database migrations using Alembic:
 
 ```bash
 # On Linux/macOS:
-DATABASE_URL="postgresql+asyncpg://postgres:postgres@localhost:5432/hamicloud" alembic -c migrations/alembic.ini upgrade head
+DATABASE_URL_SYNC="postgresql://hamicloud:hamicloud_secret@localhost:5432/hamicloud" alembic -c migrations/alembic.ini upgrade head
 
 # On Windows (PowerShell):
-$env:DATABASE_URL="postgresql+asyncpg://postgres:postgres@localhost:5432/hamicloud"
+$env:DATABASE_URL_SYNC="postgresql://hamicloud:hamicloud_secret@localhost:5432/hamicloud"
 alembic -c migrations/alembic.ini upgrade head
 ```
 
@@ -108,12 +113,12 @@ Verify tests, types, linting, specs, and database alignment:
 
 ```bash
 # Run API test suite
-pytest apps/api/tests
+pytest apps/api/tests -v
 
 # Check formatting and linting
 ruff check apps/api
 
-# Type check
+# Type check strictly
 cd apps/api && mypy --explicit-package-bases app && cd ../..
 
 # Verify database migrations are aligned with models
@@ -122,8 +127,9 @@ alembic -c migrations/alembic.ini check
 # Validate OpenAPI contract
 openapi-spec-validator contracts/openapi/v1.yaml
 
-# Run Go runtime checks and tests
+# Run Go runtime checks, format check, and tests
 cd runtime
+test -z "$(gofmt -l .)" || (echo "Unformatted Go files:" && gofmt -l . && exit 1)
 go vet ./...
 go test -v ./...
 cd ..

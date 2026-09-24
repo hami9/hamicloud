@@ -21,12 +21,12 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8.3.0",
-    "pytest-asyncio>=0.24.0",
-    "ruff>=0.7.0",
-    "mypy>=1.13.0",
-    "jsonschema>=4.23.0",
-    "openapi-spec-validator>=0.7.1",
+    "pytest==9.1.1",
+    "pytest-asyncio==1.4.0",
+    "ruff==0.16.7",
+    "mypy==2.3.1",
+    "jsonschema==4.26.0",
+    "openapi-spec-validator==0.9.0",
 ]
 
 [build-system]

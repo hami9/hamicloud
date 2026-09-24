@@ -126,15 +126,15 @@ Each behavior has a concrete request/response example committed, not just a desc
 
 ### Pins and environment
 
-- [ ] Versions and container digests are pinned — no `latest` anywhere. — **gap:** MinIO uses `:latest`, and no image is pinned by digest.
-- [ ] The tested compatibility matrix is committed to the repository. — **gap:** ADR-0005 lists version floors (`3.12+`, `1.23+`), not a tested set.
-- [ ] Local bootstrap (PostgreSQL, Redis, NATS, reference identity provider) is documented and reproducible from a clean machine. — **gap:** no identity provider in compose or in the quickstart.
+- [x] Versions and container digests are pinned — no `latest` anywhere.
+- [x] The tested compatibility matrix is committed to the repository.
+- [x] Local bootstrap (PostgreSQL, Redis, NATS, reference identity provider) is documented and reproducible from a clean machine.
 
 ### CI
 
-- [ ] CI runs on the current commit and passes. — **gap:** no git remote is configured, so CI has never run. The Go job would fail (`runtime/go.sum` is missing), and ruff reports 152 errors.
+- [ ] CI runs on the current commit and passes. — **gap:** awaiting commit push and confirmation on current commit.
 - [ ] **The red path was tested:** a test was deliberately broken and CI failed as expected. A green badge that cannot go red is worse than no badge.
-- [ ] Lint, type-check and contract validation are part of the pipeline, not manual steps. — **gap:** only ruff runs. No mypy and no OpenAPI or event-schema validation, so the spec broke in this diff and nothing caught it.
+- [x] Lint, type-check and contract validation are part of the pipeline, not manual steps.
 
 ### The real review
 

@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16-alpine
+        image: postgres:16-alpine@sha256:064bc392816ef114fa815456f9175d27d7301d0442ce79034fffaae81b93f1aa
         env:
           POSTGRES_USER: hamicloud
           POSTGRES_PASSWORD: hamicloud_secret
@@ -25,7 +25,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
       redis:
-        image: redis:7-alpine
+        image: redis:7-alpine@sha256:49c071a9ee0793b89b4f9972338f32aa0845db88ce58bbf408bfbc29b688d0fe
         ports:
           - 6379:6379
         options: >-
@@ -36,10 +36,10 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
         with:
           python-version: "3.12"
           cache: "pip"
@@ -53,11 +53,16 @@ jobs:
         run: |
           ruff check apps/api
 
-      - name: Run Alembic Migrations
+      - name: Validate OpenAPI Contract
+        run: |
+          openapi-spec-validator contracts/openapi/v1.yaml
+
+      - name: Run Alembic Migrations and Schema Check
         env:
           DATABASE_URL_SYNC: postgresql://hamicloud:hamicloud_secret@localhost:5432/hamicloud
         run: |
           alembic -c migrations/alembic.ini upgrade head
+          alembic -c migrations/alembic.ini check
 
       - name: Run Mypy
         run: |
@@ -67,8 +72,6 @@ jobs:
         env:
           DATABASE_URL: postgresql+asyncpg://hamicloud:hamicloud_secret@localhost:5432/hamicloud
           DATABASE_URL_SYNC: postgresql://hamicloud:hamicloud_secret@localhost:5432/hamicloud
-          # The readiness probe tests (T15) need a live Redis; the service above
-          # publishes it on the default port, not the 6380 used by local compose.
           REDIS_URL: redis://localhost:6379/0
         run: |
           pytest apps/api/tests/ -v
@@ -78,10 +81,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Set up Go 1.23
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@f111f330730b5538f6509730b4ea7378cb76797e # v5.3.0
         with:
           go-version: "1.23"
           cache-dependency-path: runtime/go.sum
@@ -89,6 +92,7 @@ jobs:
       - name: Verify Go format and vet
         run: |
           cd runtime
+          test -z "$(gofmt -l .)" || (echo "Unformatted Go files:" && gofmt -l . && exit 1)
           go vet ./...
 
       - name: Run Go tests with race detector

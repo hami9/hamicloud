@@ -16,6 +16,7 @@ import (
 
 type mockJobStore struct {
 	mu              sync.Mutex
+	runningCalls    int
 	succeededCalls  int
 	failedCalls     int
 	cancelledCalls  int
@@ -23,6 +24,13 @@ type mockJobStore struct {
 	lastReason      string
 	lastShouldRetry bool
 	isCancelled     bool
+}
+
+func (m *mockJobStore) MarkJobAttemptRunning(ctx context.Context, intentID, attemptID, jobID string, leaseEpoch int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.runningCalls++
+	return nil
 }
 
 func (m *mockJobStore) MarkJobAttemptSucceeded(ctx context.Context, intentID, attemptID, jobID, resourceUID string, leaseEpoch int) error {
@@ -91,6 +99,9 @@ func TestJobReconciler_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	if st.runningCalls != 1 {
+		t.Errorf("expected 1 running call, got %d", st.runningCalls)
+	}
 	if st.succeededCalls != 1 {
 		t.Errorf("expected 1 succeeded call, got %d", st.succeededCalls)
 	}
@@ -116,6 +127,9 @@ func TestJobReconciler_TransientFailure_Retries(t *testing.T) {
 	err := rec.ReconcileJob(context.Background(), workload)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if st.runningCalls != 1 {
+		t.Errorf("expected 1 running call, got %d", st.runningCalls)
 	}
 	if st.failedCalls != 1 {
 		t.Errorf("expected 1 failed call, got %d", st.failedCalls)
@@ -147,6 +161,9 @@ func TestJobReconciler_BudgetExhausted_NoRetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	if st.runningCalls != 1 {
+		t.Errorf("expected 1 running call, got %d", st.runningCalls)
+	}
 	if st.failedCalls != 1 {
 		t.Errorf("expected 1 failed call, got %d", st.failedCalls)
 	}
@@ -172,6 +189,9 @@ func TestJobReconciler_Cancellation_BeforeExecution(t *testing.T) {
 	err := rec.ReconcileJob(context.Background(), workload)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if st.runningCalls != 0 {
+		t.Errorf("expected 0 running calls when cancelled before execution, got %d", st.runningCalls)
 	}
 	if st.cancelledCalls != 1 {
 		t.Errorf("expected 1 cancelled call, got %d", st.cancelledCalls)

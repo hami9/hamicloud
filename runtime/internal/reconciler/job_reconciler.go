@@ -15,6 +15,7 @@ import (
 )
 
 type JobStore interface {
+	MarkJobAttemptRunning(ctx context.Context, intentID, attemptID, jobID string, leaseEpoch int) error
 	MarkJobAttemptSucceeded(ctx context.Context, intentID, attemptID, jobID, resourceUID string, leaseEpoch int) error
 	MarkJobAttemptFailed(ctx context.Context, intentID, attemptID, jobID, reason string, exitCode int, leaseEpoch int, shouldRetry bool) error
 	MarkJobAttemptCancelled(ctx context.Context, intentID, attemptID, jobID string, leaseEpoch int) error
@@ -158,7 +159,15 @@ func (r *JobReconciler) ReconcileJob(ctx context.Context, workload *store.Claime
 		return r.store.MarkJobAttemptCancelled(ctx, workload.IntentID, workload.JobAttemptID, workload.JobID, workload.LeaseEpoch)
 	}
 
-	// 2. Setup execution context with timeout
+	// 2. Transition job and attempt STARTING -> RUNNING when workload actually starts (fenced by lease epoch)
+	if err := r.store.MarkJobAttemptRunning(ctx, workload.IntentID, workload.JobAttemptID, workload.JobID, workload.LeaseEpoch); err != nil {
+		if isCancel, _ := r.store.IsJobCancelRequested(ctx, workload.JobID); isCancel {
+			return r.store.MarkJobAttemptCancelled(ctx, workload.IntentID, workload.JobAttemptID, workload.JobID, workload.LeaseEpoch)
+		}
+		return fmt.Errorf("transition job to RUNNING: %w", err)
+	}
+
+	// 3. Setup execution context with timeout
 	timeout := time.Duration(workload.TimeoutSeconds) * time.Second
 	if timeout <= 0 {
 		timeout = 600 * time.Second

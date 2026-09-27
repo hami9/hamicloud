@@ -5,11 +5,38 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/hami9/hamicloud/runtime/internal/domain"
 )
+
+// legalSourcesSQL builds a SQL IN clause containing single-quoted source states
+// derived dynamically from domain.LegalTransitions.
+func legalSourcesSQL(targets ...domain.JobState) string {
+	seen := make(map[domain.JobState]bool)
+	var sources []domain.JobState
+	for _, target := range targets {
+		for _, src := range domain.LegalSourcesFor(target) {
+			if !seen[src] {
+				seen[src] = true
+				sources = append(sources, src)
+			}
+		}
+	}
+	sort.Slice(sources, func(i, j int) bool {
+		return sources[i] < sources[j]
+	})
+	parts := make([]string, len(sources))
+	for i, s := range sources {
+		parts[i] = fmt.Sprintf("'%s'", s)
+	}
+	return strings.Join(parts, ", ")
+}
 
 // NewUUID generates a compliant RFC 4122 v4 UUID without external dependencies.
 func NewUUID() string {
@@ -421,16 +448,10 @@ func (s *PostgresStore) CreateJobAttemptIntent(ctx context.Context, job Unadmitt
 	now := time.Now().UTC()
 	nextAttemptNumber := job.CurrentAttemptNumber + 1
 
-	// Check if retry budget is exceeded
+	// Check if retry budget is exceeded. MarkJobAttemptFailed already decides RETRY_WAIT vs FAILED,
+	// so this path should be unreachable: return an error instead of writing FAILED.
 	if nextAttemptNumber > job.MaxRetries+1 {
-		_, err := tx.Exec(ctx, `UPDATE jobs SET state = 'FAILED', updated_at = $1 WHERE id = $2 AND state = 'QUEUED'`, now, job.JobID)
-		if err != nil {
-			return nil, fmt.Errorf("mark job failed due to retry budget: %w", err)
-		}
-		if err := tx.Commit(ctx); err != nil {
-			return nil, fmt.Errorf("commit job failure: %w", err)
-		}
-		return nil, nil
+		return nil, fmt.Errorf("cannot create attempt: retry budget exhausted (attempt %d > max_retries %d + 1)", nextAttemptNumber, job.MaxRetries)
 	}
 
 	// 1. Create JobAttempt
@@ -450,13 +471,13 @@ func (s *PostgresStore) CreateJobAttemptIntent(ctx context.Context, job Unadmitt
 	}
 
 	// 2. Transition Job to ADMITTED
-	updateJobQuery := `
+	updateJobQuery := fmt.Sprintf(`
 		UPDATE jobs
 		SET state = 'ADMITTED',
 		    current_attempt_number = $1,
 		    updated_at = $2
-		WHERE id = $3 AND state = 'QUEUED';
-	`
+		WHERE id = $3 AND state IN (%s);
+	`, legalSourcesSQL(domain.StateAdmitted))
 	cmd, err = tx.Exec(ctx, updateJobQuery, nextAttemptNumber, now, job.JobID)
 	if err != nil {
 		return nil, fmt.Errorf("update job admitted: %w", err)
@@ -549,12 +570,12 @@ func (s *PostgresStore) RequeueRetryWaitJobs(ctx context.Context, baseBackoff ti
 		}
 
 		if now.Sub(j.updatedAt) >= backoff {
-			cmd, err := s.pool.Exec(ctx, `
+			cmd, err := s.pool.Exec(ctx, fmt.Sprintf(`
 				UPDATE jobs
 				SET state = 'QUEUED',
 				    updated_at = $1
-				WHERE id = $2 AND state = 'RETRY_WAIT';
-			`, now, j.id)
+				WHERE id = $2 AND state IN (%s);
+			`, legalSourcesSQL(domain.StateQueued)), now, j.id)
 			if err != nil {
 				return requeuedCount, fmt.Errorf("requeue job %s: %w", j.id, err)
 			}
@@ -651,12 +672,12 @@ func (s *PostgresStore) ClaimNextJobAttempt(ctx context.Context, workerID string
 		return nil, fmt.Errorf("update job attempt to starting: %w", err)
 	}
 
-	updateJobQuery := `
+	updateJobQuery := fmt.Sprintf(`
 		UPDATE jobs
 		SET state = CASE WHEN state = 'CANCEL_REQUESTED' THEN 'CANCEL_REQUESTED' ELSE 'STARTING' END,
 		    updated_at = $1
-		WHERE id = $2 AND state IN ('ADMITTED', 'STARTING', 'CANCEL_REQUESTED');
-	`
+		WHERE id = $2 AND state IN (%s, 'CANCEL_REQUESTED');
+	`, legalSourcesSQL(domain.StateStarting))
 	if _, err := tx.Exec(ctx, updateJobQuery, now, workload.JobID); err != nil {
 		return nil, fmt.Errorf("update job to starting: %w", err)
 	}
@@ -667,6 +688,66 @@ func (s *PostgresStore) ClaimNextJobAttempt(ctx context.Context, workerID string
 
 	workload.LeaseEpoch = newEpoch
 	return &workload, nil
+}
+
+// MarkJobAttemptRunning transitions attempt and job from STARTING to RUNNING, fenced by lease epoch.
+func (s *PostgresStore) MarkJobAttemptRunning(ctx context.Context, intentID, attemptID, jobID string, leaseEpoch int) error {
+	if leaseEpoch <= 0 {
+		return fmt.Errorf("lease epoch must be greater than zero, got %d", leaseEpoch)
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	now := time.Now().UTC()
+
+	// 1. Verify lease epoch fencing on execution_intents
+	intentQuery := `
+		UPDATE execution_intents
+		SET updated_at = $1
+		WHERE id = $2 AND lease_epoch = $3 AND status = 'CLAIMED';
+	`
+	cmd, err := tx.Exec(ctx, intentQuery, now, intentID, leaseEpoch)
+	if err != nil {
+		return fmt.Errorf("verify job intent claimed: %w", err)
+	}
+	if cmd.RowsAffected() == 0 {
+		return fmt.Errorf("fencing error: intent %s epoch %d is stale or no longer claimed", intentID, leaseEpoch)
+	}
+
+	// 2. Transition attempt STARTING -> RUNNING
+	cmdAttempt, err := tx.Exec(ctx, `
+		UPDATE job_attempts
+		SET state = 'RUNNING',
+		    updated_at = $1
+		WHERE id = $2 AND state = 'STARTING';
+	`, now, attemptID)
+	if err != nil {
+		return fmt.Errorf("update job attempt running: %w", err)
+	}
+	if cmdAttempt.RowsAffected() != 1 {
+		return fmt.Errorf("failed to transition attempt %s to RUNNING: expected 1 row affected, got %d", attemptID, cmdAttempt.RowsAffected())
+	}
+
+	// 3. Transition job STARTING -> RUNNING guarded by domain legal sources
+	updateJobQuery := fmt.Sprintf(`
+		UPDATE jobs
+		SET state = 'RUNNING',
+		    updated_at = $1
+		WHERE id = $2 AND state IN (%s);
+	`, legalSourcesSQL(domain.StateRunning))
+	cmdJob, err := tx.Exec(ctx, updateJobQuery, now, jobID)
+	if err != nil {
+		return fmt.Errorf("update job running: %w", err)
+	}
+	if cmdJob.RowsAffected() != 1 {
+		return fmt.Errorf("failed to transition job %s to RUNNING: expected 1 row affected, got %d", jobID, cmdJob.RowsAffected())
+	}
+
+	return tx.Commit(ctx)
 }
 
 // MarkJobAttemptSucceeded finalizes a successful job attempt and marks logical job SUCCEEDED (or CANCELLED if cancel requested).
@@ -710,12 +791,12 @@ func (s *PostgresStore) MarkJobAttemptSucceeded(ctx context.Context, intentID, a
 		return fmt.Errorf("update job attempt succeeded: %w", err)
 	}
 
-	updateJobQuery := `
+	updateJobQuery := fmt.Sprintf(`
 		UPDATE jobs
 		SET state = CASE WHEN state = 'CANCEL_REQUESTED' THEN 'CANCELLED' ELSE 'SUCCEEDED' END,
 		    updated_at = $1
-		WHERE id = $2 AND state IN ('STARTING', 'RUNNING', 'CANCEL_REQUESTED');
-	`
+		WHERE id = $2 AND state IN (%s);
+	`, legalSourcesSQL(domain.StateSucceeded, domain.StateCancelled))
 	cmdJob, err := tx.Exec(ctx, updateJobQuery, now, jobID)
 	if err != nil {
 		return fmt.Errorf("update job state: %w", err)
@@ -769,7 +850,7 @@ func (s *PostgresStore) MarkJobAttemptFailed(ctx context.Context, intentID, atte
 		return fmt.Errorf("update job attempt failed: %w", err)
 	}
 
-	updateJobQuery := `
+	updateJobQuery := fmt.Sprintf(`
 		UPDATE jobs
 		SET state = CASE
 		    WHEN state = 'CANCEL_REQUESTED' THEN 'CANCELLED'
@@ -777,8 +858,8 @@ func (s *PostgresStore) MarkJobAttemptFailed(ctx context.Context, intentID, atte
 		    ELSE 'FAILED'
 		END,
 		    updated_at = $2
-		WHERE id = $3 AND state IN ('STARTING', 'RUNNING', 'CANCEL_REQUESTED');
-	`
+		WHERE id = $3 AND state IN (%s);
+	`, legalSourcesSQL(domain.StateRetryWait, domain.StateFailed, domain.StateCancelled))
 	cmdJob, err := tx.Exec(ctx, updateJobQuery, shouldRetry, now, jobID)
 	if err != nil {
 		return fmt.Errorf("update job state: %w", err)
@@ -829,12 +910,13 @@ func (s *PostgresStore) MarkJobAttemptCancelled(ctx context.Context, intentID, a
 		return fmt.Errorf("update job attempt cancelled: %w", err)
 	}
 
-	cmdJob, err := tx.Exec(ctx, `
+	updateJobQuery := fmt.Sprintf(`
 		UPDATE jobs
 		SET state = 'CANCELLED',
 		    updated_at = $1
-		WHERE id = $2 AND state IN ('STARTING', 'RUNNING', 'CANCEL_REQUESTED');
-	`, now, jobID)
+		WHERE id = $2 AND state IN (%s);
+	`, legalSourcesSQL(domain.StateCancelled))
+	cmdJob, err := tx.Exec(ctx, updateJobQuery, now, jobID)
 	if err != nil {
 		return fmt.Errorf("update job cancelled: %w", err)
 	}

@@ -411,3 +411,56 @@ def test_m2_e2e_service_rollback_workflow(
     assert rel3_details["image_digest"] == "docker.io/library/nginx:v1.0.0"
     assert rel3_details["status"] == "HEALTHY"
     assert rel3_details["release_number"] == 3
+
+
+def test_m2_get_job_output_conflict_on_non_terminal_states(client: TestClient, clean_db: None):
+    """
+    Ensure GET /v1/jobs/{job_id}/output rejects requests with HTTP 409 Conflict
+    whenever the job is in any non-terminal state (including RETRY_WAIT and RECOVERY_PENDING).
+    """
+    headers = {"X-Dev-Subject": "alice", "Idempotency-Key": f"idemp-ws-{time.time()}"}
+
+    # 1. Create Workspace
+    ws_resp = client.post(
+        "/v1/workspaces",
+        json={"name": "Output State Space", "slug": "output-state-space"},
+        headers=headers,
+    )
+    assert ws_resp.status_code == 201
+    ws_id = ws_resp.json()["id"]
+
+    # 2. Submit Job
+    job_resp = client.post(
+        f"/v1/workspaces/{ws_id}/jobs",
+        json={
+            "name": "state-test-job",
+            "image_digest": "docker.io/library/alpine:latest",
+            "command_args": ["echo", "test"],
+        },
+        headers={**headers, "Idempotency-Key": f"idemp-job-{time.time()}"},
+    )
+    assert job_resp.status_code == 202
+    job_id = job_resp.json()["operation_id"]
+
+    conn = psycopg2.connect(TEST_DB_SYNC)
+    try:
+        # Test RETRY_WAIT returns 409
+        with conn.cursor() as cur:
+            cur.execute("UPDATE jobs SET state = 'RETRY_WAIT' WHERE id = %s", (job_id,))
+        conn.commit()
+
+        out_resp = client.get(f"/v1/jobs/{job_id}/output", headers=headers)
+        assert out_resp.status_code == 409
+        assert "Job is still executing" in out_resp.json()["message"]
+
+        # Test RECOVERY_PENDING returns 409
+        with conn.cursor() as cur:
+            cur.execute("UPDATE jobs SET state = 'RECOVERY_PENDING' WHERE id = %s", (job_id,))
+        conn.commit()
+
+        out_resp2 = client.get(f"/v1/jobs/{job_id}/output", headers=headers)
+        assert out_resp2.status_code == 409
+        assert "Job is still executing" in out_resp2.json()["message"]
+    finally:
+        conn.close()
+

@@ -487,14 +487,8 @@ async def get_job_output(
         db, caller, job.workspace_id, min_role=WorkspaceRole.VIEWER, not_found_detail="Job not found"
     )
 
-    # 3. If job is still actively running, pending admission, or in-flight cancellation
-    if job.state in (
-        JobState.QUEUED,
-        JobState.ADMITTED,
-        JobState.STARTING,
-        JobState.RUNNING,
-        JobState.CANCEL_REQUESTED,
-    ):
+    # 3. If job is still actively running, pending admission, awaiting retry, or in-flight cancellation
+    if not is_terminal_job_state(job.state):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Job is still executing, output is not yet available",

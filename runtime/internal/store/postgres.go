@@ -739,14 +739,21 @@ func (s *PostgresStore) MarkJobAttemptSucceeded(ctx context.Context, intentID, a
 		return fmt.Errorf("update job attempt succeeded: %w", err)
 	}
 
+	var currentJobState string
+	_ = tx.QueryRow(ctx, `SELECT state FROM jobs WHERE id = $1;`, jobID).Scan(&currentJobState)
+	nextJobState := "SUCCEEDED"
+	if currentJobState == "CANCEL_REQUESTED" {
+		nextJobState = "CANCELLED"
+	}
+
 	_, err = tx.Exec(ctx, `
 		UPDATE jobs
-		SET state = 'SUCCEEDED',
-		    updated_at = $1
-		WHERE id = $2;
-	`, now, jobID)
+		SET state = $1,
+		    updated_at = $2
+		WHERE id = $3;
+	`, nextJobState, now, jobID)
 	if err != nil {
-		return fmt.Errorf("update job succeeded: %w", err)
+		return fmt.Errorf("update job %s: %w", nextJobState, err)
 	}
 
 	return tx.Commit(ctx)

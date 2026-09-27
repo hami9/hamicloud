@@ -195,16 +195,10 @@ func (r *JobReconciler) ReconcileJob(ctx context.Context, workload *store.Claime
 	// 3. Run the workload
 	exitCode, failureReason, runErr := r.runner.RunJob(runCtx, workload)
 
-	// 4. Check if job was cancelled during execution
-	if isCancel, _ := r.store.IsJobCancelRequested(ctx, workload.JobID); isCancel {
-		r.logger.Info("Job confirmed cancelled during execution. Marking CANCELLED.",
-			"job_id", workload.JobID,
-			"attempt_number", workload.AttemptNumber,
-		)
-		return r.store.MarkJobAttemptCancelled(ctx, workload.IntentID, workload.JobAttemptID, workload.JobID, workload.LeaseEpoch)
-	}
-
-	// 5. Handle Success
+	// 4. Handle Success
+	// Per Decision D4: If workload process completed with exit code 0, the attempt record retains
+	// its true outcome (SUCCEEDED, exit_code: 0). If cancellation was requested, MarkJobAttemptSucceeded
+	// atomically transitions the logical job to CANCELLED instead of SUCCEEDED.
 	if exitCode == 0 && runErr == nil {
 		prefix := workload.JobID
 		if len(prefix) > 8 {
@@ -217,6 +211,15 @@ func (r *JobReconciler) ReconcileJob(ctx context.Context, workload *store.Claime
 			"resource_uid", resourceUID,
 		)
 		return r.store.MarkJobAttemptSucceeded(ctx, workload.IntentID, workload.JobAttemptID, workload.JobID, resourceUID, workload.LeaseEpoch)
+	}
+
+	// 5. Check if job was cancelled during execution (interrupted or failed workload)
+	if isCancel, _ := r.store.IsJobCancelRequested(ctx, workload.JobID); isCancel {
+		r.logger.Info("Job confirmed cancelled during execution. Marking CANCELLED.",
+			"job_id", workload.JobID,
+			"attempt_number", workload.AttemptNumber,
+		)
+		return r.store.MarkJobAttemptCancelled(ctx, workload.IntentID, workload.JobAttemptID, workload.JobID, workload.LeaseEpoch)
 	}
 
 	// 6. Handle Failure (transient vs terminal)

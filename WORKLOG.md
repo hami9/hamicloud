@@ -1552,12 +1552,42 @@ Following project review of `18a3a4e..816cc4a`, all required fixes were implemen
 - **Verification Evidence:**
   - Python tests: `107 passed, 2 warnings` across full test suite (`pytest apps/api` and repo root).
   - Go test suite: `go test -v ./...` passed 100% across all packages in `runtime`.
-  - Static checks: `go vet ./...`, `ruff check apps/api contracts`, `mypy --explicit-package-bases app` all 100% clean.
-  - Contract validation: `openapi-spec-validator contracts/openapi/v1.yaml` clean.
+### [2026-09-27T15:30:00Z] Phase 2 / Milestone M2: CI PostgreSQL Provisioning, Legal State Machine Transitions & Guard Tests
 
+- **Milestone:** P2 / M2 — Usable MVP State Machine Hardening
+- **Status:** COMPLETED & VERIFIED
+- **Deliverables & Hardening:**
+  1. **CI PostgreSQL Service & Fail-Closed Integration Tests (`.github/workflows/ci.yml`, `runtime/internal/store/postgres_test.go`):**
+     - Configured `postgres:16-alpine` service container for `go-checks` creating `hamicloud_test`.
+     - Automated Alembic migrations execution (`alembic -c migrations/alembic.ini upgrade head`) prior to Go test execution.
+     - Passed `RUNTIME_DATABASE_URL`, `ENVIRONMENT=development`, and `CI=true`.
+     - Replaced silent skipping with `t.Fatalf` in `connectTestStore` when `CI=true`, guaranteeing all store integration tests run and pass in CI.
+  2. **Strict Conformance to `contracts/state-machines/job.v1.json` (`runtime/internal/store/postgres.go`, `runtime/internal/reconciler/job_reconciler.go`):**
+     - **Workload Startup (`STARTING -> RUNNING`):** Added `MarkJobAttemptRunning` to transition job attempt and logical job `STARTING -> RUNNING` fenced by lease epoch immediately before workload execution. Eliminated illegal `STARTING -> SUCCEEDED` edge.
+     - **Cancellation Guard (`CANCEL_REQUESTED -> CANCELLED`):** Hardened `MarkJobAttemptCancelled` to strictly guard `WHERE state = 'CANCEL_REQUESTED'`, eliminating illegal `STARTING/RUNNING -> CANCELLED` edges.
+     - **Retry Budget Exhaustion (`CreateJobAttemptIntent`):** Removed illegal `QUEUED -> FAILED` database write on retry budget exhaustion. Returns descriptive error instead.
+     - **Dynamic Guard Generation:** Derived SQL `WHERE state IN (...)` clauses dynamically from `domain.LegalSourcesFor(target)` to prevent code-contract drift.
+     - **Transition Legality Assertion:** Added `TestStore_JobStateTransitions_AllEdgesLegal` asserting every state write in the store corresponds strictly to a legal edge.
+  3. **Mutation-Killing Guard Integration Tests (`runtime/internal/store/postgres_test.go`):**
+     - `TestPostgresStore_MarkJobAttemptSucceeded_TerminalJobNotOverwritten`: asserts terminal job (`FAILED`) is not overwritten by `MarkJobAttemptSucceeded`, error is returned, and state is preserved. Kills mutations removing `AND state IN (...)` or disabling `RowsAffected() != 1`.
+     - `TestPostgresStore_UnfencedIntentRejected`: asserts `leaseEpoch <= 0` is rejected across `MarkJobAttemptRunning`, `MarkJobAttemptSucceeded`, `MarkJobAttemptFailed`, `MarkJobAttemptCancelled`, `MarkReleaseHealthy`, and `MarkReleaseFailed`.
+     - `TestPostgresStore_MarkJobAttemptCancelled_StaleEpochReturnsFencingError`: asserts stale epoch on cancel returns fencing error and commits zero modifications.
+     - `TestPostgresStore_MarkJobAttemptCancelled_GuardsOnCancelRequested`: asserts cancel from `RUNNING` or `STARTING` without `CANCEL_REQUESTED` is rejected.
+     - `TestPostgresStore_MarkJobAttemptRunning_SuccessAndFencing`: asserts valid transition and fencing enforcement on workload startup.
+  4. **Quality Gate Verification Table:**
 
-
-
+| Quality Gate | Target / Command | Status | Notes / Skip Reasons |
+|---|---|---|---|
+| **Python Unit & Integration** | `pytest apps/api/tests/` | **PASS (108/108)** | `test_live_keycloak_tokens_and_two_workspace_isolation`: passed. Skips only when Keycloak server is not running or HTTP discovery times out (`timeout=2.0s`). |
+| **Python Linter** | `ruff check apps/api` | **PASS** | 0 lint errors across all files. |
+| **Python Type Check** | `mypy --explicit-package-bases app` | **PASS** | 0 type errors. |
+| **OpenAPI Contract Validation** | `openapi-spec-validator contracts/openapi/v1.yaml` | **PASS** | Spec matches API and models. |
+| **Alembic Schema Check** | `alembic check` | **PASS** | Clean against both `hamicloud` and `hamicloud_test`. |
+| **Go Code Formatting** | `gofmt -l .` | **PASS** | 0 unformatted Go files. |
+| **Go Static Analysis** | `go vet ./...` | **PASS** | 0 warnings or errors. |
+| **Go Store Integration Tests** | `go test -v ./internal/store/...` | **PASS (10/10)** | All store race, fencing, and guard tests execute and pass against `hamicloud_test`. |
+| **Go Reconciler & Control Loop** | `go test -v ./internal/reconciler/... ./internal/executor/...` | **PASS** | Verified `MarkJobAttemptRunning` execution and cancel races. |
+| **Go Binaries Build** | `CGO_ENABLED=0 go build` | **PASS** | Scheduler and executor binaries compile cleanly. |
 
 
 

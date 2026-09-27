@@ -16,12 +16,14 @@ from app.core.idempotency import (
     get_idempotency_key,
     handle_idempotency_race,
 )
+from app.core.image_policy import validate_image_policy
 from app.core.pagination import decode_cursor, encode_cursor
 from app.db.session import get_db
 from app.models.application import Application
 from app.models.release import Release, ReleaseStatus
 from app.models.workspace import WorkspaceRole
 from app.schemas.application import (
+    ApplicationListResponse,
     ApplicationResponse,
     CreateApplicationRequest,
     DeployReleaseRequest,
@@ -122,6 +124,9 @@ async def deploy_release(
     await authorize_workspace_access(
         db, caller, workspace_id, min_role=WorkspaceRole.DEVELOPER, not_found_detail="Application not found"
     )
+
+    # Image policy check: verify image against approved registry allowlist (Decision D13, ADR-0004 §8)
+    validate_image_policy(payload.image_digest)
 
     # Acquire exclusive row lock for safe generation increment (populate_existing=True ensures fresh entity)
     lock_stmt = (
@@ -400,8 +405,95 @@ async def list_releases(
             image_digest=r.image_digest,
             config_json=r.config_json or {},
             status=r.status,
+            status_reason=r.status_reason,
             created_at=r.created_at,
         )
         for r in releases
     ]
     return ReleaseListResponse(items=items, next_cursor=next_cursor)
+
+
+@router.get(
+    "/workspaces/{workspace_id}/apps",
+    response_model=ApplicationListResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def list_workspace_applications(
+    workspace_id: uuid.UUID,
+    limit: int = Query(default=20, ge=1, le=100),
+    cursor: Optional[str] = Query(default=None),
+    caller: Caller = Depends(get_caller),
+    db: AsyncSession = Depends(get_db),
+) -> ApplicationListResponse:
+    # 1. Authorize workspace access (VIEWER or higher)
+    await authorize_workspace_access(
+        db, caller, workspace_id, min_role=WorkspaceRole.VIEWER, not_found_detail="Workspace not found"
+    )
+
+    # 2. Query applications with cursor pagination
+    stmt = select(Application).where(Application.workspace_id == workspace_id)
+    if cursor:
+        cursor_ts, cursor_id = decode_cursor(cursor)
+        stmt = stmt.where(
+            (Application.created_at < cursor_ts)
+            | ((Application.created_at == cursor_ts) & (Application.id < cursor_id))
+        )
+
+    stmt = stmt.order_by(Application.created_at.desc(), Application.id.desc()).limit(limit + 1)
+    apps = (await db.execute(stmt)).scalars().all()
+
+    next_cursor = None
+    if len(apps) > limit:
+        next_item = apps[limit - 1]
+        next_cursor = encode_cursor(next_item.created_at, next_item.id)
+        apps = apps[:limit]
+
+    items = [
+        ApplicationResponse(
+            id=app.id,
+            workspace_id=app.workspace_id,
+            name=app.name,
+            slug=app.slug,
+            workload_type=app.workload_type.value,
+            desired_generation=app.desired_generation,
+            current_release_id=app.current_release_id,
+            created_at=app.created_at,
+        )
+        for app in apps
+    ]
+    return ApplicationListResponse(items=items, next_cursor=next_cursor)
+
+
+@router.get(
+    "/apps/{app_id}",
+    response_model=ApplicationResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def get_application(
+    app_id: uuid.UUID,
+    caller: Caller = Depends(get_caller),
+    db: AsyncSession = Depends(get_db),
+) -> ApplicationResponse:
+    stmt = select(Application).where(Application.id == app_id)
+    app = (await db.execute(stmt)).scalar_one_or_none()
+    if not app:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Application not found",
+        )
+
+    # Tenant isolation: verify caller membership of application's workspace (VIEWER or higher)
+    await authorize_workspace_access(
+        db, caller, app.workspace_id, min_role=WorkspaceRole.VIEWER, not_found_detail="Application not found"
+    )
+
+    return ApplicationResponse(
+        id=app.id,
+        workspace_id=app.workspace_id,
+        name=app.name,
+        slug=app.slug,
+        workload_type=app.workload_type.value,
+        desired_generation=app.desired_generation,
+        current_release_id=app.current_release_id,
+        created_at=app.created_at,
+    )

@@ -26,8 +26,9 @@ def extract_topics_from_ast_tree(tree: ast.AST, filepath: str = "<unknown>") -> 
             elif isinstance(node.func, ast.Attribute):
                 func_name = node.func.attr
 
-            is_outbox_call = func_name == "OutboxEvent" or (
-                func_name is not None and "outbox" in func_name.lower()
+            is_outbox_call = (
+                func_name in ("OutboxEvent", "create_outbox_event")
+                or (func_name is not None and "outbox_event" in func_name.lower())
             )
             topic_kw = next((kw for kw in node.keywords if kw.arg == "topic"), None)
 

@@ -45,9 +45,15 @@ class ReleaseResponse(BaseModel):
     image_digest: str
     config_json: Dict[str, Any] = Field(default_factory=dict)
     status: ReleaseStatus
+    status_reason: Optional[str] = None
     created_at: datetime
 
 
 class ReleaseListResponse(BaseModel):
     items: List[ReleaseResponse]
+    next_cursor: Optional[str] = None
+
+
+class ApplicationListResponse(BaseModel):
+    items: List[ApplicationResponse]
     next_cursor: Optional[str] = None

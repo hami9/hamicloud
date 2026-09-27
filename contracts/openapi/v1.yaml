@@ -113,6 +113,68 @@ paths:
           $ref: '#/components/responses/405MethodNotAllowed'
 
   /v1/workspaces/{workspace_id}/apps:
+    get:
+      summary: List applications in workspace
+      description: Cursor-paginated listing of applications in a workspace; requires VIEWER role or higher.
+      operationId: listWorkspaceApplications
+      parameters:
+        - name: workspace_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+            example: "550e8400-e29b-41d4-a716-446655440000"
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+            example: 20
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+            example: "MjAyNi0wOS0xOVQxMjowMDowMHw3ZmY1YmFmZS1iMzIxLTRhYjYtYTlmOS05ZDNlYjE1ZmVkYTM="
+      responses:
+        '200':
+          description: List of applications with pagination metadata
+          headers:
+            X-Correlation-ID:
+              $ref: '#/components/headers/X-Correlation-ID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApplicationListResponse'
+              example:
+                items:
+                  - id: "7ff5bafe-b321-4ab6-a9f9-9d3eb15feda3"
+                    workspace_id: "550e8400-e29b-41d4-a716-446655440000"
+                    name: "Payment Service"
+                    slug: "payment-service"
+                    workload_type: "HTTP_SERVICE"
+                    desired_generation: 1
+                    current_release_id: null
+                    created_at: "2026-09-19T12:00:00Z"
+                next_cursor: null
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '422':
+          $ref: '#/components/responses/422UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+        '405':
+          $ref: '#/components/responses/405MethodNotAllowed'
     post:
       summary: Create an application in workspace
       operationId: createApplication
@@ -303,6 +365,49 @@ paths:
           $ref: '#/components/responses/409Conflict'
         '422':
           $ref: '#/components/responses/422UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+        '405':
+          $ref: '#/components/responses/405MethodNotAllowed'
+
+  /v1/apps/{app_id}:
+    get:
+      summary: Get application details
+      description: Retrieve details of an application by ID; requires VIEWER role or higher in the workspace.
+      operationId: getApplication
+      parameters:
+        - name: app_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+            example: "7ff5bafe-b321-4ab6-a9f9-9d3eb15feda3"
+      responses:
+        '200':
+          description: Application details
+          headers:
+            X-Correlation-ID:
+              $ref: '#/components/headers/X-Correlation-ID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApplicationResponse'
+              example:
+                id: "7ff5bafe-b321-4ab6-a9f9-9d3eb15feda3"
+                workspace_id: "550e8400-e29b-41d4-a716-446655440000"
+                name: "Payment Service"
+                slug: "payment-service"
+                workload_type: "HTTP_SERVICE"
+                desired_generation: 1
+                current_release_id: null
+                created_at: "2026-09-19T12:00:00Z"
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
         '500':
           $ref: '#/components/responses/500InternalServerError'
         '405':
@@ -528,6 +633,46 @@ paths:
           $ref: '#/components/responses/401Unauthorized'
         '404':
           $ref: '#/components/responses/404NotFound'
+        '422':
+          $ref: '#/components/responses/422UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+        '405':
+          $ref: '#/components/responses/405MethodNotAllowed'
+
+  /v1/jobs/{job_id}/output:
+    get:
+      summary: Download authorized job execution output and artifact
+      operationId: getJobOutput
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+            example: "5ba5fb57-0f6a-485b-a113-fd19d329591f"
+      responses:
+        '200':
+          description: Downloadable job execution output
+          headers:
+            X-Correlation-ID:
+              $ref: '#/components/headers/X-Correlation-ID'
+            Content-Disposition:
+              schema:
+                type: string
+                example: 'attachment; filename="job-5ba5fb57-output.txt"'
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: "HamiCloud Job Execution Output\nStatus: SUCCEEDED\nExit Code: 0"
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '409':
+          $ref: '#/components/responses/409Conflict'
         '422':
           $ref: '#/components/responses/422UnprocessableEntity'
         '500':
@@ -981,6 +1126,7 @@ components:
             - SERVICE_UNAVAILABLE
             - NOT_IMPLEMENTED
             - INTERNAL_SERVER_ERROR
+            - IMAGE_POLICY_VIOLATION
           example: "NOT_FOUND"
         message:
           type: string
@@ -1105,6 +1251,29 @@ components:
         current_release_id: null
         created_at: "2026-09-19T12:00:00Z"
 
+    ApplicationListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ApplicationResponse'
+        next_cursor:
+          type: [string, 'null']
+          example: null
+      example:
+        items:
+          - id: "7ff5bafe-b321-4ab6-a9f9-9d3eb15feda3"
+            workspace_id: "550e8400-e29b-41d4-a716-446655440000"
+            name: "Payment Service"
+            slug: "payment-service"
+            workload_type: "HTTP_SERVICE"
+            desired_generation: 1
+            current_release_id: null
+            created_at: "2026-09-19T12:00:00Z"
+        next_cursor: null
+
     DeployReleaseRequest:
       type: object
       required: [image_digest, port]
@@ -1179,7 +1348,7 @@ components:
           example: "RELEASE"
         status:
           type: string
-          enum: [ACCEPTED, QUEUED, ADMITTED, STARTING, RUNNING, SUCCEEDED, RETRY_WAIT, FAILED, CANCEL_REQUESTED, CANCELLED, REQUESTED, BUILDING, IMAGE_READY, DEPLOYING, HEALTHY, BUILD_FAILED, DEPLOY_FAILED]
+          enum: [ACCEPTED, QUEUED, ADMITTED, STARTING, RUNNING, SUCCEEDED, RETRY_WAIT, RECOVERY_PENDING, FAILED, CANCEL_REQUESTED, CANCELLED, REQUESTED, BUILDING, IMAGE_READY, DEPLOYING, HEALTHY, BUILD_FAILED, DEPLOY_FAILED]
           example: "IMAGE_READY"
         status_url:
           type: string
@@ -1399,6 +1568,9 @@ components:
           type: string
           enum: [REQUESTED, BUILDING, IMAGE_READY, DEPLOYING, HEALTHY, BUILD_FAILED, DEPLOY_FAILED]
           example: "IMAGE_READY"
+        status_reason:
+          type: [string, 'null']
+          example: null
         created_at:
           type: string
           format: date-time

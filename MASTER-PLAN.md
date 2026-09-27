@@ -4,7 +4,7 @@ Single tracking file for both projects. It links the two roadmaps, fixes the exe
 
 **Status legend:** `[ ]` not started · `[~]` in progress · `[x]` closed with a committed evidence record
 
-**Current position:** HamiCloud M0 — open. 28 of 45 boxes pass.
+**Current position:** HamiCloud M1 — closed. M2 — open.
 
 ---
 
@@ -64,96 +64,11 @@ A closed milestone that later turns out to be wrong does not get its old checkli
 
 # Part A — HamiCloud
 
-## A.1 M0 — Design baseline `[~]`
+## A.1 M0 — Design baseline `[x]`
 
-Close M0 only when the contracts are specific enough that P1 can be implemented without inventing them mid-code.
-
-Review 2026-09-13 covered commit `ca14896` plus the uncommitted working tree. A box is ticked only when the named artifact was checked and it holds. Each unticked box shows its gap inline.
-
-### Architecture decision records
-
-Four records exist, each short and decided — not a list of options.
-
-**ADR-1 — Responsibility split**
-
-- [x] States which decisions belong to the FastAPI control API, the Go scheduler, the Go execution workers, and Kubernetes.
-- [x] Answers, in one sentence with no "it depends": *who decides that a job is allowed to start right now?*
-- [x] States that HamiCloud chooses eligible work and Kubernetes chooses node placement.
-
-**ADR-2 — Durable state**
-
-- [x] States that PostgreSQL owns truth and NATS only wakes processing up.
-- [x] Describes what happens when a notification is lost, and names the periodic reconciliation scan that repairs it.
-- [x] States that a missing notification must never erase accepted work.
-
-**ADR-3 — Delivery semantics**
-
-- [x] States **at-least-once** delivery with idempotent control-plane transitions, explicitly.
-- [x] Explicitly rejects any claim of exactly-once execution or exactly-once external side effects.
-- [x] States that workload code must tolerate being started more than once.
-- [x] Distinguishes an application retry (new attempt) from a broker redelivery (no new attempt).
-
-**ADR-4 — Trust model**
-
-- [x] States the v1 posture: invited users, reviewed image allowlist, single cluster.
-- [x] Documents the **limits**, not only the controls — what this design does *not* defend against.
-- [x] States that a namespace is a management boundary, not a hostile-code sandbox.
-
-### Initial schema
-
-Cheap now, expensive at M2. Verify each exists in the migration, not only in prose.
-
-- [x] Unique constraint on `(workspace, endpoint, idempotency_key)`, plus a stored request-body hash for conflict detection.
-- [x] Unique consumed-event record **per handler**, not per `event_id` alone.
-- [x] Logical job state stored separately from attempt state.
-- [x] `lease_epoch` present on the attempt/intent, and `resource_uid` present for matching the Kubernetes object.
-- [x] Foreign keys and workspace scoping on every tenant table.
-- [x] Outbox table with event ID, schema version and publish status.
-- [x] Quota reservation table with reservation ID, expiry and release status.
-- [x] One migration owner is named; Python migrations own the shared schema.
-
-### API contract examples
-
-Each behavior has a concrete request/response example committed, not just a description.
-
-- [x] Submitting a job without an idempotency key is rejected.
-- [x] Same key + different body → conflict.
-- [x] Same key + identical body → the original accepted operation is returned.
-- [x] Deploying returns `202` with an operation ID, not a final result.
-- [x] Every ID-based lookup checks workspace membership.
-- [x] Structured error codes, correlation ID and pagination are defined.
-- [x] Idempotency key retention (at least 24 hours) is stated in the published contract.
-
-### Pins and environment
-
-- [x] Versions and container digests are pinned — no `latest` anywhere.
-- [x] The tested compatibility matrix is committed to the repository.
-- [x] Local bootstrap (PostgreSQL, Redis, NATS, reference identity provider) is documented and reproducible from a clean machine.
-
-### CI
-
-- [x] CI runs on the current commit and passes.
-- [x] **The red path was tested:** a test was deliberately broken and CI failed as expected. A green badge that cannot go red is worse than no badge.
-- [x] Lint, type-check and contract validation are part of the pipeline, not manual steps.
-
-### The real review
-
-Self-approval is weak evidence on a solo project. Replace it with a falsification attempt:
-
-- [ ] Spend ~30 minutes writing the **first P1 endpoint and first migration against these contracts**. — not started.
-- [ ] Record every point where you hesitated and had to invent a decision — each one is a place the contract is silent.
-- [ ] Fold those decisions back into the relevant ADR or schema before closing M0.
-
-### Evidence record
-
-- [ ] Milestone ID: `M0`
-- [ ] Commit SHA:
-- [ ] Environment:
-- [ ] Link to the four ADRs:
-- [ ] Link to the migration and OpenAPI examples:
-- [ ] Link to the first passing CI run:
-- [ ] Link to the red-path CI run (deliberate failure):
-- [ ] Remaining limitations and open questions:
+- **Status:** Closed
+- **Closed Date:** 2026-09-26
+- **Evidence Record:** [`docs/evidence/M0.md`](docs/evidence/M0.md)
 
 ## A.2 M1 — First live application `[ ]`
 

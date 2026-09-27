@@ -3,6 +3,7 @@ package domain
 import (
 	"errors"
 	"fmt"
+	"sort"
 )
 
 // JobState represents the logical or attempt state of a HamiCloud Job.
@@ -96,4 +97,18 @@ func ValidateTransition(current, next JobState) error {
 	}
 
 	return nil
+}
+
+// LegalSourcesFor returns all states that have an incoming legal transition to target, sorted alphabetically.
+func LegalSourcesFor(target JobState) []JobState {
+	var sources []JobState
+	for from, allowed := range legalTransitions {
+		if allowed[target] {
+			sources = append(sources, from)
+		}
+	}
+	sort.Slice(sources, func(i, j int) bool {
+		return sources[i] < sources[j]
+	})
+	return sources
 }

@@ -317,3 +317,40 @@ func TestIsTerminal(t *testing.T) {
 		}
 	}
 }
+
+func TestLegalSourcesFor(t *testing.T) {
+	expected := map[domain.JobState][]domain.JobState{
+		domain.StateQueued:          {domain.StateRetryWait},
+		domain.StateAdmitted:        {domain.StateQueued},
+		domain.StateStarting:        {domain.StateAdmitted},
+		domain.StateRunning:         {domain.StateStarting},
+		domain.StateSucceeded:       {domain.StateRunning},
+		domain.StateCancelled:       {domain.StateCancelRequested},
+		domain.StateRecoveryPending: {domain.StateRunning},
+		domain.StateRetryWait: {
+			domain.StateRecoveryPending,
+			domain.StateRunning,
+			domain.StateStarting,
+		},
+		domain.StateFailed: {
+			domain.StateRecoveryPending,
+			domain.StateRunning,
+			domain.StateStarting,
+		},
+		domain.StateCancelRequested: {
+			domain.StateAdmitted,
+			domain.StateQueued,
+			domain.StateRecoveryPending,
+			domain.StateRetryWait,
+			domain.StateRunning,
+			domain.StateStarting,
+		},
+	}
+
+	for target, wantSources := range expected {
+		got := domain.LegalSourcesFor(target)
+		if !reflect.DeepEqual(got, wantSources) {
+			t.Errorf("LegalSourcesFor(%s) = %v, want %v", target, got, wantSources)
+		}
+	}
+}

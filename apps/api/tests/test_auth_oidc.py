@@ -361,3 +361,59 @@ def test_production_missing_artifacts_dir_raises_startup_error(monkeypatch):
     with pytest.raises(RuntimeError, match="ARTIFACTS_DIR is required"):
         with TestClient(app):
             pass
+
+
+def test_non_development_missing_oidc_audience_returns_401(mock_rsa_keys, monkeypatch):
+    """Verify that in non-development environment, missing OIDC_AUDIENCE at request-time raises 401."""
+    from fastapi import HTTPException
+    from app.core.auth import decode_oidc_token
+
+    private_pem, public_pem = mock_rsa_keys
+    mock_client = MockJWKClient(public_pem)
+    set_jwks_client(mock_client)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(settings, "ENVIRONMENT", "staging")
+    monkeypatch.setattr(settings, "OIDC_AUDIENCE", None)
+
+    try:
+        claims = {
+            "sub": str(uuid.uuid4()),
+            "iss": settings.OIDC_ISSUER_URL,
+            "exp": int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp()),
+        }
+        token = jwt.encode(claims, private_pem, algorithm="RS256", headers={"kid": "mock-key-1"})
+
+        with pytest.raises(HTTPException) as exc_info:
+            decode_oidc_token(token)
+        assert exc_info.value.status_code == 401
+        assert "OIDC_AUDIENCE is required in non-development environment" in exc_info.value.detail
+    finally:
+        set_jwks_client(None)
+
+
+def test_non_development_missing_oidc_audience_endpoint_returns_401(client: TestClient, mock_rsa_keys, monkeypatch):
+    """Verify that incoming requests in non-development environment without OIDC_AUDIENCE receive 401."""
+    private_pem, public_pem = mock_rsa_keys
+    mock_client = MockJWKClient(public_pem)
+    set_jwks_client(mock_client)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(settings, "ENVIRONMENT", "staging")
+    monkeypatch.setattr(settings, "OIDC_AUDIENCE", None)
+
+    try:
+        claims = {
+            "sub": str(uuid.uuid4()),
+            "iss": settings.OIDC_ISSUER_URL,
+            "exp": int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp()),
+        }
+        token = jwt.encode(claims, private_pem, algorithm="RS256", headers={"kid": "mock-key-1"})
+
+        resp = client.post(
+            "/v1/workspaces",
+            json={"name": "Staging WS", "slug": f"ws-stg-{uuid.uuid4().hex[:8]}"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 401
+        assert "OIDC_AUDIENCE is required in non-development environment" in resp.json()["message"]
+    finally:
+        set_jwks_client(None)

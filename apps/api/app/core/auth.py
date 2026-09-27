@@ -53,8 +53,14 @@ def decode_oidc_token(token: str) -> dict[str, Any]:
         }
         if settings.OIDC_AUDIENCE:
             decode_kwargs["audience"] = settings.OIDC_AUDIENCE
-        else:
+        elif settings.ENVIRONMENT == "development":
             decode_kwargs["options"] = {"verify_aud": False}
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="OIDC_AUDIENCE is required in non-development environment",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
 
         payload: dict[str, Any] = jwt.decode(
             token,
@@ -87,6 +93,8 @@ def decode_oidc_token(token: str) -> dict[str, Any]:
             detail="Invalid token",
             headers={"WWW-Authenticate": 'Bearer error="invalid_token", error_description="Invalid access token"'},
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Error fetching JWKS or verifying token: %s", e)
         raise HTTPException(

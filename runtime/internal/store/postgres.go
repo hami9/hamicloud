@@ -244,8 +244,12 @@ func (s *PostgresStore) ClaimNextServiceRelease(ctx context.Context, workerID st
 }
 
 // MarkReleaseHealthy marks the execution intent APPLIED, release HEALTHY, and updates application current_release_id.
-// If leaseEpoch > 0, it enforces monotonic lease epoch fencing to prevent split-brain updates.
+// It enforces monotonic lease epoch fencing to prevent split-brain updates.
 func (s *PostgresStore) MarkReleaseHealthy(ctx context.Context, intentID, releaseID, appID, resourceUID string, leaseEpoch int) error {
+	if leaseEpoch <= 0 {
+		return fmt.Errorf("lease epoch must be greater than zero, got %d", leaseEpoch)
+	}
+
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
@@ -254,34 +258,19 @@ func (s *PostgresStore) MarkReleaseHealthy(ctx context.Context, intentID, releas
 
 	now := time.Now().UTC()
 
-	// 1. Mark intent applied (fenced by lease_epoch when > 0)
-	var intentQuery string
-	var args []any
-	if leaseEpoch > 0 {
-		intentQuery = `
-			UPDATE execution_intents
-			SET status = 'APPLIED',
-			    resource_uid = $1,
-			    updated_at = $2
-			WHERE id = $3 AND lease_epoch = $4 AND status = 'CLAIMED';
-		`
-		args = []any{resourceUID, now, intentID, leaseEpoch}
-	} else {
-		intentQuery = `
-			UPDATE execution_intents
-			SET status = 'APPLIED',
-			    resource_uid = $1,
-			    updated_at = $2
-			WHERE id = $3;
-		`
-		args = []any{resourceUID, now, intentID}
-	}
-
-	cmd, err := tx.Exec(ctx, intentQuery, args...)
+	// 1. Mark intent applied (fenced by lease_epoch)
+	intentQuery := `
+		UPDATE execution_intents
+		SET status = 'APPLIED',
+		    resource_uid = $1,
+		    updated_at = $2
+		WHERE id = $3 AND lease_epoch = $4 AND status = 'CLAIMED';
+	`
+	cmd, err := tx.Exec(ctx, intentQuery, resourceUID, now, intentID, leaseEpoch)
 	if err != nil {
 		return fmt.Errorf("update intent applied: %w", err)
 	}
-	if leaseEpoch > 0 && cmd.RowsAffected() == 0 {
+	if cmd.RowsAffected() == 0 {
 		return fmt.Errorf("fencing error: intent %s epoch %d is stale or no longer claimed", intentID, leaseEpoch)
 	}
 
@@ -312,8 +301,12 @@ func (s *PostgresStore) MarkReleaseHealthy(ctx context.Context, intentID, releas
 }
 
 // MarkReleaseFailed records deploy/readiness failure on the intent and release.
-// If leaseEpoch > 0, it enforces monotonic lease epoch fencing to prevent split-brain updates.
+// It enforces monotonic lease epoch fencing to prevent split-brain updates.
 func (s *PostgresStore) MarkReleaseFailed(ctx context.Context, intentID, releaseID, reason string, leaseEpoch int) error {
+	if leaseEpoch <= 0 {
+		return fmt.Errorf("lease epoch must be greater than zero, got %d", leaseEpoch)
+	}
+
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
@@ -322,31 +315,17 @@ func (s *PostgresStore) MarkReleaseFailed(ctx context.Context, intentID, release
 
 	now := time.Now().UTC()
 
-	var intentQuery string
-	var args []any
-	if leaseEpoch > 0 {
-		intentQuery = `
-			UPDATE execution_intents
-			SET status = 'TERMINATED',
-			    updated_at = $1
-			WHERE id = $2 AND lease_epoch = $3 AND status = 'CLAIMED';
-		`
-		args = []any{now, intentID, leaseEpoch}
-	} else {
-		intentQuery = `
-			UPDATE execution_intents
-			SET status = 'TERMINATED',
-			    updated_at = $1
-			WHERE id = $2;
-		`
-		args = []any{now, intentID}
-	}
-
-	cmd, err := tx.Exec(ctx, intentQuery, args...)
+	intentQuery := `
+		UPDATE execution_intents
+		SET status = 'TERMINATED',
+		    updated_at = $1
+		WHERE id = $2 AND lease_epoch = $3 AND status = 'CLAIMED';
+	`
+	cmd, err := tx.Exec(ctx, intentQuery, now, intentID, leaseEpoch)
 	if err != nil {
 		return fmt.Errorf("update intent terminated: %w", err)
 	}
-	if leaseEpoch > 0 && cmd.RowsAffected() == 0 {
+	if cmd.RowsAffected() == 0 {
 		return fmt.Errorf("fencing error: intent %s epoch %d is stale or no longer claimed", intentID, leaseEpoch)
 	}
 
@@ -366,6 +345,9 @@ func (s *PostgresStore) MarkReleaseFailed(ctx context.Context, intentID, release
 
 // RenewLease extends the lease for an in-flight claimed intent, fenced by monotonic lease epoch.
 func (s *PostgresStore) RenewLease(ctx context.Context, intentID string, currentEpoch int, extension time.Duration) error {
+	if currentEpoch <= 0 {
+		return fmt.Errorf("lease epoch must be greater than zero, got %d", currentEpoch)
+	}
 	now := time.Now().UTC()
 	newExpiresAt := now.Add(extension)
 
@@ -441,7 +423,7 @@ func (s *PostgresStore) CreateJobAttemptIntent(ctx context.Context, job Unadmitt
 
 	// Check if retry budget is exceeded
 	if nextAttemptNumber > job.MaxRetries+1 {
-		_, err := tx.Exec(ctx, `UPDATE jobs SET state = 'FAILED', updated_at = $1 WHERE id = $2`, now, job.JobID)
+		_, err := tx.Exec(ctx, `UPDATE jobs SET state = 'FAILED', updated_at = $1 WHERE id = $2 AND state = 'QUEUED'`, now, job.JobID)
 		if err != nil {
 			return nil, fmt.Errorf("mark job failed due to retry budget: %w", err)
 		}
@@ -673,7 +655,7 @@ func (s *PostgresStore) ClaimNextJobAttempt(ctx context.Context, workerID string
 		UPDATE jobs
 		SET state = CASE WHEN state = 'CANCEL_REQUESTED' THEN 'CANCEL_REQUESTED' ELSE 'STARTING' END,
 		    updated_at = $1
-		WHERE id = $2;
+		WHERE id = $2 AND state IN ('ADMITTED', 'STARTING', 'CANCEL_REQUESTED');
 	`
 	if _, err := tx.Exec(ctx, updateJobQuery, now, workload.JobID); err != nil {
 		return nil, fmt.Errorf("update job to starting: %w", err)
@@ -687,8 +669,12 @@ func (s *PostgresStore) ClaimNextJobAttempt(ctx context.Context, workerID string
 	return &workload, nil
 }
 
-// MarkJobAttemptSucceeded finalizes a successful job attempt and marks logical job SUCCEEDED.
+// MarkJobAttemptSucceeded finalizes a successful job attempt and marks logical job SUCCEEDED (or CANCELLED if cancel requested).
 func (s *PostgresStore) MarkJobAttemptSucceeded(ctx context.Context, intentID, attemptID, jobID, resourceUID string, leaseEpoch int) error {
+	if leaseEpoch <= 0 {
+		return fmt.Errorf("lease epoch must be greater than zero, got %d", leaseEpoch)
+	}
+
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
@@ -697,33 +683,18 @@ func (s *PostgresStore) MarkJobAttemptSucceeded(ctx context.Context, intentID, a
 
 	now := time.Now().UTC()
 
-	var intentQuery string
-	var args []any
-	if leaseEpoch > 0 {
-		intentQuery = `
-			UPDATE execution_intents
-			SET status = 'APPLIED',
-			    resource_uid = $1,
-			    updated_at = $2
-			WHERE id = $3 AND lease_epoch = $4 AND status = 'CLAIMED';
-		`
-		args = []any{resourceUID, now, intentID, leaseEpoch}
-	} else {
-		intentQuery = `
-			UPDATE execution_intents
-			SET status = 'APPLIED',
-			    resource_uid = $1,
-			    updated_at = $2
-			WHERE id = $3;
-		`
-		args = []any{resourceUID, now, intentID}
-	}
-
-	cmd, err := tx.Exec(ctx, intentQuery, args...)
+	intentQuery := `
+		UPDATE execution_intents
+		SET status = 'APPLIED',
+		    resource_uid = $1,
+		    updated_at = $2
+		WHERE id = $3 AND lease_epoch = $4 AND status = 'CLAIMED';
+	`
+	cmd, err := tx.Exec(ctx, intentQuery, resourceUID, now, intentID, leaseEpoch)
 	if err != nil {
 		return fmt.Errorf("update job intent applied: %w", err)
 	}
-	if leaseEpoch > 0 && cmd.RowsAffected() == 0 {
+	if cmd.RowsAffected() == 0 {
 		return fmt.Errorf("fencing error: intent %s epoch %d is stale or no longer claimed", intentID, leaseEpoch)
 	}
 
@@ -739,28 +710,30 @@ func (s *PostgresStore) MarkJobAttemptSucceeded(ctx context.Context, intentID, a
 		return fmt.Errorf("update job attempt succeeded: %w", err)
 	}
 
-	var currentJobState string
-	_ = tx.QueryRow(ctx, `SELECT state FROM jobs WHERE id = $1;`, jobID).Scan(&currentJobState)
-	nextJobState := "SUCCEEDED"
-	if currentJobState == "CANCEL_REQUESTED" {
-		nextJobState = "CANCELLED"
-	}
-
-	_, err = tx.Exec(ctx, `
+	updateJobQuery := `
 		UPDATE jobs
-		SET state = $1,
-		    updated_at = $2
-		WHERE id = $3;
-	`, nextJobState, now, jobID)
+		SET state = CASE WHEN state = 'CANCEL_REQUESTED' THEN 'CANCELLED' ELSE 'SUCCEEDED' END,
+		    updated_at = $1
+		WHERE id = $2 AND state IN ('STARTING', 'RUNNING', 'CANCEL_REQUESTED');
+	`
+	cmdJob, err := tx.Exec(ctx, updateJobQuery, now, jobID)
 	if err != nil {
-		return fmt.Errorf("update job %s: %w", nextJobState, err)
+		return fmt.Errorf("update job state: %w", err)
+	}
+	if cmdJob.RowsAffected() != 1 {
+		return fmt.Errorf("failed to transition job %s: expected 1 row affected, got %d (job not in active state)", jobID, cmdJob.RowsAffected())
 	}
 
 	return tx.Commit(ctx)
 }
 
 // MarkJobAttemptFailed records an attempt failure, transitioning to RETRY_WAIT if retries remain, or FAILED if exhausted.
+// If the job has entered CANCEL_REQUESTED, it atomically transitions to CANCELLED instead of RETRY_WAIT/FAILED.
 func (s *PostgresStore) MarkJobAttemptFailed(ctx context.Context, intentID, attemptID, jobID, reason string, exitCode int, leaseEpoch int, shouldRetry bool) error {
+	if leaseEpoch <= 0 {
+		return fmt.Errorf("lease epoch must be greater than zero, got %d", leaseEpoch)
+	}
+
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
@@ -769,31 +742,17 @@ func (s *PostgresStore) MarkJobAttemptFailed(ctx context.Context, intentID, atte
 
 	now := time.Now().UTC()
 
-	var intentQuery string
-	var args []any
-	if leaseEpoch > 0 {
-		intentQuery = `
-			UPDATE execution_intents
-			SET status = 'TERMINATED',
-			    updated_at = $1
-			WHERE id = $2 AND lease_epoch = $3 AND status = 'CLAIMED';
-		`
-		args = []any{now, intentID, leaseEpoch}
-	} else {
-		intentQuery = `
-			UPDATE execution_intents
-			SET status = 'TERMINATED',
-			    updated_at = $1
-			WHERE id = $2;
-		`
-		args = []any{now, intentID}
-	}
-
-	cmd, err := tx.Exec(ctx, intentQuery, args...)
+	intentQuery := `
+		UPDATE execution_intents
+		SET status = 'TERMINATED',
+		    updated_at = $1
+		WHERE id = $2 AND lease_epoch = $3 AND status = 'CLAIMED';
+	`
+	cmd, err := tx.Exec(ctx, intentQuery, now, intentID, leaseEpoch)
 	if err != nil {
 		return fmt.Errorf("update job intent terminated: %w", err)
 	}
-	if leaseEpoch > 0 && cmd.RowsAffected() == 0 {
+	if cmd.RowsAffected() == 0 {
 		return fmt.Errorf("fencing error: intent %s epoch %d is stale or no longer claimed", intentID, leaseEpoch)
 	}
 
@@ -810,28 +769,22 @@ func (s *PostgresStore) MarkJobAttemptFailed(ctx context.Context, intentID, atte
 		return fmt.Errorf("update job attempt failed: %w", err)
 	}
 
-	var nextJobState string
-	if shouldRetry {
-		nextJobState = "RETRY_WAIT"
-	} else {
-		nextJobState = "FAILED"
-	}
-
-	var currentJobState string
-	_ = tx.QueryRow(ctx, `SELECT state FROM jobs WHERE id = $1;`, jobID).Scan(&currentJobState)
-	if currentJobState == "CANCEL_REQUESTED" {
-		nextJobState = "CANCELLED"
-		_, _ = tx.Exec(ctx, `UPDATE job_attempts SET state = 'CANCELLED' WHERE id = $1;`, attemptID)
-	}
-
-	_, err = tx.Exec(ctx, `
+	updateJobQuery := `
 		UPDATE jobs
-		SET state = $1,
+		SET state = CASE
+		    WHEN state = 'CANCEL_REQUESTED' THEN 'CANCELLED'
+		    WHEN $1::boolean THEN 'RETRY_WAIT'
+		    ELSE 'FAILED'
+		END,
 		    updated_at = $2
-		WHERE id = $3;
-	`, nextJobState, now, jobID)
+		WHERE id = $3 AND state IN ('STARTING', 'RUNNING', 'CANCEL_REQUESTED');
+	`
+	cmdJob, err := tx.Exec(ctx, updateJobQuery, shouldRetry, now, jobID)
 	if err != nil {
-		return fmt.Errorf("update job state %s: %w", nextJobState, err)
+		return fmt.Errorf("update job state: %w", err)
+	}
+	if cmdJob.RowsAffected() != 1 {
+		return fmt.Errorf("failed to transition job %s: expected 1 row affected, got %d (job not in active state)", jobID, cmdJob.RowsAffected())
 	}
 
 	return tx.Commit(ctx)
@@ -839,6 +792,10 @@ func (s *PostgresStore) MarkJobAttemptFailed(ctx context.Context, intentID, atte
 
 // MarkJobAttemptCancelled records cancellation on the intent, attempt, and job.
 func (s *PostgresStore) MarkJobAttemptCancelled(ctx context.Context, intentID, attemptID, jobID string, leaseEpoch int) error {
+	if leaseEpoch <= 0 {
+		return fmt.Errorf("lease epoch must be greater than zero, got %d", leaseEpoch)
+	}
+
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
@@ -847,27 +804,19 @@ func (s *PostgresStore) MarkJobAttemptCancelled(ctx context.Context, intentID, a
 
 	now := time.Now().UTC()
 
-	var intentQuery string
-	var args []any
-	if leaseEpoch > 0 {
-		intentQuery = `
-			UPDATE execution_intents
-			SET status = 'TERMINATED',
-			    updated_at = $1
-			WHERE id = $2 AND lease_epoch = $3 AND status = 'CLAIMED';
-		`
-		args = []any{now, intentID, leaseEpoch}
-	} else {
-		intentQuery = `
-			UPDATE execution_intents
-			SET status = 'TERMINATED',
-			    updated_at = $1
-			WHERE id = $2;
-		`
-		args = []any{now, intentID}
+	intentQuery := `
+		UPDATE execution_intents
+		SET status = 'TERMINATED',
+		    updated_at = $1
+		WHERE id = $2 AND lease_epoch = $3 AND status = 'CLAIMED';
+	`
+	cmd, err := tx.Exec(ctx, intentQuery, now, intentID, leaseEpoch)
+	if err != nil {
+		return fmt.Errorf("update job intent terminated: %w", err)
 	}
-
-	_, _ = tx.Exec(ctx, intentQuery, args...)
+	if cmd.RowsAffected() == 0 {
+		return fmt.Errorf("fencing error: intent %s epoch %d is stale or no longer claimed", intentID, leaseEpoch)
+	}
 
 	_, err = tx.Exec(ctx, `
 		UPDATE job_attempts
@@ -880,14 +829,17 @@ func (s *PostgresStore) MarkJobAttemptCancelled(ctx context.Context, intentID, a
 		return fmt.Errorf("update job attempt cancelled: %w", err)
 	}
 
-	_, err = tx.Exec(ctx, `
+	cmdJob, err := tx.Exec(ctx, `
 		UPDATE jobs
 		SET state = 'CANCELLED',
 		    updated_at = $1
-		WHERE id = $2;
+		WHERE id = $2 AND state IN ('STARTING', 'RUNNING', 'CANCEL_REQUESTED');
 	`, now, jobID)
 	if err != nil {
 		return fmt.Errorf("update job cancelled: %w", err)
+	}
+	if cmdJob.RowsAffected() != 1 {
+		return fmt.Errorf("failed to transition job %s to CANCELLED: expected 1 row affected, got %d", jobID, cmdJob.RowsAffected())
 	}
 
 	return tx.Commit(ctx)

@@ -317,6 +317,27 @@ def test_m2_e2e_job_cancellation(client: TestClient, clean_db: None):
     assert out_resp.json()["message"] == "Job output artifact not found"
 
 
+def test_m2_e2e_d4_cancel_race_with_attempt_success(client: TestClient, clean_db: None):
+    """
+    Milestone M2 / Decision D4:
+    Asserting that when a job is placed in CANCEL_REQUESTED before attempt completion,
+    the job ends CANCELLED while the attempt ends SUCCEEDED with exit_code = 0.
+    """
+    # Run the dedicated Go store test against hamicloud_test
+    env = os.environ.copy()
+    env["RUNTIME_DATABASE_URL"] = TEST_DB_URL
+    env["ENVIRONMENT"] = "development"
+    proc = subprocess.run(
+        ["go", "test", "-v", "-run", "TestPostgresStore_MarkJobAttemptSucceeded_CancelRace", "./internal/store/..."],
+        cwd=RUNTIME_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, f"Go test failed:\n{proc.stdout}\n{proc.stderr}"
+    assert "PASS: TestPostgresStore_MarkJobAttemptSucceeded_CancelRace" in proc.stdout
+
+
 def test_m2_e2e_service_rollback_workflow(
     client: TestClient, clean_db: None, mock_service_server: int
 ):

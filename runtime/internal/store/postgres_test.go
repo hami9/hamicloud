@@ -2,10 +2,13 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/hami9/hamicloud/runtime/internal/domain"
 )
@@ -17,15 +20,27 @@ func getTestDatabaseURL() string {
 	return "postgres://hamicloud:hamicloud_secret@localhost:5432/hamicloud_test?sslmode=disable"
 }
 
+func safeDBTarget(rawURL string) string {
+	cfg, err := pgxpool.ParseConfig(rawURL)
+	if err != nil {
+		return "unknown"
+	}
+	if cfg.ConnConfig.Port == 0 {
+		return fmt.Sprintf("%s/%s", cfg.ConnConfig.Host, cfg.ConnConfig.Database)
+	}
+	return fmt.Sprintf("%s:%d/%s", cfg.ConnConfig.Host, cfg.ConnConfig.Port, cfg.ConnConfig.Database)
+}
+
 func connectTestStore(t *testing.T, ctx context.Context) *PostgresStore {
 	t.Helper()
 	dbURL := getTestDatabaseURL()
+	target := safeDBTarget(dbURL)
 	st, err := NewPostgresStore(ctx, dbURL)
 	if err != nil {
 		if os.Getenv("CI") == "true" {
-			t.Fatalf("database connection required in CI (RUNTIME_DATABASE_URL=%s): %v", dbURL, err)
+			t.Fatalf("database connection required in CI (host/db=%s): %v", target, err)
 		}
-		t.Skipf("skipping integration test, cannot connect to postgres at %s: %v", dbURL, err)
+		t.Skipf("skipping integration test, cannot connect to postgres at %s: %v", target, err)
 	}
 	return st
 }
@@ -414,5 +429,82 @@ func TestStore_JobStateTransitions_AllEdgesLegal(t *testing.T) {
 		if err := domain.ValidateTransition(edge[0], edge[1]); err == nil {
 			t.Errorf("expected transition %s -> %s to be illegal, but ValidateTransition returned nil", edge[0], edge[1])
 		}
+	}
+}
+
+// TestSafeDBTarget_DoesNotLeakPassword asserts that safeDBTarget extracts only the host, port, and database name,
+// guaranteeing no passwords or credentials are ever exposed in logs or test output.
+func TestSafeDBTarget_DoesNotLeakPassword(t *testing.T) {
+	raw := "postgres://hamicloud_user:super_secret_password_12345@db.internal.net:5432/hamicloud_test?sslmode=disable"
+	target := safeDBTarget(raw)
+	if strings.Contains(target, "super_secret_password_12345") || strings.Contains(target, "hamicloud_user") {
+		t.Fatalf("safeDBTarget leaked credentials: %s", target)
+	}
+	expected := "db.internal.net:5432/hamicloud_test"
+	if target != expected {
+		t.Fatalf("expected host/db %q, got %q", expected, target)
+	}
+}
+
+// TestPostgresStore_CreateJobAttemptIntent_RetryBudgetExhausted asserts that when
+// CurrentAttemptNumber = MaxRetries + 1, CreateJobAttemptIntent returns an error
+// and inserts no new job_attempt row.
+func TestPostgresStore_CreateJobAttemptIntent_RetryBudgetExhausted(t *testing.T) {
+	ctx := context.Background()
+	st := connectTestStore(t, ctx)
+	defer st.Close()
+
+	now := time.Now().UTC()
+	wsID := NewUUID()
+	jobID := NewUUID()
+
+	_, err := st.pool.Exec(ctx, `INSERT INTO workspaces (id, name, slug, created_at, updated_at) VALUES ($1, 'Retry Budget WS', $2, $3, $3) ON CONFLICT (id) DO NOTHING;`, wsID, "rb-ws-"+wsID[:8], now)
+	if err != nil {
+		t.Fatalf("insert test workspace: %v", err)
+	}
+
+	maxRetries := 2
+	currentAttempt := maxRetries + 1 // 3
+
+	_, err = st.pool.Exec(ctx, `
+		INSERT INTO jobs (
+			id, workspace_id, name, image_digest, command_args, env_vars,
+			timeout_seconds, max_retries, current_attempt_number, state, created_at, updated_at
+		) VALUES (
+			$1, $2, 'rb-job', 'sha256:dummy', '[]', '{}', 60, $3, $4, 'QUEUED', $5, $5
+		);
+	`, jobID, wsID, maxRetries, currentAttempt, now)
+	if err != nil {
+		t.Fatalf("insert test job: %v", err)
+	}
+
+	unadmitted := UnadmittedJob{
+		JobID:                jobID,
+		WorkspaceID:          wsID,
+		WorkspaceSlug:        "rb-ws-" + wsID[:8],
+		Name:                 "rb-job",
+		ImageDigest:          "sha256:dummy",
+		TimeoutSeconds:       60,
+		MaxRetries:           maxRetries,
+		CurrentAttemptNumber: currentAttempt,
+		State:                "QUEUED",
+	}
+
+	intent, err := st.CreateJobAttemptIntent(ctx, unadmitted)
+	if err == nil {
+		t.Fatalf("expected error when retry budget is exhausted, got nil (intent=%v)", intent)
+	}
+	if !strings.Contains(err.Error(), "retry budget exhausted") {
+		t.Fatalf("expected error to mention 'retry budget exhausted', got: %v", err)
+	}
+
+	// Assert no new attempt row was inserted
+	var attemptCount int
+	err = st.pool.QueryRow(ctx, `SELECT COUNT(*) FROM job_attempts WHERE job_id = $1;`, jobID).Scan(&attemptCount)
+	if err != nil {
+		t.Fatalf("query job_attempts count: %v", err)
+	}
+	if attemptCount != 0 {
+		t.Fatalf("expected 0 attempt rows for job %s, got %d", jobID, attemptCount)
 	}
 }

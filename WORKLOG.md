@@ -1585,7 +1585,7 @@ Following project review of `18a3a4e..816cc4a`, all required fixes were implemen
 | **Alembic Schema Check** | `alembic check` | **PASS** | Clean against both `hamicloud` and `hamicloud_test`. |
 | **Go Code Formatting** | `gofmt -l .` | **PASS** | 0 unformatted Go files. |
 | **Go Static Analysis** | `go vet ./...` | **PASS** | 0 warnings or errors. |
-| **Go Store Integration Tests** | `go test -v ./internal/store/...` | **PASS (10/10)** | All store race, fencing, and guard tests execute and pass against `hamicloud_test`. |
+| **Go Store Integration Tests** | `go test -v ./internal/store/...` | **PASS (12/12)** | All store race, fencing, retry-budget exhaustion, and guard tests execute and pass against `hamicloud_test`. Sanitized DB target (host/db only) prevents password leakage in CI logs. |
 | **Go Reconciler & Control Loop** | `go test -v ./internal/reconciler/... ./internal/executor/...` | **PASS** | Verified `MarkJobAttemptRunning` execution and cancel races. |
 | **Go Binaries Build** | `CGO_ENABLED=0 go build` | **PASS** | Scheduler and executor binaries compile cleanly. |
 

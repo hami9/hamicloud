@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -16,14 +17,37 @@ from app.api.v1.router import api_v1_router
 from app.core.config import settings
 from app.db.session import AsyncSessionLocal, engine
 from app.schemas.common import ErrorCode, ErrorResponse, HealthResponse, ReadinessResponse
+from app.workers.outbox_dispatcher import OutboxDispatcher
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    # Validate production security and storage settings on startup (refuse to start if missing)
+    settings.validate_runtime_environment()
+
     # Initialize shared Redis client pool for probes and caching (T15)
     app.state.redis = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+
+    # Initialize and start Outbox Dispatcher worker if enabled
+    dispatcher_task = None
+    if settings.OUTBOX_DISPATCHER_ENABLED:
+        dispatcher = OutboxDispatcher()
+        app.state.outbox_dispatcher = dispatcher
+        dispatcher_task = asyncio.create_task(dispatcher.run())
+    else:
+        app.state.outbox_dispatcher = None
+
     yield
+
     # Graceful shutdown cleanup
+    if hasattr(app.state, "outbox_dispatcher") and app.state.outbox_dispatcher:
+        app.state.outbox_dispatcher.stop()
+        if dispatcher_task:
+            try:
+                await asyncio.wait_for(dispatcher_task, timeout=5.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                pass
+
     if hasattr(app.state, "redis") and app.state.redis is not None:
         await app.state.redis.aclose()
     await engine.dispose()
@@ -48,14 +72,14 @@ def custom_openapi() -> dict[str, Any]:
         version=app.version,
         routes=app.routes,
     )
-    # Strip X-Dev-Subject from served spec to adhere to published contract (T8)
+    # Strip X-Dev-Subject and Authorization from served spec parameters to adhere to published contract (T8)
     for path_item in openapi_schema.get("paths", {}).values():
         if isinstance(path_item, dict):
             for operation in path_item.values():
                 if isinstance(operation, dict) and "parameters" in operation:
                     operation["parameters"] = [
                         p for p in operation["parameters"]
-                        if not (isinstance(p, dict) and p.get("name") == "X-Dev-Subject")
+                        if not (isinstance(p, dict) and p.get("name") in ("X-Dev-Subject", "Authorization"))
                     ]
     app.openapi_schema = openapi_schema
     return app.openapi_schema
@@ -90,7 +114,7 @@ async def correlation_id_middleware(
 async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
     correlation_id = getattr(request.state, "correlation_id", "unknown")
     return JSONResponse(
-        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         content=ErrorResponse(
             error_code=ErrorCode.VALIDATION_ERROR,
             message="Request validation failed",

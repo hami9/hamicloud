@@ -102,6 +102,18 @@ This design establishes a hardened multi-tenant operational baseline, but explic
   When a workspace is deleted, all tenant state across these 10 tables is automatically and atomically purged via foreign key cascading.
 - **Audit Event Retention (`ON DELETE SET NULL`):** `audit_events.workspace_id` is nullable and references `workspaces(id)` with `ON DELETE SET NULL`. Audit records must outlive tenant workspace deletion for regulatory compliance, security forensics, and operational audit history.
 - **Deduplication Ledger Scope (`consumed_events`):** `consumed_events` is explicitly exempt from `workspace_id` scoping. It serves exclusively as an internal broker-level deduplication ledger tracking processed NATS JetStream event IDs per handler (`(event_id, handler)`). It is not tenant-owned data, carries no tenant state, and must guarantee handler idempotency across system-level and multi-workspace event processing without tenant coupling.
+- **Image Allowlist Policy & Enforcement Mechanism (Falsification Review Finding):** Image allowlist policy is enforced synchronously at release creation time (`POST /v1/apps/{app}/deployments`). In v1 (P1/M1), approved image registries and prefixes are configured via platform policy (`APPROVED_IMAGE_REGISTRIES`). Attempting to deploy an image not matching the reviewed allowlist is rejected with HTTP `422 Unprocessable Entity` containing error code `IMAGE_POLICY_VIOLATION`, preventing unapproved images from ever entering `outbox_events` or reaching the Go executor.
+
+### 8. Development-Only Host Process Runners (LocalProcessJobRunner & HTTPProbeRunner)
+- **Status:** Development-only shims, strictly forbidden in non-development environments.
+- **Security Notice:** The Go runtime contains local runners (`LocalProcessJobRunner` and `HTTPProbeRunner`) designed exclusively for local development workflows and automated unit/integration testing on developer workstations.
+- **NOT a Security Boundary:**
+  - `LocalProcessJobRunner` executes arbitrary host processes via `os/exec` directly on the executor host machine. It provides **NO container sandboxing, NO memory/CPU limits, and NO filesystem or network isolation**.
+  - While environment variables passed to the child process are sanitized (an empty environment plus only declared job `env_vars`, preventing exposure of host platform credentials like `RUNTIME_DATABASE_URL`), the process still runs with the permissions of the executor host user.
+  - `HTTPProbeRunner` performs HTTP GET requests directly against `127.0.0.1:{port}` on the host machine and does not manage container lifecycles.
+- **Production Guard:**
+  - Both runners MUST refuse to instantiate whenever `ENVIRONMENT != "development"` with a clear startup error.
+  - In production, real Kubernetes runners (managing Kubernetes `Job`, `Deployment`, and `Service` resources with container security profiles) are mandatory.
 
 ---
 

@@ -29,12 +29,16 @@ target_metadata = Base.metadata
 
 def get_url() -> str:
     if "DATABASE_URL_SYNC" in os.environ and os.environ["DATABASE_URL_SYNC"]:
-        return os.environ["DATABASE_URL_SYNC"]
-    try:
-        from app.core.config import settings
-        return settings.DATABASE_URL_SYNC
-    except Exception:
-        return "postgresql://hamicloud:hamicloud_secret@localhost:5432/hamicloud"
+        url = os.environ["DATABASE_URL_SYNC"]
+    else:
+        try:
+            from app.core.config import settings
+            url = settings.DATABASE_URL_SYNC
+        except Exception:
+            url = "postgresql://hamicloud:hamicloud_secret@localhost:5432/hamicloud"
+    if url.startswith("postgresql://"):
+        url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
+    return url
 
 
 def run_migrations_offline() -> None:

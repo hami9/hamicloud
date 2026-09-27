@@ -68,11 +68,16 @@ jobs:
         run: |
           cd apps/api && mypy --explicit-package-bases app
 
+      - name: Start NATS JetStream
+        run: |
+          docker run -d --name nats -p 4222:4222 nats:2.10-alpine@sha256:b83efabe3e7def1e0a4a31ec6e078999bb17c80363f881df35edc70fcb6bb927 -js
+
       - name: Run Pytest
         env:
           DATABASE_URL: postgresql+asyncpg://hamicloud:hamicloud_secret@localhost:5432/hamicloud
           DATABASE_URL_SYNC: postgresql://hamicloud:hamicloud_secret@localhost:5432/hamicloud
           REDIS_URL: redis://localhost:6379/0
+          NATS_URL: nats://localhost:4222
         run: |
           pytest apps/api/tests/ -v
 

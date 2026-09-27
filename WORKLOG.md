@@ -1321,6 +1321,201 @@ Following project review of `18a3a4e..816cc4a`, all required fixes were implemen
   - Ticked `[x] CI runs on the current commit and passes.` in `MASTER-PLAN.md`.
   - Ticked `[x] The red path was tested: a test was deliberately broken and CI failed as expected.` in `MASTER-PLAN.md`.
 
+---
+
+### Phase 8 — Close-out & Milestone M0 Finalization (T29, T30)
+
+**Date:** 2026-09-26
+**Status:** COMPLETED & VERIFIED — MILESTONE M0 CLOSED
+
+#### 1. T29 · Reset the Development Database (Decision D10)
+- **Authorization:** Confirmed by Project Owner (hami9).
+- **Execution:** Ran `alembic downgrade base && alembic upgrade head` against `hamicloud` dev database.
+  - Successfully dropped tables and recreated cleanly through migrations `0001_baseline_schema`, `0002_close_schema_gaps`, and `0003_add_recovery_pending_state`.
+  - Executed `alembic check` immediately following upgrade: returned `"No new upgrade operations detected."` with 0 drift.
+  - Development database is completely clean of review probe and stale test rows.
+
+#### 2. T30 · The Real Review (Falsification Review)
+- Tested writing Phase 1 (P1) service deployment endpoints and migrations against the M0 baseline contracts.
+- **Contract Gaps & Decisions Identified:**
+  - **Decision D13 — Image Allowlist Enforcement & Error Contract:** Synchronous validation at `POST /v1/apps/{app}/deployments` matching `APPROVED_IMAGE_REGISTRIES`. Rejection returns `422 Unprocessable Entity` with code `IMAGE_POLICY_VIOLATION`. Documented in `docs/adr/ADR-0004-trust-model-and-tenant-isolation.md` (§8).
+  - **Decision D14 — Application Listing & Inspection:** Added `GET /v1/workspaces/{ws}/apps` (cursor-paginated) and `GET /v1/apps/{app}` (application details) to `HamiCloud-Roadmap.md` API table with footnote 3.
+  - **Decision D15 — Deterministic Routing Ingress Convention:** Application ingress routing follows `<app-slug>.<workspace-slug>.<domain>` without requiring additional relational tables in P1.
+- **Outcome:** Gaps resolved and folded into architecture decision records and roadmap specifications before closing M0.
+
+#### 3. Milestone M0 Formal Closure
+- Created frozen milestone evidence record at `docs/evidence/M0.md`.
+- Collapsed Section A.1 in `MASTER-PLAN.md` to closed status, date, and permanent link to `docs/evidence/M0.md`.
+- Deleted temporary work order `M0-WORK-ORDER.md`.
+### [2026-09-26T10:18:00Z] M1 Step 2 — Application Listing & Inspection Endpoints (Decision D14)
+
+- **Milestone:** P1 / M1 — First Live Application
+- **Status:** COMPLETED & VERIFIED
+- **Context & Design (Decision D14):**
+  - Implemented `ApplicationListResponse` in `apps/api/app/schemas/application.py`.
+  - Added endpoints in `apps/api/app/api/v1/apps.py`:
+    - `GET /v1/workspaces/{workspace_id}/apps`: Cursor-paginated listing of applications scoped to workspace, ordered by `(created_at DESC, id DESC)`. Requires `VIEWER` or higher role. Returns 404 on non-member access (anti-enumeration).
+    - `GET /v1/apps/{app_id}`: Retrieves single application details. Requires caller to be member of the application's workspace (`VIEWER` or higher role). Returns 404 on non-member access (anti-enumeration).
+  - Published contract in `contracts/openapi/v1.yaml`:
+    - Path `/v1/workspaces/{workspace_id}/apps` (GET `listWorkspaceApplications`).
+    - Path `/v1/apps/{app_id}` (GET `getApplication`).
+    - Schema `ApplicationListResponse` with item `$ref` to `ApplicationResponse`.
+- **Verifications:**
+  - `contracts/openapi/v1.yaml` validated with `openapi_spec_validator` (`OK`).
+  - Added Route 12 & 13 to `test_tenant_isolation_matrix` and schema validations in `apps/api/tests/test_api_flows.py`.
+  - Created `apps/api/tests/test_application_endpoints.py` testing:
+    - Cursor pagination traversal across 5 applications with limit=2 (page 1, 2, 3 and `next_cursor` progression).
+    - Boundary validation (`limit=0`, `limit=101`, `limit=-1` -> 422).
+    - Malformed cursor error response (400 Bad Request, `Invalid pagination cursor`).
+    - Multi-workspace isolation & non-member 404 anti-enumeration.
+    - Owner and Viewer authorization roles.
+  - Test suites: 83/83 pytest tests passed.
+  - Static analysis: `ruff check apps/api` clean (0 warnings), `mypy --explicit-package-bases app` clean (0 issues in 31 files), Go test/vet clean in `runtime/`.
+
+### [2026-09-26T10:30:00Z] M1 Step 3 — Real OIDC Bearer Token Authentication (Decision D1, Keycloak)
+
+- **Milestone:** P1 / M1 — First Live Application
+- **Status:** COMPLETED & VERIFIED
+- **Context & Design (Decision D1, ADR-0004):**
+  - Integrated PyJWT with `PyJWKClient` into `apps/api/app/core/auth.py` for standard OIDC JWT Bearer token authentication.
+  - Added OIDC configuration settings to `apps/api/app/core/config.py`: `OIDC_ENABLED`, `OIDC_ISSUER_URL`, `OIDC_JWKS_URL`, `OIDC_AUDIENCE`, `OIDC_ALGORITHMS`, and `effective_jwks_url`.
+  - Added `pyjwt[crypto]>=2.8.0` dependency to `apps/api/pyproject.toml`.
+  - Implemented token verification:
+    - Resolves public keys dynamically via Keycloak's JWKS endpoint (`/protocol/openid-connect/certs`).
+    - Validates signature (`RS256`, `ES256`), issuer, expiration (`exp`), and audience.
+    - Extracts `sub`, `email`, and `preferred_username` to instantiate `Caller(subject=..., email=..., username=...)`.
+    - Handles JWT errors, returning standard HTTP 401 with `WWW-Authenticate: Bearer` and `ErrorResponse(error_code="UNAUTHORIZED", ...)`.
+  - Maintained backward-compatible development fallback when `ENVIRONMENT=development` and `X-Dev-Subject` is provided, while strictly enforcing Bearer token validation when `Authorization` is supplied or in non-development environments.
+  - Filtered `Authorization` and `X-Dev-Subject` from auto-generated parameters in `custom_openapi()` in `apps/api/app/main.py`.
+- **Verifications:**
+  - Started Keycloak reference container (`quay.io/keycloak/keycloak:24.0.5`) on port 8080 with imported realm `hamicloud`.
+  - Added test suite `apps/api/tests/test_auth_oidc.py` testing:
+    - Cryptographic verification with ephemeral RSA keypairs.
+    - Expired token rejection (401, `Token has expired`).
+    - Unauthorized issuer rejection (401, `Invalid token issuer`).
+    - Tampered signature rejection (401).
+    - Missing subject claim rejection (401, `Token missing subject claim`).
+    - Invalid authorization header formats (401).
+    - **Live Keycloak E2E verification:** Acquired real OIDC tokens for Alice and Bob from Keycloak via direct access grant, created Alice's workspace, verified Bob's attempt to access it returns 404 (anti-enumeration isolation), and verified Bob can manage his own workspace.
+  - Full test suite: 90/90 pytest tests passed.
+  - Static analysis: `ruff check apps/api` clean, `mypy --explicit-package-bases app` clean (0 issues in 31 files), `openapi_spec_validator` clean, Go test/vet clean in `runtime/`.
+
+### [2026-09-26T10:45:00Z] M1 Step 4 — Transactional Outbox Draining Worker (ADR-0002)
+
+- **Milestone:** P1 / M1 — First Live Application
+- **Status:** COMPLETED & VERIFIED
+- **Context & Design (ADR-0002 §4, ADR-0005):**
+  - Implemented `OutboxDispatcher` in `apps/api/app/workers/outbox_dispatcher.py` to drain pending outbox events from PostgreSQL to NATS JetStream.
+  - Added outbox configuration settings to `apps/api/app/core/config.py`: `NATS_STREAM_NAME`, `OUTBOX_DISPATCHER_ENABLED`, `OUTBOX_POLL_INTERVAL_SECONDS`, `OUTBOX_BATCH_SIZE`, and `OUTBOX_MAX_RETRIES`.
+  - Added `nats-py>=2.9.0` dependency to `apps/api/pyproject.toml`.
+  - Enforced outbox dispatch invariants:
+    - Queries pending events with `SELECT ... FOR UPDATE SKIP LOCKED` for concurrent multi-worker safety.
+    - Publishes to NATS JetStream with deterministic `Nats-Msg-Id: str(event_id)` and tracing headers for at-least-once deduplication.
+    - Transitions events to `OutboxStatus.PUBLISHED` with `published_at = utc_now()` upon broker ACK.
+    - Increments `retry_count` on failure and transitions to `OutboxStatus.FAILED` upon exceeding `OUTBOX_MAX_RETRIES`.
+    - Integrated with FastAPI `lifespan` in `apps/api/app/main.py` for background worker execution with graceful shutdown.
+  - Implemented `purge_expired_outbox_events()` physically purging published events older than 7 days (ADR-0002 §4).
+- **Verifications:**
+  - Added test suite `apps/api/tests/test_outbox_dispatcher.py` testing:
+    - Batch draining and JetStream publication (`test_outbox_drain_batch_publishes_to_jetstream`).
+    - Failure retry and transition to FAILED status (`test_outbox_retry_on_publish_failure`).
+    - Housekeeping purge of 7-day-old published events while retaining recent and pending events (`test_purge_expired_outbox_events`).
+    - Continuous worker loop lifecycle and graceful cancellation (`test_outbox_dispatcher_worker_loop_start_and_stop`).
+  - Refined AST topic extraction in `apps/api/tests/test_contracts.py` to specifically target outbox event creation calls.
+  - Full test suite: 94/94 pytest tests passed.
+  - Static analysis: `ruff check apps/api` clean, `mypy --explicit-package-bases app` clean (0 issues in 33 files), `openapi_spec_validator` clean, Go test/vet clean in `runtime/`.
+
+### [2026-09-26T11:15:00Z] Phase 1 / Milestone M1: First Live Application — CLOSED & VERIFIED
+
+- **Milestone:** P1 / M1 — First Live Application
+- **Status:** CLOSED & VERIFIED
+- **Evidence Record:** [`docs/evidence/M1.md`](docs/evidence/M1.md)
+- **Delivered Components:**
+  1. **Go Runtime Reconciler & Scheduler (M1 Step 5):**
+     - Built `runtime/internal/store/postgres.go` implementing `ScanUnadmittedReleases`, `CreateServiceReleaseIntent`, and atomic `ClaimNextServiceRelease` (`FOR UPDATE OF ei SKIP LOCKED`) with monotonic epoch fencing.
+     - Built `runtime/internal/reconciler/reconciler.go` with `HTTPProbeRunner` and `ServiceReconciler` performing bounded HTTP readiness probes.
+     - Built `runtime/internal/scheduler/scheduler.go` admitting eligible releases into `ExecutionIntent` records.
+     - Built `runtime/internal/executor/executor.go` claiming intents and reconciling service deployments.
+     - Added `RUN_ONCE` mode to `hamicloud-scheduler` and `hamicloud-executor` entrypoints for deterministic CLI and test workflows.
+     - Pinned dependencies to Go 1.23 (`jackc/pgx/v5 v5.7.4`, `golang.org/x/sync v0.10.0`, `golang.org/x/text v0.21.0`).
+  2. **Web Dashboard (M1 Step 6):**
+     - Scaffolded React 19 + Vite 8 + TypeScript SPA in `apps/web` conforming to ADR-0005.
+     - Built `apps/web/src/api.ts` typed API client for workspaces, applications, deployments, and releases.
+     - Built `apps/web/src/App.tsx` and modern accessible UI in `apps/web/src/App.css` featuring token auth, workspace/app management, deployment submission, live polling, service launch links, and prominent invalid readiness error banners.
+     - Built in 211ms with 0 oxlint warnings/errors.
+  3. **End-to-End Verification & Milestone Closeout (M1 Step 7):**
+     - Added `apps/api/tests/test_m1_live_application_e2e.py` validating both M1 exit criteria against the live database, Go scheduler, and Go executor:
+       - `test_m1_e2e_invalid_readiness_probe_surfaces_visible_error`: dead port triggers readiness probe failure, sets `releases.status = DEPLOY_FAILED`, exposes visible diagnostic in `status_reason`, and prevents app `current_release_id` promotion.
+       - `test_m1_e2e_valid_readiness_reaches_working_service_url`: live HTTP service passes readiness probe, sets `releases.status = HEALTHY`, promotes app `current_release_id`, and serves HTTP 200 payload at the service URL.
+     - Added `status_reason` property to `ReleaseResponse` schema in `contracts/openapi/v1.yaml` and `apps/api/app/schemas/application.py`.
+     - Committed milestone evidence record to `docs/evidence/M1.md`.
+     - Collapsed Section A.2 in `MASTER-PLAN.md` to closed status and re-estimated remaining phases based on ~29 actual hours spent.
+- **Verification Evidence:**
+  - Pytest suite: **96/96 passed** (0 failed).
+  - Python lint & contracts: `ruff check apps/api` passed, `openapi-spec-validator contracts/openapi/v1.yaml` passed, `mypy --explicit-package-bases app` clean (0 issues in 33 files).
+### [2026-09-26T13:30:00Z] Phase 2 / Milestone M2: Usable MVP — CLOSED & VERIFIED
+
+- **Milestone:** P2 / M2 — Usable MVP
+- **Status:** CLOSED & VERIFIED
+- **Evidence Record:** [`docs/evidence/M2.md`](docs/evidence/M2.md)
+- **Delivered Components:**
+  1. **Go Runtime Job Admission & Backoff Scheduler:**
+     - Extended `runtime/internal/store/postgres.go` with `ScanUnadmittedJobs`, `CreateJobAttemptIntent`, and `RequeueRetryWaitJobs`.
+     - Implemented exponential backoff requeue (`base * 2^(attempt-1)`, capped at 60s) transitioning `RETRY_WAIT` jobs back to `QUEUED` when backoff elapsed.
+     - Decoupled `Scheduler` with `Store` interface in `runtime/internal/scheduler/scheduler.go`.
+  2. **Go Runtime Job Reconciler & Execution Worker:**
+     - Created `JobReconciler` and `LocalProcessJobRunner` in `runtime/internal/reconciler/job_reconciler.go` with active cancellation polling ticker (200ms), bounded process timeout, exit code evaluation, and artifact disk output persistence.
+     - Implemented multi-workload executor in `runtime/internal/executor/executor.go` claiming both `JOB_ATTEMPT` and `SERVICE_RELEASE` execution intents with lease heartbeats and monotonic epoch fencing.
+  3. **Job Output Streaming API & Contracts:**
+     - Added authorized streaming endpoint `GET /v1/jobs/{job_id}/output` in `apps/api/app/api/v1/jobs.py` with tenant membership authorization, 409 conflict guard for executing jobs, and candidate artifact directory resolution (`ARTIFACTS_DIR`, `var/artifacts`, `runtime/var/artifacts`).
+     - Added endpoint and schema to `contracts/openapi/v1.yaml` validated with `openapi-spec-validator`.
+     - Updated `HamiCloud-Roadmap.md` with Download job output route.
+  4. **Web Dashboard Workload Tabs & Rollback UI:**
+     - Added top-level workload switcher ("HTTP Services" vs "Background Jobs") in `apps/web/src/App.tsx`.
+     - Implemented job submission form, attempt timeline table, job cancellation button, and downloaded output viewer modal.
+     - Implemented service rollback action button triggering `POST /v1/apps/{app_id}/rollbacks`.
+     - Added typed API functions in `apps/web/src/api.ts` and modern dark theme styles in `apps/web/src/App.css`.
+     - Verified with `oxlint` (0 errors, 0 warnings) and production Vite build (202ms).
+  5. **Comprehensive End-to-End Verification Test Suite:**
+     - Implemented `apps/api/tests/test_m2_jobs_e2e.py` validating against live PostgreSQL, Go scheduler, and Go executor:
+       - `test_m2_e2e_finite_job_lifecycle_and_output_download`: job submission -> scheduler admission -> executor execution -> attempt records -> artifact output download and tenant isolation.
+       - `test_m2_e2e_job_retry_backoff_and_exhaustion`: failing job -> attempt 1 fail -> `RETRY_WAIT` -> backoff elapsed -> requeue -> attempt 2 fail -> retry budget exhausted -> terminal `FAILED`.
+       - `test_m2_e2e_job_cancellation`: long running job -> `POST /v1/jobs/{job_id}/cancel` -> executor cancel detection -> abort and mark `CANCELLED`.
+       - `test_m2_e2e_service_rollback_workflow`: deploy v1 -> deploy v2 -> rollback to v1 -> new release allocated with v1 configuration -> promote to `current_release_id`.
+- **Verification Evidence:**
+  - Full pytest test suite: **100/100 passed** (0 failed).
+  - Python lint & contracts: `ruff check apps/api contracts` clean, `openapi-spec-validator` clean.
+  - Go suite: `go test ./...` in `runtime` clean (100% passing).
+  - Frontend: `npm run lint` clean (0 warnings, 0 errors), `npm run build` passed.
+### [2026-09-26T14:55:00Z] Phase 2 / Milestone M2: Post-Closure Hardening, Review & Deep Debug
+
+- **Milestone:** P2 / M2 — Usable MVP Post-Closure Quality Review
+- **Status:** COMPLETED & VERIFIED
+- **Findings & Hardening Deliverables:**
+  1. **Cancellation State Machine Race Elimination (`runtime/internal/store/postgres.go`):**
+     - Hardened `MarkJobAttemptFailed`: If a job was marked `CANCEL_REQUESTED` while executing, an execution failure (such as SIGTERM/process kill) could inadvertently overwrite the job state to `RETRY_WAIT`. Added check for `currentJobState == "CANCEL_REQUESTED"` transitioning to `CANCELLED` and preventing unwanted retries.
+  2. **Artifact Persistence Completeness (`runtime/internal/reconciler/job_reconciler.go`):**
+     - Enhanced `LocalProcessJobRunner` to combine both `stdout` and `stderr` streams into `output.txt` when both contain output, ensuring diagnostic stack traces and logs are preserved.
+     - Ensured directory creation (`os.MkdirAll`) precedes file writes.
+  3. **Executor Lifecycle Optimization (`runtime/internal/executor/executor.go`):**
+     - Removed redundant manual `cleanup()` calls in `RunOnce` to rely cleanly on `defer cleanup()`.
+  4. **Output Endpoint In-Flight Guard (`apps/api/app/api/v1/jobs.py`):**
+     - Added `JobState.CANCEL_REQUESTED` to the 409 conflict guard on `GET /v1/jobs/{job_id}/output`, preventing client race conditions on incomplete/terminating job outputs.
+     - Extended `apps/api/tests/test_m2_jobs_e2e.py` with explicit assertion confirming 409 on `CANCEL_REQUESTED`.
+  5. **Web Dashboard Interval Optimization (`apps/web/src/App.tsx`):**
+     - Switched `setSelectedJob` in `pollJobs` to functional state updates (`setSelectedJob(prev => ...)`), removing `selectedJob` from the `useEffect` dependency array and eliminating periodic subscription re-creation loops.
+     - Replaced `Date.now()` with `crypto.randomUUID()` for cancellation idempotency keys.
+  6. **Go Code Quality & Standards:**
+     - Ran `gofmt -w .` on all Go source files.
+- **Verification Evidence:**
+  - Full pytest test suite: **100/100 passed** (0 failed, execution time 91s).
+  - Python static checks: `ruff check apps/api contracts` clean (all checks passed).
+  - Go suite: `go test ./...` in `runtime` clean (100% passing across all packages).
+  - Go linter/vet: `go vet ./...` clean (exit code 0), `gofmt -l .` clean (0 unformatted files).
+  - Frontend: `npm run lint` clean (0 warnings, 0 errors in 571ms), `npm run build` passed (1.11s).
+
+
+
 
 
 

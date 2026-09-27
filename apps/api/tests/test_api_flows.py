@@ -648,6 +648,39 @@ def test_tenant_isolation_two_workspaces_and_subjects(client: TestClient):
     r11_viewer = client.get(f"/v1/apps/{app_id}/releases", headers=headers_charlie)
     assert r11_viewer.status_code == 200
 
+    # =========================================================================
+    # Route 12: GET /v1/workspaces/{ws}/apps (List Workspace Apps)
+    # =========================================================================
+    r12_missing = client.get(f"/v1/workspaces/{missing_ws}/apps", headers=headers_alice)
+    r12_non_member = client.get(f"/v1/workspaces/{ws1_id}/apps", headers=headers_bob)
+    assert_byte_identical_404(r12_missing, r12_non_member, "Workspace not found")
+
+    r12_no_auth = client.get(f"/v1/workspaces/{ws1_id}/apps")
+    assert_401_unauthorized(r12_no_auth)
+
+    r12_member = client.get(f"/v1/workspaces/{ws1_id}/apps", headers=headers_alice)
+    assert r12_member.status_code == 200
+    assert len(r12_member.json()["items"]) >= 1
+    r12_viewer = client.get(f"/v1/workspaces/{ws1_id}/apps", headers=headers_charlie)
+    assert r12_viewer.status_code == 200
+
+    # =========================================================================
+    # Route 13: GET /v1/apps/{app} (Get Application)
+    # =========================================================================
+    r13_missing = client.get(f"/v1/apps/{missing_app}", headers=headers_alice)
+    r13_non_member = client.get(f"/v1/apps/{app_id}", headers=headers_bob)
+    assert_byte_identical_404(r13_missing, r13_non_member, "Application not found")
+
+    r13_no_auth = client.get(f"/v1/apps/{app_id}")
+    assert_401_unauthorized(r13_no_auth)
+
+    r13_member = client.get(f"/v1/apps/{app_id}", headers=headers_alice)
+    assert r13_member.status_code == 200
+    assert r13_member.json()["id"] == app_id
+    r13_viewer = client.get(f"/v1/apps/{app_id}", headers=headers_charlie)
+    assert r13_viewer.status_code == 200
+    assert r13_viewer.json()["id"] == app_id
+
 
 def test_all_api_responses_validate_against_openapi_schemas(client: TestClient):
     """Validate live responses for every response body type returned by the API against OpenAPI component schemas.
@@ -700,6 +733,16 @@ def test_all_api_responses_validate_against_openapi_schemas(client: TestClient):
     assert app_data["current_release_id"] is None
     validate_body(app_data, "ApplicationResponse")
     app_id = app_data["id"]
+
+    # 4b. ApplicationListResponse: GET /v1/workspaces/{ws}/apps -> 200
+    apps_list_resp = client.get(f"/v1/workspaces/{ws_id}/apps", headers=auth_headers)
+    assert apps_list_resp.status_code == 200
+    validate_body(apps_list_resp.json(), "ApplicationListResponse")
+
+    # 4c. ApplicationResponse: GET /v1/apps/{app_id} -> 200
+    get_app_resp = client.get(f"/v1/apps/{app_id}", headers=auth_headers)
+    assert get_app_resp.status_code == 200
+    validate_body(get_app_resp.json(), "ApplicationResponse")
 
     # 5. AcceptedOperationResponse on Job Submission: POST /v1/workspaces/{ws}/jobs -> 202
     job_payload = {

@@ -135,16 +135,33 @@ go test -v ./...
 cd ..
 ```
 
-### 5. Start the Control API
+### 5. Start the Control API and Runtime Daemons
+
+Configure `ARTIFACTS_DIR` to ensure the Control API and the Go Executor daemon share the same storage directory for finite job outputs:
+
+```bash
+# On Linux/macOS (from repository root):
+export ARTIFACTS_DIR="$(pwd)/var/artifacts"
+
+# On Windows (PowerShell, from repository root):
+$env:ARTIFACTS_DIR = "$((Get-Location).Path)\var/artifacts"
+```
 
 Run the development API server:
 
 ```bash
-cd apps/api
-uvicorn app.main:app --reload --port 8000
+uvicorn app.main:app --app-dir apps/api --reload --port 8000
 ```
 
 In development (`ENVIRONMENT=development`), requests authenticate using the header `X-Dev-Subject: <username>`. In production, this header is disabled and the API requires Bearer authentication.
+
+Start the Go Scheduler and Execution Worker daemons:
+
+```bash
+# In separate terminals (inheriting ARTIFACTS_DIR and RUNTIME_DATABASE_URL):
+cd runtime && go run ./cmd/hamicloud-scheduler
+cd runtime && go run ./cmd/hamicloud-executor
+```
 
 ## Repository Layout
 

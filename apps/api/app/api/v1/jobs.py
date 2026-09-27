@@ -1,13 +1,15 @@
+import os
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.auth import Caller, authorize_workspace_access, get_caller
+from app.core.config import settings
 from app.core.events import OutboxTopic, create_outbox_event
 from app.core.idempotency import (
     check_idempotency,
@@ -16,6 +18,7 @@ from app.core.idempotency import (
     get_idempotency_key,
     handle_idempotency_race,
 )
+from app.core.image_policy import validate_image_policy
 from app.core.pagination import decode_cursor, encode_cursor
 from app.core.state_machine import (
     JobTransitionError,
@@ -47,6 +50,9 @@ async def submit_job(
     await authorize_workspace_access(
         db, caller, workspace_id, min_role=WorkspaceRole.DEVELOPER, not_found_detail="Workspace not found"
     )
+
+    # Image policy check: verify image against approved registry allowlist (Decision D13, ADR-0004 §8)
+    validate_image_policy(payload.image_digest)
 
     endpoint = f"/v1/workspaces/{workspace_id}/jobs"
     payload_hash = compute_payload_hash(payload)
@@ -451,3 +457,74 @@ async def list_workspace_jobs(
         for j in jobs
     ]
     return JobListResponse(items=items, next_cursor=next_cursor)
+
+
+@router.get(
+    "/jobs/{job_id}/output",
+    response_class=Response,
+    status_code=status.HTTP_200_OK,
+)
+async def get_job_output(
+    job_id: uuid.UUID,
+    caller: Caller = Depends(get_caller),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    # 1. Look up job and verify existence
+    stmt = (
+        select(Job)
+        .where(Job.id == job_id)
+        .options(selectinload(Job.attempts))
+    )
+    job = (await db.execute(stmt)).scalar_one_or_none()
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job not found",
+        )
+
+    # 2. Tenant isolation: verify caller membership of job's workspace (VIEWER or higher)
+    await authorize_workspace_access(
+        db, caller, job.workspace_id, min_role=WorkspaceRole.VIEWER, not_found_detail="Job not found"
+    )
+
+    # 3. If job is still actively running, pending admission, or in-flight cancellation
+    if job.state in (
+        JobState.QUEUED,
+        JobState.ADMITTED,
+        JobState.STARTING,
+        JobState.RUNNING,
+        JobState.CANCEL_REQUESTED,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Job is still executing, output is not yet available",
+        )
+
+    # 4. Check for persisted artifact output on disk
+    artifacts_base = settings.effective_artifacts_dir
+    if not artifacts_base:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Artifacts storage directory is not configured",
+        )
+    artifact_path = os.path.join(
+        artifacts_base, str(job.workspace_id), str(job.id), "output.txt"
+    )
+
+    if not os.path.isfile(artifact_path):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job output artifact not found",
+        )
+
+    with open(artifact_path, "r", encoding="utf-8", errors="replace") as f:
+        content = f.read()
+
+    return Response(
+        content=content,
+        media_type="text/plain; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="job-{job.id}-output.txt"'
+        },
+    )
+

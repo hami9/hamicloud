@@ -11,9 +11,12 @@ TEST_DB_NAME = "hamicloud_test"
 TEST_DATABASE_URL = f"postgresql+asyncpg://hamicloud:hamicloud_secret@localhost:5432/{TEST_DB_NAME}"
 TEST_DATABASE_URL_SYNC = f"postgresql://hamicloud:hamicloud_secret@localhost:5432/{TEST_DB_NAME}"
 
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 os.environ["DATABASE_URL_SYNC"] = TEST_DATABASE_URL_SYNC
 os.environ["ENVIRONMENT"] = "development"
+os.environ["OUTBOX_DISPATCHER_ENABLED"] = "false"
+os.environ["ARTIFACTS_DIR"] = os.path.join(REPO_ROOT, "var", "artifacts")
 
 # Ensure apps/api is in sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -22,7 +25,6 @@ from app.core.config import settings
 from app.db.session import engine
 from app.main import app
 
-REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 ALEMBIC_INI = os.path.join(REPO_ROOT, "migrations", "alembic.ini")
 OPENAPI_SPEC = os.path.join(REPO_ROOT, "contracts", "openapi", "v1.yaml")
 

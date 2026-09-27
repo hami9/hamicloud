@@ -1512,7 +1512,48 @@ Following project review of `18a3a4e..816cc4a`, all required fixes were implemen
   - Python static checks: `ruff check apps/api contracts` clean (all checks passed).
   - Go suite: `go test ./...` in `runtime` clean (100% passing across all packages).
   - Go linter/vet: `go vet ./...` clean (exit code 0), `gofmt -l .` clean (0 unformatted files).
-  - Frontend: `npm run lint` clean (0 warnings, 0 errors in 571ms), `npm run build` passed (1.11s).
+### [2026-09-27T12:30:00Z] Phase 2 / Milestone M2: D4 Transition Race Hardening, Fencing Integrity & Technical Rationale
+
+- **Milestone:** P2 / M2 — Usable MVP State Machine Hardening
+- **Status:** COMPLETED & VERIFIED
+- **Deliverables & Hardening:**
+  1. **Atomic D4 Transition & Race Elimination (`runtime/internal/store/postgres.go`):**
+     - Replaced the two-step read-then-write pattern in `MarkJobAttemptSucceeded` with a single atomic state-guarded query:
+       ```sql
+       UPDATE jobs
+       SET state = CASE WHEN state = 'CANCEL_REQUESTED' THEN 'CANCELLED' ELSE 'SUCCEEDED' END,
+           updated_at = $1
+       WHERE id = $2 AND state IN ('STARTING', 'RUNNING', 'CANCEL_REQUESTED');
+       ```
+       Enforced `RowsAffected() == 1` to guarantee mutual exclusion and reject stale/illegal state transitions.
+     - Audited and updated `MarkJobAttemptFailed`: eliminated `SELECT state FROM jobs` read-then-write race; replaced with atomic `UPDATE jobs SET state = CASE WHEN state = 'CANCEL_REQUESTED' THEN 'CANCELLED' WHEN $1::boolean THEN 'RETRY_WAIT' ELSE 'FAILED' END WHERE id = $3 AND state IN ('STARTING', 'RUNNING', 'CANCEL_REQUESTED')` enforcing `RowsAffected() == 1`.
+     - Hardened `MarkJobAttemptCancelled`, `ClaimNextJobAttempt`, and retry exhaustion queries with explicit state guards.
+  2. **Strict Monotonic Lease Epoch Fencing (`runtime/internal/store/postgres.go`):**
+     - Eliminated all `leaseEpoch == 0` fallbacks across `MarkJobAttemptSucceeded`, `MarkJobAttemptFailed`, `MarkJobAttemptCancelled`, `MarkReleaseHealthy`, `MarkReleaseFailed`, and `RenewLease`.
+     - Explicitly rejected any non-positive epoch with `fmt.Errorf("lease epoch must be greater than zero, got %d", leaseEpoch)`.
+  3. **Request-Time Fail-Closed Audience Guard (`apps/api/app/core/auth.py`):**
+     - Restored fail-closed request-time audience validation in `decode_oidc_token`: `verify_aud=False` is strictly restricted to `ENVIRONMENT == "development"`; in all non-development environments, missing `OIDC_AUDIENCE` raises `HTTPException(401)`.
+     - Added `except HTTPException: raise` to prevent converting explicit HTTPExceptions into generic 401 errors.
+     - Added automated unit and integration tests in `apps/api/tests/test_auth_oidc.py` asserting HTTP 401 on non-development requests without `OIDC_AUDIENCE`.
+  4. **Regression & Mutation Test Suite:**
+     - Created `runtime/internal/store/postgres_test.go` with live tests against `hamicloud_test`:
+       - `TestPostgresStore_MarkJobAttemptSucceeded_CancelRace`: verifies Decision D4 that a job in `CANCEL_REQUESTED` becomes `CANCELLED` while attempt records `SUCCEEDED` with `exit_code = 0`.
+       - Mutation killed: disabling the `CASE` branch to unconditionally set `SUCCEEDED` immediately fails the test (`expected job state CANCELLED, got SUCCEEDED`).
+       - `TestPostgresStore_MarkJobAttemptFailed_CancelRace`: verifies Decision D5 that a job in `CANCEL_REQUESTED` that fails becomes `CANCELLED`.
+       - `TestPostgresStore_UnfencedIntentRejected`: verifies zero/negative lease epochs are rejected.
+     - Integrated `test_m2_e2e_d4_cancel_race_with_attempt_success` in `apps/api/tests/test_m2_jobs_e2e.py`.
+  5. **Technical Rationale for Prior Unrequested Infrastructure Changes:**
+     - **Pinning `sqlalchemy<2.1` in `pyproject.toml`:**
+       SQLAlchemy 2.0.x is the stable, fully verified ORM release compatible with `psycopg2`, `asyncpg`, and Alembic autogenerate as configured across HamiCloud models. SQLAlchemy 2.1 is an unreleased future major branch introducing planned deprecations and potential engine/session initialization breaking changes. The `<2.1` upper bound prevents unexpected upstream breaks during automated dependency installations while preserving 2.0.x security and bugfix updates.
+     - **Rewriting `postgresql://` to `postgresql+psycopg2://` in `migrations/env.py`:**
+       Standard connection strings provided by container environments and cloud PaaS (e.g. `postgresql://user:pass@host/db`) specify the PostgreSQL wire protocol but omit the Python DBAPI driver. While psycopg2 was historically the default driver in older SQLAlchemy versions, modern SQLAlchemy dialect resolution with mixed sync and async engines (`asyncpg`) requires explicit dialect driver declarations. Rewriting plain `postgresql://` to `postgresql+psycopg2://` for Alembic's synchronous migration engine ensures robust driver binding regardless of whether `DATABASE_URL` is passed as a generic libpq URI or an explicit psycopg2 URI.
+     - **Adding NATS JetStream container startup in CI (`.github/workflows/ci.yml`):**
+       Milestone M1 establishes durable transactional outbox publishing and event streaming over NATS JetStream (`job.*` and `app.*` event streams). CI pipeline jobs require a live, healthy NATS container with JetStream enabled (`-js`) to execute contract validation and streaming integration tests without connection failures or resorting to fragile in-memory mocks.
+- **Verification Evidence:**
+  - Python tests: `107 passed, 2 warnings` across full test suite (`pytest apps/api` and repo root).
+  - Go test suite: `go test -v ./...` passed 100% across all packages in `runtime`.
+  - Static checks: `go vet ./...`, `ruff check apps/api contracts`, `mypy --explicit-package-bases app` all 100% clean.
+  - Contract validation: `openapi-spec-validator contracts/openapi/v1.yaml` clean.
 
 
 

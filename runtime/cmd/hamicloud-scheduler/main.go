@@ -9,6 +9,8 @@ import (
 	"syscall"
 
 	"github.com/hami9/hamicloud/runtime/internal/config"
+	"github.com/hami9/hamicloud/runtime/internal/scheduler"
+	"github.com/hami9/hamicloud/runtime/internal/store"
 )
 
 func main() {
@@ -28,13 +30,40 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
+	pgStore, err := store.NewPostgresStore(ctx, cfg.DatabaseURL)
+	if err != nil {
+		logger.Error("Failed to initialize PostgreSQL store", "error", err)
+		os.Exit(1)
+	}
+	defer pgStore.Close()
+
+	sched := scheduler.NewScheduler(pgStore, logger)
+
 	logger.Info("Scheduler initialized with configuration",
 		"environment", cfg.Environment,
 		"reconciliation_period", cfg.ReconciliationPeriod,
 		"worker_id", cfg.WorkerID,
+		"run_once", cfg.RunOnce,
 	)
 
-	// Keep alive until shutdown signal received
+	if cfg.RunOnce {
+		logger.Info("Executing single scheduler admission pass (RUN_ONCE)")
+		count, err := sched.RunOnce(ctx)
+		if err != nil {
+			logger.Error("Scheduler RunOnce failed", "error", err)
+			os.Exit(1)
+		}
+		logger.Info("Scheduler RunOnce completed successfully", "admitted_count", count)
+		return
+	}
+
+	// Run scheduler in background goroutine
+	go func() {
+		if err := sched.Start(ctx, cfg.ReconciliationPeriod); err != nil && err != context.Canceled {
+			logger.Error("Scheduler loop stopped with error", "error", err)
+		}
+	}()
+
 	<-ctx.Done()
 	logger.Info("Shutting down HamiCloud Scheduler gracefully...")
 	fmt.Println("Scheduler shutdown complete.")

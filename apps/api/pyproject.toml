@@ -17,6 +17,8 @@ dependencies = [
     "httpx>=0.28.0",
     "python-multipart>=0.0.12",
     "cryptography>=43.0.3",
+    "pyjwt[crypto]>=2.8.0",
+    "nats-py>=2.9.0",
 ]
 
 [project.optional-dependencies]

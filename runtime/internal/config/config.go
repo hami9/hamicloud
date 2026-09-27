@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -14,8 +15,10 @@ type Config struct {
 	DatabaseURL          string
 	NATSURL              string
 	WorkerID             string
+	ArtifactsDir         string
 	LeaseDuration        time.Duration
 	ReconciliationPeriod time.Duration
+	RunOnce              bool
 }
 
 // LoadFromEnv loads runtime configuration from environment variables with safe defaults.
@@ -31,6 +34,18 @@ func LoadFromEnv() (*Config, error) {
 	}
 	if strings.HasPrefix(dbURL, "postgresql+") {
 		return nil, fmt.Errorf("invalid RUNTIME_DATABASE_URL: SQLAlchemy driver format is rejected")
+	}
+
+	artifactsDir := getEnv("ARTIFACTS_DIR", "")
+	if artifactsDir == "" {
+		if env != "development" {
+			return nil, fmt.Errorf("ARTIFACTS_DIR is required when ENVIRONMENT is not development")
+		}
+		artifactsDir = filepath.Join("var", "artifacts")
+	}
+	absArtifactsDir, err := filepath.Abs(artifactsDir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve ARTIFACTS_DIR: %w", err)
 	}
 
 	natsURL := getEnv("NATS_URL", "nats://localhost:4222")
@@ -53,8 +68,10 @@ func LoadFromEnv() (*Config, error) {
 		DatabaseURL:          dbURL,
 		NATSURL:              natsURL,
 		WorkerID:             workerID,
+		ArtifactsDir:         absArtifactsDir,
 		LeaseDuration:        time.Duration(leaseSec) * time.Second,
 		ReconciliationPeriod: time.Duration(reconSec) * time.Second,
+		RunOnce:              getEnv("RUN_ONCE", "false") == "true",
 	}, nil
 }
 

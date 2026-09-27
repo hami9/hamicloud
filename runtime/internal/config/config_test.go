@@ -17,6 +17,7 @@ func clearEnv(t *testing.T) {
 		"RUNTIME_DATABASE_URL",
 		"NATS_URL",
 		"WORKER_ID",
+		"ARTIFACTS_DIR",
 		"LEASE_DURATION_SECONDS",
 		"RECONCILIATION_PERIOD_SECONDS",
 	}
@@ -59,6 +60,9 @@ func TestLoadFromEnv_TableDriven(t *testing.T) {
 				if cfg.ReconciliationPeriod != 30*time.Second {
 					t.Errorf("expected ReconciliationPeriod 30s, got %v", cfg.ReconciliationPeriod)
 				}
+				if !strings.HasSuffix(cfg.ArtifactsDir, "artifacts") {
+					t.Errorf("expected default ArtifactsDir to end in artifacts, got %q", cfg.ArtifactsDir)
+				}
 			},
 		},
 		{
@@ -76,12 +80,22 @@ func TestLoadFromEnv_TableDriven(t *testing.T) {
 			errSubstring: "RUNTIME_DATABASE_URL",
 		},
 		{
+			name: "missing ARTIFACTS_DIR in production returns error",
+			env: map[string]string{
+				"ENVIRONMENT":          "production",
+				"RUNTIME_DATABASE_URL": "postgres://app_user:secret@pg-cluster:5432/app_db?sslmode=require",
+			},
+			expectErr:    true,
+			errSubstring: "ARTIFACTS_DIR",
+		},
+		{
 			name: "valid custom values are loaded",
 			env: map[string]string{
 				"ENVIRONMENT":                   "development",
 				"RUNTIME_DATABASE_URL":          "postgres://app_user:secret@pg-cluster:5432/app_db?sslmode=require",
 				"NATS_URL":                      "nats://nats-cluster:4222",
 				"WORKER_ID":                     "worker-node-99",
+				"ARTIFACTS_DIR":                 "/custom/artifacts",
 				"LEASE_DURATION_SECONDS":        "120",
 				"RECONCILIATION_PERIOD_SECONDS": "45",
 			},
@@ -98,6 +112,9 @@ func TestLoadFromEnv_TableDriven(t *testing.T) {
 				}
 				if cfg.WorkerID != "worker-node-99" {
 					t.Errorf("expected WorkerID 'worker-node-99', got %q", cfg.WorkerID)
+				}
+				if !strings.HasSuffix(cfg.ArtifactsDir, "artifacts") {
+					t.Errorf("expected custom ArtifactsDir, got %q", cfg.ArtifactsDir)
 				}
 				if cfg.LeaseDuration != 120*time.Second {
 					t.Errorf("expected LeaseDuration 120s, got %v", cfg.LeaseDuration)

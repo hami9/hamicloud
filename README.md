@@ -4,14 +4,13 @@ HamiCloud is a self-hosted distributed application runtime designed to run HTTP 
 
 ## Current Status
 
-HamiCloud is in an early, design-baseline stage (Milestone M0). Currently implemented in the repository:
+HamiCloud M0 design baseline is closed with committed evidence records (`docs/evidence/M0.md`). Implemented in the repository:
 
-- Control API skeleton built with FastAPI, providing core tenant, application, job, deployment, and idempotency endpoints.
-- PostgreSQL schema and Alembic migrations defining durable state, attempts, execution intents, and the transactional outbox.
-- Published OpenAPI 3.1 specification for the v1 control plane API.
-- Go domain model stubs and state machine transition rules for the runtime executor and scheduler.
-
-Features such as secret encryption, rate limiting, the web dashboard, and Helm packaging are planned for subsequent milestones and do not exist yet.
+- **Control API (FastAPI):** Tenant workspaces, application releases, finite jobs, transactional outbox dispatcher (NATS JetStream), OIDC token authentication, and idempotency engine.
+- **PostgreSQL Database:** Bidirectional Alembic migrations defining durable state machine tables, execution intents with bounded leases, quotas, and outbox events.
+- **Contract Specifications:** Published OpenAPI 3.1 specification (`contracts/openapi/v1.yaml`) and JetStream event schemas (`contracts/events/`).
+- **Go Runtime Engine:** Go scheduler and execution worker daemons with intent claim loops, lease heartbeats, and retry/backoff policies.
+- **Web Dashboard:** React + Vite single-page dashboard prototype in `apps/web`.
 
 ## How this project is built
 
@@ -169,6 +168,7 @@ cd runtime && go run ./cmd/hamicloud-executor
 hamicloud/
   apps/
     api/                      # FastAPI control plane service and test suite
+    web/                      # React + Vite dashboard UI prototype
   contracts/
     events/                   # NATS JetStream event schemas
     openapi/                  # OpenAPI 3.1 specification

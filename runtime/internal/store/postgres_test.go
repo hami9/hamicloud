@@ -649,3 +649,151 @@ func TestPostgresStore_ScanUnadmittedReleases_SupersededReleaseSkipped(t *testin
 		t.Fatalf("expected current_release_id to be %s, got %v", relID2, currentRelID)
 	}
 }
+
+func TestPostgresStore_ClaimNextServiceRelease_ReclaimsExpiredLease(t *testing.T) {
+	ctx := context.Background()
+	st := connectTestStore(t, ctx)
+
+	now := time.Now().UTC()
+	wsID := createTestWorkspace(t, ctx, st, "Expired Release WS")
+	appID := NewUUID()
+	relID := NewUUID()
+	intentID := NewUUID()
+
+	_, err := st.pool.Exec(ctx, `
+		INSERT INTO applications (id, workspace_id, name, slug, workload_type, desired_generation, created_at, updated_at)
+		VALUES ($1, $2, 'Expired Svc', 'expired-svc', 'HTTP_SERVICE', 1, $3, $3);
+	`, appID, wsID, now)
+	if err != nil {
+		t.Fatalf("insert test application: %v", err)
+	}
+
+	_, err = st.pool.Exec(ctx, `
+		INSERT INTO releases (id, application_id, workspace_id, release_number, image_digest, config_json, status, created_at, updated_at)
+		VALUES ($1, $2, $3, 1, 'docker.io/library/nginx:alpine', '{"port": 8080}', 'DEPLOYING', $4, $4);
+	`, relID, appID, wsID, now)
+	if err != nil {
+		t.Fatalf("insert test release: %v", err)
+	}
+
+	// Insert expired CLAIMED intent (expired 5 seconds ago, epoch = 1)
+	pastExpiresAt := now.Add(-5 * time.Second)
+	_, err = st.pool.Exec(ctx, `
+		INSERT INTO execution_intents (
+			id, workspace_id, resource_type, release_id, target_generation,
+			deterministic_resource_name, claimed_by, status, lease_epoch, lease_expires_at, created_at, updated_at
+		) VALUES ($1, $2, 'SERVICE_RELEASE', $3, 1, 'hc-svc-test', 'crashed-worker', 'CLAIMED', 1, $4, $5, $5);
+	`, intentID, wsID, relID, pastExpiresAt, now)
+	if err != nil {
+		t.Fatalf("insert expired intent: %v", err)
+	}
+
+	// Another worker attempts to claim next release
+	workload, err := st.ClaimNextServiceRelease(ctx, "restarted-worker", 10*time.Second)
+	if err != nil {
+		t.Fatalf("ClaimNextServiceRelease failed: %v", err)
+	}
+	if workload == nil {
+		t.Fatalf("expected expired intent to be reclaimed by restarted-worker, got nil")
+	}
+
+	if workload.IntentID != intentID {
+		t.Errorf("expected intent %s, got %s", intentID, workload.IntentID)
+	}
+	if workload.LeaseEpoch != 2 {
+		t.Errorf("expected incremented epoch 2, got %d", workload.LeaseEpoch)
+	}
+
+	// Crashed worker tries to mark healthy with old epoch 1 -> must fail with fencing error
+	errOld := st.MarkReleaseHealthy(ctx, intentID, relID, appID, "uid-res-old", 1)
+	if errOld == nil {
+		t.Fatalf("expected fencing error for old epoch 1, got nil")
+	}
+
+	// Restarted worker with epoch 2 succeeds
+	errNew := st.MarkReleaseHealthy(ctx, intentID, relID, appID, "uid-res-new", 2)
+	if errNew != nil {
+		t.Fatalf("expected successful MarkReleaseHealthy with epoch 2, got: %v", errNew)
+	}
+}
+
+func TestPostgresStore_RecoverExpiredJobIntents(t *testing.T) {
+	ctx := context.Background()
+	st := connectTestStore(t, ctx)
+
+	now := time.Now().UTC()
+	wsID := createTestWorkspace(t, ctx, st, "Recover Job WS")
+	jobID := NewUUID()
+	attemptID := NewUUID()
+	intentID := NewUUID()
+
+	_, err := st.pool.Exec(ctx, `
+		INSERT INTO jobs (id, workspace_id, name, image_digest, command_args, env_vars, timeout_seconds, max_retries, current_attempt_number, state, created_at, updated_at)
+		VALUES ($1, $2, 'crashed-job', 'docker.io/library/alpine:latest', '["echo", "hi"]', '{}', 60, 2, 1, 'RUNNING', $3, $3);
+	`, jobID, wsID, now)
+	if err != nil {
+		t.Fatalf("insert test job: %v", err)
+	}
+
+	_, err = st.pool.Exec(ctx, `
+		INSERT INTO job_attempts (id, job_id, workspace_id, attempt_number, state, started_at, created_at, updated_at)
+		VALUES ($1, $2, $3, 1, 'RUNNING', $4, $4, $4);
+	`, attemptID, jobID, wsID, now)
+	if err != nil {
+		t.Fatalf("insert test job attempt: %v", err)
+	}
+
+	// Insert expired CLAIMED intent
+	pastExpiresAt := now.Add(-10 * time.Second)
+	_, err = st.pool.Exec(ctx, `
+		INSERT INTO execution_intents (
+			id, workspace_id, resource_type, job_attempt_id,
+			deterministic_resource_name, claimed_by, status, lease_epoch, lease_expires_at, created_at, updated_at
+		) VALUES ($1, $2, 'JOB_ATTEMPT', $3, 'hc-job-test', 'crashed-worker', 'CLAIMED', 1, $4, $5, $5);
+	`, intentID, wsID, attemptID, pastExpiresAt, now)
+	if err != nil {
+		t.Fatalf("insert expired job intent: %v", err)
+	}
+
+	// Recover expired intents
+	count, err := st.RecoverExpiredJobIntents(ctx)
+	if err != nil {
+		t.Fatalf("RecoverExpiredJobIntents failed: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 recovered intent, got %d", count)
+	}
+
+	// Check attempt state
+	var attState, reason string
+	err = st.pool.QueryRow(ctx, `SELECT state, failure_reason FROM job_attempts WHERE id = $1;`, attemptID).Scan(&attState, &reason)
+	if err != nil {
+		t.Fatalf("query attempt: %v", err)
+	}
+	if attState != "FAILED" {
+		t.Errorf("expected attempt state FAILED, got %s", attState)
+	}
+	if !strings.Contains(reason, "lease expired") {
+		t.Errorf("expected failure reason mentioning lease expiration, got: %s", reason)
+	}
+
+	// Check job state (should be RETRY_WAIT since attempt 1 <= max_retries 2)
+	var jobState string
+	err = st.pool.QueryRow(ctx, `SELECT state FROM jobs WHERE id = $1;`, jobID).Scan(&jobState)
+	if err != nil {
+		t.Fatalf("query job: %v", err)
+	}
+	if jobState != "RETRY_WAIT" {
+		t.Errorf("expected job state RETRY_WAIT, got %s", jobState)
+	}
+
+	// Check intent status
+	var intentStatus string
+	err = st.pool.QueryRow(ctx, `SELECT status FROM execution_intents WHERE id = $1;`, intentID).Scan(&intentStatus)
+	if err != nil {
+		t.Fatalf("query intent: %v", err)
+	}
+	if intentStatus != "TERMINATED" {
+		t.Errorf("expected intent status TERMINATED, got %s", intentStatus)
+	}
+}

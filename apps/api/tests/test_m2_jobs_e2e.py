@@ -485,3 +485,110 @@ def test_m2_get_job_output_conflict_on_non_terminal_states(client: TestClient, c
     finally:
         conn.close()
 
+
+def test_m2_e2e_executor_crash_and_restart_recovers_job(client: TestClient, clean_db: None):
+    """
+    Milestone M2 Exit Criterion 9:
+    Restarting API, scheduler or executor does not silently lose accepted work.
+    Simulates an executor crash while running attempt 1: the intent lease expires,
+    the scheduler recovers the abandoned intent into RETRY_WAIT, requeues it back
+    to QUEUED when backoff expires, and admits attempt 2 which executes to completion.
+    """
+    headers = {"X-Dev-Subject": "alice", "Idempotency-Key": f"idemp-ws-{time.time()}"}
+
+    # 1. Create Workspace
+    ws_resp = client.post(
+        "/v1/workspaces",
+        json={"name": "Crash Recovery Space", "slug": "crash-recovery-space"},
+        headers=headers,
+    )
+    assert ws_resp.status_code == 201
+    ws_id = ws_resp.json()["id"]
+
+    # 2. Submit finite job with max_retries = 2
+    expected_output = "Crash Recovery Succeeded"
+    job_resp = client.post(
+        f"/v1/workspaces/{ws_id}/jobs",
+        json={
+            "name": "resilient-job",
+            "image_digest": "docker.io/library/python:3.12-alpine",
+            "command_args": [sys.executable, "-c", f"print('{expected_output}')"],
+            "timeout_seconds": 30,
+            "max_retries": 2,
+        },
+        headers={**headers, "Idempotency-Key": f"idemp-job-resilient-{time.time()}"},
+    )
+    assert job_resp.status_code == 202
+    job_id = job_resp.json()["operation_id"]
+
+    # 3. Scheduler admits attempt 1
+    sched_proc = run_scheduler_once()
+    assert sched_proc.returncode == 0
+
+    job_data = client.get(f"/v1/jobs/{job_id}", headers=headers).json()
+    assert job_data["state"] == "ADMITTED"
+    assert len(job_data["attempts"]) == 1
+
+    # 4. Simulate executor claiming attempt 1 and then crashing (leaving lease expired)
+    conn = psycopg2.connect(TEST_DB_SYNC)
+    with conn.cursor() as cur:
+        cur.execute("SELECT id FROM job_attempts WHERE job_id = %s", (job_id,))
+        att1_id = cur.fetchone()[0]
+
+        # Mark attempt 1 RUNNING, intent CLAIMED with expired lease
+        cur.execute("UPDATE jobs SET state = 'RUNNING' WHERE id = %s", (job_id,))
+        cur.execute("UPDATE job_attempts SET state = 'RUNNING' WHERE id = %s", (att1_id,))
+        cur.execute(
+            """
+            UPDATE execution_intents
+            SET status = 'CLAIMED',
+                claimed_by = 'crashed-worker-1',
+                lease_epoch = 1,
+                lease_expires_at = NOW() - INTERVAL '10 seconds'
+            WHERE job_attempt_id = %s
+            """,
+            (att1_id,),
+        )
+    conn.commit()
+
+    # 5. Run Scheduler once: discovers expired intent, marks attempt 1 FAILED, transitions job to RETRY_WAIT
+    sched_proc2 = run_scheduler_once()
+    assert sched_proc2.returncode == 0
+
+    job_after_crash = client.get(f"/v1/jobs/{job_id}", headers=headers).json()
+    assert job_after_crash["state"] == "RETRY_WAIT"
+    att1_check = job_after_crash["attempts"][0]
+    assert att1_check["state"] == "FAILED"
+    assert "lease expired" in att1_check["failure_reason"].lower()
+
+    # 6. Simulate backoff elapsing
+    with conn.cursor() as cur:
+        cur.execute("UPDATE jobs SET updated_at = NOW() - INTERVAL '15 seconds' WHERE id = %s", (job_id,))
+    conn.commit()
+    conn.close()
+
+    # 7. Run Scheduler once: requeues job to QUEUED and admits attempt 2!
+    sched_proc3 = run_scheduler_once()
+    assert sched_proc3.returncode == 0
+
+    job_attempt2 = client.get(f"/v1/jobs/{job_id}", headers=headers).json()
+    assert job_attempt2["state"] == "ADMITTED"
+    assert len(job_attempt2["attempts"]) == 2
+    assert job_attempt2["current_attempt_number"] == 2
+
+    # 8. Run Executor once: executes attempt 2 to completion
+    exec_proc = run_executor_once()
+    assert exec_proc.returncode == 0
+
+    job_final = client.get(f"/v1/jobs/{job_id}", headers=headers).json()
+    assert job_final["state"] == "SUCCEEDED"
+    att2 = job_final["attempts"][1]
+    assert att2["state"] == "SUCCEEDED"
+    assert att2["exit_code"] == 0
+
+    # 9. Verify output is downloadable and contains expected content
+    out_resp = client.get(f"/v1/jobs/{job_id}/output", headers=headers)
+    assert out_resp.status_code == 200
+    assert expected_output in out_resp.text
+
+

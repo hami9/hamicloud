@@ -198,7 +198,7 @@ func (s *PostgresStore) ClaimNextServiceRelease(ctx context.Context, workerID st
 		JOIN applications a ON a.id = r.application_id
 		JOIN workspaces w ON w.id = ei.workspace_id
 		WHERE ei.resource_type = 'SERVICE_RELEASE'
-		  AND ei.status = 'PENDING'
+		  AND (ei.status = 'PENDING' OR (ei.status = 'CLAIMED' AND ei.lease_expires_at < NOW()))
 		ORDER BY ei.created_at ASC
 		LIMIT 1
 		FOR UPDATE OF ei SKIP LOCKED;
@@ -598,6 +598,125 @@ func (s *PostgresStore) RequeueRetryWaitJobs(ctx context.Context, baseBackoff ti
 	}
 
 	return requeuedCount, nil
+}
+
+// RecoverExpiredJobIntents finds CLAIMED job attempt intents whose lease has expired,
+// marks the attempt FAILED with a lease expiration reason, and transitions the job to RETRY_WAIT or FAILED
+// (or CANCELLED if cancel requested).
+func (s *PostgresStore) RecoverExpiredJobIntents(ctx context.Context) (int, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	query := `
+		SELECT ei.id, ei.job_attempt_id, ja.job_id, ja.attempt_number, j.max_retries, ei.lease_epoch, j.state
+		FROM execution_intents ei
+		JOIN job_attempts ja ON ja.id = ei.job_attempt_id
+		JOIN jobs j ON j.id = ja.job_id
+		WHERE ei.resource_type = 'JOB_ATTEMPT'
+		  AND ei.status = 'CLAIMED'
+		  AND ei.lease_expires_at < NOW()
+		FOR UPDATE OF ei SKIP LOCKED;
+	`
+	rows, err := tx.Query(ctx, query)
+	if err != nil {
+		return 0, fmt.Errorf("query expired job intents: %w", err)
+	}
+	defer rows.Close()
+
+	type expiredJob struct {
+		intentID      string
+		attemptID     string
+		jobID         string
+		attemptNumber int
+		maxRetries    int
+		leaseEpoch    int
+		jobState      string
+	}
+	var expired []expiredJob
+	for rows.Next() {
+		var item expiredJob
+		if err := rows.Scan(&item.intentID, &item.attemptID, &item.jobID, &item.attemptNumber, &item.maxRetries, &item.leaseEpoch, &item.jobState); err != nil {
+			return 0, fmt.Errorf("scan expired job intent: %w", err)
+		}
+		expired = append(expired, item)
+	}
+	rows.Close()
+
+	if len(expired) == 0 {
+		return 0, nil
+	}
+
+	now := time.Now().UTC()
+	recoveredCount := 0
+
+	for _, item := range expired {
+		isCancel := domain.JobState(item.jobState) == domain.StateCancelRequested
+		shouldRetry := !isCancel && item.attemptNumber <= item.maxRetries
+
+		// 1. Finalize attempt state
+		attemptState := domain.StateFailed
+		failureReason := "Worker lease expired; executor lost"
+		exitCode := -1
+		if isCancel {
+			attemptState = domain.StateCancelled
+			failureReason = "Job cancellation confirmed during recovery"
+			exitCode = 130
+		}
+
+		_, err := tx.Exec(ctx, `
+			UPDATE job_attempts
+			SET state = $1,
+			    failure_reason = $2,
+			    exit_code = $3,
+			    finished_at = $4,
+			    updated_at = $4
+			WHERE id = $5 AND state IN ('STARTING', 'RUNNING');
+		`, string(attemptState), failureReason, exitCode, now, item.attemptID)
+		if err != nil {
+			return recoveredCount, fmt.Errorf("finalize expired attempt %s: %w", item.attemptID, err)
+		}
+
+		// 2. Transition job state
+		targetJobState := domain.StateRetryWait
+		if isCancel {
+			targetJobState = domain.StateCancelled
+		} else if !shouldRetry {
+			targetJobState = domain.StateFailed
+		}
+
+		jobQuery := fmt.Sprintf(`
+			UPDATE jobs
+			SET state = $1,
+			    updated_at = $2
+			WHERE id = $3 AND state IN (%s);
+		`, legalSourcesSQL(targetJobState))
+		_, err = tx.Exec(ctx, jobQuery, string(targetJobState), now, item.jobID)
+		if err != nil {
+			return recoveredCount, fmt.Errorf("update job %s to %s: %w", item.jobID, targetJobState, err)
+		}
+
+		// 3. Mark intent TERMINATED
+		_, err = tx.Exec(ctx, `
+			UPDATE execution_intents
+			SET status = 'TERMINATED',
+			    updated_at = $1
+			WHERE id = $2 AND lease_epoch = $3;
+		`, now, item.intentID, item.leaseEpoch)
+		if err != nil {
+			return recoveredCount, fmt.Errorf("terminate expired intent %s: %w", item.intentID, err)
+		}
+
+		recoveredCount++
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("commit recover expired job intents: %w", err)
+	}
+
+	return recoveredCount, nil
 }
 
 // ClaimNextJobAttempt atomically claims the next pending job attempt intent using FOR UPDATE SKIP LOCKED.

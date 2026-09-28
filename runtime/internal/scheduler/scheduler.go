@@ -15,6 +15,7 @@ type Store interface {
 	ScanUnadmittedJobs(ctx context.Context, limit int) ([]store.UnadmittedJob, error)
 	CreateJobAttemptIntent(ctx context.Context, job store.UnadmittedJob) (*store.ExecutionIntent, error)
 	RequeueRetryWaitJobs(ctx context.Context, baseBackoff time.Duration, limit int) (int, error)
+	RecoverExpiredJobIntents(ctx context.Context) (int, error)
 }
 
 type Scheduler struct {
@@ -44,6 +45,14 @@ func (s *Scheduler) Wake() {
 
 // RunOnce scans for releases and jobs awaiting execution intents and admits them.
 func (s *Scheduler) RunOnce(ctx context.Context) (int, error) {
+	// 0. Recover any expired job attempt intents from crashed executors
+	recovered, err := s.store.RecoverExpiredJobIntents(ctx)
+	if err != nil {
+		s.logger.Warn("Failed to recover expired job intents", "error", err)
+	} else if recovered > 0 {
+		s.logger.Info("Recovered expired job intents from crashed workers", "count", recovered)
+	}
+
 	// 1. Requeue any jobs in RETRY_WAIT whose exponential backoff has elapsed
 	requeued, err := s.store.RequeueRetryWaitJobs(ctx, 5*time.Second, 50)
 	if err != nil {

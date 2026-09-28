@@ -61,6 +61,12 @@ func (m *mockSchedulerStore) RequeueRetryWaitJobs(ctx context.Context, baseBacko
 	return m.requeuedCount, nil
 }
 
+func (m *mockSchedulerStore) RecoverExpiredJobIntents(ctx context.Context) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return 0, nil
+}
+
 func TestScheduler_RunOnce_Empty(t *testing.T) {
 	st := &mockSchedulerStore{}
 	sched := NewScheduler(st, nil)

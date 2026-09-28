@@ -20,6 +20,7 @@ type Store interface {
 type Scheduler struct {
 	store  Store
 	logger *slog.Logger
+	wakeCh chan struct{}
 }
 
 func NewScheduler(st Store, logger *slog.Logger) *Scheduler {
@@ -29,6 +30,15 @@ func NewScheduler(st Store, logger *slog.Logger) *Scheduler {
 	return &Scheduler{
 		store:  st,
 		logger: logger,
+		wakeCh: make(chan struct{}, 1),
+	}
+}
+
+// Wake non-blockingly signals the scheduler to perform an immediate admission pass.
+func (s *Scheduler) Wake() {
+	select {
+	case s.wakeCh <- struct{}{}:
+	default:
 	}
 }
 
@@ -118,6 +128,11 @@ func (s *Scheduler) Start(ctx context.Context, period time.Duration) error {
 		case <-ticker.C:
 			if _, err := s.RunOnce(ctx); err != nil {
 				s.logger.Warn("Scheduler admission cycle reported error", "error", err)
+			}
+		case <-s.wakeCh:
+			s.logger.Info("Scheduler triggered by event notification")
+			if _, err := s.RunOnce(ctx); err != nil {
+				s.logger.Warn("Scheduler event admission pass reported error", "error", err)
 			}
 		}
 	}

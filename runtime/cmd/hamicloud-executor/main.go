@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/hami9/hamicloud/runtime/internal/bus"
 	"github.com/hami9/hamicloud/runtime/internal/config"
 	"github.com/hami9/hamicloud/runtime/internal/executor"
 	"github.com/hami9/hamicloud/runtime/internal/reconciler"
@@ -73,6 +74,20 @@ func main() {
 		logger.Info("Executor RunOnce completed successfully", "workload_processed", processed)
 		return
 	}
+
+	// Start NATS event listener for immediate wake-ups on workload events
+	listener := bus.NewEventListener(cfg.NATSURL, []string{
+		"job.>",
+		"app.>",
+		"workload.>",
+	}, logger)
+	listener.Register(exec)
+
+	go func() {
+		if err := listener.Start(ctx); err != nil && err != context.Canceled {
+			logger.Warn("Executor event listener stopped", "error", err)
+		}
+	}()
 
 	// Run executor in background goroutine
 	go func() {

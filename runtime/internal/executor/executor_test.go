@@ -255,3 +255,26 @@ func TestExecutor_RunOnce_ClaimAndReconcileJobSuccess(t *testing.T) {
 		t.Errorf("expected service reconciler NOT to be called when job claimed")
 	}
 }
+
+func TestExecutor_Wake(t *testing.T) {
+	st := &mockStore{claimed: nil}
+	rec := &mockReconciler{}
+	exec := NewExecutor(st, rec, "worker-wake", 10*time.Second, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	exec.Wake()
+
+	done := make(chan struct{})
+	go func() {
+		_ = exec.Start(ctx, 10*time.Second)
+		close(done)
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+	exec.Wake()
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	<-done
+}

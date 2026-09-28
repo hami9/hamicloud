@@ -30,6 +30,7 @@ type Executor struct {
 	workerID      string
 	leaseDuration time.Duration
 	logger        *slog.Logger
+	wakeCh        chan struct{}
 }
 
 func NewExecutor(
@@ -48,6 +49,15 @@ func NewExecutor(
 		workerID:      workerID,
 		leaseDuration: leaseDuration,
 		logger:        logger,
+		wakeCh:        make(chan struct{}, 1),
+	}
+}
+
+// Wake non-blockingly signals the executor to immediately perform a work check.
+func (e *Executor) Wake() {
+	select {
+	case e.wakeCh <- struct{}{}:
+	default:
 	}
 }
 
@@ -190,6 +200,8 @@ func (e *Executor) Start(ctx context.Context, idlePollInterval time.Duration) er
 			case <-ctx.Done():
 				return ctx.Err()
 			case <-time.After(idlePollInterval):
+			case <-e.wakeCh:
+				e.logger.Debug("Executor awakened by event notification")
 			}
 		}
 	}

@@ -99,3 +99,25 @@ func TestScheduler_RunOnce_AdmitsReleasesAndJobs(t *testing.T) {
 		t.Errorf("expected 3 created intents, got %d", len(st.createdIntents))
 	}
 }
+
+func TestScheduler_Wake(t *testing.T) {
+	st := &mockSchedulerStore{}
+	sched := NewScheduler(st, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sched.Wake()
+
+	done := make(chan struct{})
+	go func() {
+		_ = sched.Start(ctx, 10*time.Second)
+		close(done)
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+	sched.Wake()
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	<-done
+}

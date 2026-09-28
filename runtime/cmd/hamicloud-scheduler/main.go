@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/hami9/hamicloud/runtime/internal/bus"
 	"github.com/hami9/hamicloud/runtime/internal/config"
 	"github.com/hami9/hamicloud/runtime/internal/scheduler"
 	"github.com/hami9/hamicloud/runtime/internal/store"
@@ -56,6 +57,20 @@ func main() {
 		logger.Info("Scheduler RunOnce completed successfully", "admitted_count", count)
 		return
 	}
+
+	// Start NATS event listener for immediate wake-ups on admission events
+	listener := bus.NewEventListener(cfg.NATSURL, []string{
+		"job.submitted.v1",
+		"app.deployment.requested.v1",
+		"app.rollback.requested.v1",
+	}, logger)
+	listener.Register(sched)
+
+	go func() {
+		if err := listener.Start(ctx); err != nil && err != context.Canceled {
+			logger.Warn("Scheduler event listener stopped", "error", err)
+		}
+	}()
 
 	// Run scheduler in background goroutine
 	go func() {

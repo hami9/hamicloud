@@ -1,7 +1,8 @@
 {
+  "_comment": "DEVELOPMENT ONLY - Insecure development passwords (alice123, bob123) and direct access grants for local evaluation. Do not deploy to production.",
   "id": "hamicloud",
   "realm": "hamicloud",
-  "displayName": "HamiCloud Local Realm",
+  "displayName": "HamiCloud Local Realm (Development Only)",
   "enabled": true,
   "sslRequired": "external",
   "registrationAllowed": false,

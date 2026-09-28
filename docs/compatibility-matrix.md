@@ -2,17 +2,19 @@
 
 This document records the exact runtime versions, toolchain dependencies, and container image digests validated in the automated test suite and CI pipeline.
 
-**Authoritative CI Run:** [Run 36027409142](https://github.com/hami9/hamicloud/actions/runs/36027409142)  
-**Commit:** `8ce85ab` (main branch)
+**Authoritative CI Run:** [Run 36391556830](https://github.com/hami9/hamicloud/actions/runs/36391556830)  
+**Commit:** `143d44b` (main branch)
 
 ---
 
 ## 1. Runtimes & Languages
 
+> **Floating Patch Resolution Note:** CI workflow `.github/workflows/ci.yml` pins minor runtime versions (`python-version: "3.12"` and `go-version: "1.23"`). GitHub Actions `setup-python` and `setup-go` resolve these specs to the latest matching patch release present in the runner toolcache at workflow execution time. The table below records the exact patch versions executed in the authoritative CI run.
+
 | Component | Policy Floor (ADR-0005) | Tested Version | Provenance / Evidence | Status |
 | :--- | :--- | :--- | :--- | :---: |
-| **Python** | 3.12+ | `3.12.9` (CI runner) / `3.14.5` (local dev) | GitHub Actions `setup-python@v5` log in Run 36027409142; `python --version` | **TESTED** |
-| **Go** | 1.23+ | `1.23.6` (CI runner) / `1.27.1` (local dev) | GitHub Actions `setup-go@v5` log in Run 36027409142; `go version` | **TESTED** |
+| **Python** | 3.12+ | `3.12.14` (CI runner via `3.12` floating patch) / `3.14.5` (local dev) | GitHub Actions `setup-python@v5` log in Run 36391556830; `python --version` | **TESTED** |
+| **Go** | 1.23+ | `1.23.12` (CI runner via `1.23` floating patch) / `1.27.1` (local dev) | GitHub Actions `setup-go@v5` log in Run 36391556830; `go version` | **TESTED** |
 
 ---
 
@@ -26,7 +28,7 @@ All container images are pinned by immutable cryptographic digest. Multi-archite
 | **Redis (Compose)** | `redis:7.2-alpine@sha256:ccd6aa8d45ff3f033d6fa15b8cc1a50579f65c89f38cf9bb607a954c4f2128ed` | `docker pull redis:7.2-alpine`; `deploy/compose/docker-compose.yml` | **TESTED** |
 | **Redis (CI)** | `redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499` | `docker pull redis:7-alpine`; `.github/workflows/ci.yml` | **TESTED** |
 | **NATS JetStream** | `nats:2.10-alpine@sha256:b83efabe3e7def1e0a4a31ec6e078999bb17c80363f881df35edc70fcb6bb927` | `docker pull nats:2.10-alpine`; `deploy/compose/docker-compose.yml` | **TESTED** |
-| **MinIO** | `quay.io/minio/minio:latest@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e` | `docker inspect hamicloud-minio`; `deploy/compose/docker-compose.yml` | **TESTED** |
+| **MinIO** | `quay.io/minio/minio:latest@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e` | `docker inspect hamicloud-minio`; `deploy/compose/docker-compose.yml` | configured, not exercised |
 | **Keycloak (IdP)** | `quay.io/keycloak/keycloak:24.0.5@sha256:f8ade94c1d0ad2f2fa7734a455fee5392764f402c43ca35e9af6bf63a2541dc9` | Decision D7 (pinned by owner); `docker pull quay.io/keycloak/keycloak:24.0.5`; `deploy/compose/docker-compose.yml` | **TESTED** |
 
 ---
@@ -38,8 +40,8 @@ Exact package versions active during test and build execution:
 | Package | Tested Version | Provenance / Evidence | Status |
 | :--- | :--- | :--- | :---: |
 | **FastAPI** | `0.141.1` | `pip freeze` | **TESTED** |
-| **Starlette** | `1.6.0` | `pip freeze` | **TESTED** |
-| **SQLAlchemy** | `2.0.52` | `pip freeze` | **TESTED** |
+| **Starlette** | `1.7.0` | `pip freeze` / `requirements.lock` | **TESTED** |
+| **SQLAlchemy** | `2.0.54` | `pip freeze` / `requirements.lock` | **TESTED** |
 | **Alembic** | `1.20.0` | `pip freeze` | **TESTED** |
 | **Pydantic** | `2.13.5` | `pip freeze` | **TESTED** |
 | **asyncpg** | `0.31.0` | `pip freeze` | **TESTED** |

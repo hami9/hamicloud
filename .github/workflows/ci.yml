@@ -47,7 +47,8 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e "./apps/api[dev]"
+          pip install --require-hashes -r requirements.lock
+          pip install --no-deps -e "./apps/api"
 
       - name: Run Ruff Lint
         run: |
@@ -118,7 +119,8 @@ jobs:
       - name: Install migration dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e "./apps/api"
+          pip install --require-hashes -r requirements.lock
+          pip install --no-deps -e "./apps/api"
 
       - name: Run Alembic migrations against hamicloud_test
         env:

@@ -509,3 +509,143 @@ func TestPostgresStore_CreateJobAttemptIntent_RetryBudgetExhausted(t *testing.T)
 		t.Fatalf("expected 0 attempt rows for job %s, got %d", jobID, attemptCount)
 	}
 }
+
+// TestPostgresStore_ScanUnadmittedReleases_SupersededReleaseSkipped asserts that when multiple
+// releases are pending for an application, only the latest release (highest release_number)
+// receives an ExecutionIntent, and an older superseded release can never become current_release_id.
+func TestPostgresStore_ScanUnadmittedReleases_SupersededReleaseSkipped(t *testing.T) {
+	ctx := context.Background()
+	st := connectTestStore(t, ctx)
+
+	now := time.Now().UTC()
+	wsID := createTestWorkspace(t, ctx, st, "Release Supersede WS")
+	appID := NewUUID()
+	relID1 := NewUUID()
+	relID2 := NewUUID()
+
+	// 1. Create application with desired_generation = 1
+	_, err := st.pool.Exec(ctx, `
+		INSERT INTO applications (
+			id, workspace_id, name, slug, workload_type, desired_generation, created_at, updated_at
+		) VALUES ($1, $2, 'supersede-app', $3, 'HTTP_SERVICE', 1, $4, $4);
+	`, appID, wsID, "supersede-app-"+appID[:8], now)
+	if err != nil {
+		t.Fatalf("insert test application: %v", err)
+	}
+
+	// 2. Insert Release 1 (release_number = 1, IMAGE_READY)
+	_, err = st.pool.Exec(ctx, `
+		INSERT INTO releases (
+			id, application_id, workspace_id, release_number, image_digest, config_json, status, created_at, updated_at
+		) VALUES ($1, $2, $3, 1, 'sha256:rel1', '{"port": 8080}', 'IMAGE_READY', $4, $4);
+	`, relID1, appID, wsID, now)
+	if err != nil {
+		t.Fatalf("insert test release 1: %v", err)
+	}
+
+	// 3. Insert Release 2 (release_number = 2, IMAGE_READY, newer release for same app)
+	later := now.Add(time.Second)
+	_, err = st.pool.Exec(ctx, `
+		INSERT INTO releases (
+			id, application_id, workspace_id, release_number, image_digest, config_json, status, created_at, updated_at
+		) VALUES ($1, $2, $3, 2, 'sha256:rel2', '{"port": 8080}', 'IMAGE_READY', $4, $4);
+	`, relID2, appID, wsID, later)
+	if err != nil {
+		t.Fatalf("insert test release 2: %v", err)
+	}
+
+	// 4. ScanUnadmittedReleases MUST return only Release 2 (Release 1 is superseded)
+	unadmitted, err := st.ScanUnadmittedReleases(ctx, 10)
+	if err != nil {
+		t.Fatalf("ScanUnadmittedReleases failed: %v", err)
+	}
+
+	foundRel1 := false
+	foundRel2 := false
+	for _, r := range unadmitted {
+		if r.ReleaseID == relID1 {
+			foundRel1 = true
+		}
+		if r.ReleaseID == relID2 {
+			foundRel2 = true
+		}
+	}
+	if foundRel1 {
+		t.Fatalf("superseded release 1 was unexpectedly returned by ScanUnadmittedReleases")
+	}
+	if !foundRel2 {
+		t.Fatalf("latest release 2 was not returned by ScanUnadmittedReleases")
+	}
+
+	// 5. Create intent for Release 2 with desired_generation = 1
+	var rel2Candidate UnadmittedRelease
+	for _, r := range unadmitted {
+		if r.ReleaseID == relID2 {
+			rel2Candidate = r
+			break
+		}
+	}
+	intent2, err := st.CreateServiceReleaseIntent(ctx, rel2Candidate)
+	if err != nil || intent2 == nil {
+		t.Fatalf("CreateServiceReleaseIntent failed: %v", err)
+	}
+
+	// Verify ADR-0003 deterministic naming: hc-svc-{app_id}-{generation}
+	expectedResourceName := fmt.Sprintf("hc-svc-%s-1", appID)
+	if intent2.DeterministicResourceName != expectedResourceName {
+		t.Fatalf("expected resource name %s, got %s", expectedResourceName, intent2.DeterministicResourceName)
+	}
+
+	// 6. Advance application desired_generation to 2 (simulating subsequent deployment)
+	_, err = st.pool.Exec(ctx, `UPDATE applications SET desired_generation = 2, updated_at = $1 WHERE id = $2;`, now, appID)
+	if err != nil {
+		t.Fatalf("update app desired_generation: %v", err)
+	}
+
+	// 7. Claim intent2 (target_generation is 1, while app is now generation 2)
+	workload, err := st.ClaimNextServiceRelease(ctx, "worker-test", 60*time.Second)
+	if err != nil || workload == nil {
+		t.Fatalf("ClaimNextServiceRelease failed: %v", err)
+	}
+
+	// 8. MarkReleaseHealthy with the superseded intent (generation 1)
+	err = st.MarkReleaseHealthy(ctx, intent2.ID, relID2, appID, "uid-res-2", workload.LeaseEpoch)
+	if err != nil {
+		t.Fatalf("MarkReleaseHealthy failed: %v", err)
+	}
+
+	// 9. Assert: applications.current_release_id MUST NOT be updated to relID2 because generation is stale!
+	var currentRelID *string
+	err = st.pool.QueryRow(ctx, `SELECT current_release_id::text FROM applications WHERE id = $1;`, appID).Scan(&currentRelID)
+	if err != nil {
+		t.Fatalf("query app current_release_id: %v", err)
+	}
+	if currentRelID != nil {
+		t.Fatalf("stale generation superseded release unexpectedly became current_release_id: %s", *currentRelID)
+	}
+
+	// 10. When a release matching current desired_generation (2) completes, it DOES become current
+	intentForGen2ID := NewUUID()
+	_, err = st.pool.Exec(ctx, `
+		INSERT INTO execution_intents (
+			id, workspace_id, resource_type, release_id, target_generation,
+			deterministic_resource_name, status, lease_epoch, created_at, updated_at
+		) VALUES ($1, $2, 'SERVICE_RELEASE', $3, 2, 'hc-svc-gen2', 'CLAIMED', 1, $4, $4);
+	`, intentForGen2ID, wsID, relID2, now)
+	if err != nil {
+		t.Fatalf("insert gen2 claimed intent: %v", err)
+	}
+
+	err = st.MarkReleaseHealthy(ctx, intentForGen2ID, relID2, appID, "uid-res-gen2", 1)
+	if err != nil {
+		t.Fatalf("MarkReleaseHealthy for gen 2 failed: %v", err)
+	}
+
+	err = st.pool.QueryRow(ctx, `SELECT current_release_id::text FROM applications WHERE id = $1;`, appID).Scan(&currentRelID)
+	if err != nil {
+		t.Fatalf("query app current_release_id after gen2: %v", err)
+	}
+	if currentRelID == nil || *currentRelID != relID2 {
+		t.Fatalf("expected current_release_id to be %s, got %v", relID2, currentRelID)
+	}
+}

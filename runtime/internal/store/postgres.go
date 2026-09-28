@@ -79,6 +79,8 @@ func (s *PostgresStore) Close() {
 }
 
 // ScanUnadmittedReleases finds releases that have not yet had an execution intent created.
+// For each application, only the latest release (highest release_number) is eligible,
+// skipping superseded releases per ADR-0003.
 func (s *PostgresStore) ScanUnadmittedReleases(ctx context.Context, limit int) ([]UnadmittedRelease, error) {
 	query := `
 		SELECT r.id, r.application_id, r.workspace_id, w.slug, a.slug, r.release_number, r.image_digest, r.config_json, a.desired_generation
@@ -86,6 +88,12 @@ func (s *PostgresStore) ScanUnadmittedReleases(ctx context.Context, limit int) (
 		JOIN applications a ON a.id = r.application_id
 		JOIN workspaces w ON w.id = r.workspace_id
 		WHERE r.status IN ('IMAGE_READY', 'REQUESTED')
+		  AND r.release_number = (
+		      SELECT MAX(r2.release_number)
+		      FROM releases r2
+		      WHERE r2.application_id = r.application_id
+		        AND r2.status IN ('IMAGE_READY', 'REQUESTED')
+		  )
 		  AND NOT EXISTS (
 		      SELECT 1 FROM execution_intents ei
 		      WHERE ei.release_id = r.id
@@ -131,9 +139,10 @@ func safePrefix(s string, length int) string {
 }
 
 // CreateServiceReleaseIntent inserts a durable ExecutionIntent for a service release.
+// Deterministic resource naming adheres to ADR-0003: hc-svc-{app_id}-{generation}.
 func (s *PostgresStore) CreateServiceReleaseIntent(ctx context.Context, rel UnadmittedRelease) (*ExecutionIntent, error) {
 	intentID := NewUUID()
-	resourceName := fmt.Sprintf("dep-%s-%s", rel.ApplicationSlug, safePrefix(rel.ReleaseID, 8))
+	resourceName := fmt.Sprintf("hc-svc-%s-%d", rel.ApplicationID, rel.DesiredGeneration)
 	now := time.Now().UTC()
 
 	query := `
@@ -313,13 +322,16 @@ func (s *PostgresStore) MarkReleaseHealthy(ctx context.Context, intentID, releas
 		return fmt.Errorf("update release healthy: %w", err)
 	}
 
-	// 3. Update application current_release_id
+	// 3. Update application current_release_id ONLY IF intent's target_generation still equals applications.desired_generation
 	_, err = tx.Exec(ctx, `
 		UPDATE applications
 		SET current_release_id = $1,
 		    updated_at = $2
-		WHERE id = $3;
-	`, releaseID, now, appID)
+		WHERE id = $3
+		  AND desired_generation = (
+		      SELECT target_generation FROM execution_intents WHERE id = $4
+		  );
+	`, releaseID, now, appID, intentID)
 	if err != nil {
 		return fmt.Errorf("update app current_release_id: %w", err)
 	}
@@ -486,9 +498,9 @@ func (s *PostgresStore) CreateJobAttemptIntent(ctx context.Context, job Unadmitt
 		return nil, nil
 	}
 
-	// 3. Insert ExecutionIntent (deterministic resource name per attempt)
+	// 3. Insert ExecutionIntent (deterministic resource name per attempt: hc-job-{job_id}-{attempt_number})
 	intentID := NewUUID()
-	resourceName := fmt.Sprintf("job-%s-%d", safePrefix(job.JobID, 8), nextAttemptNumber)
+	resourceName := fmt.Sprintf("hc-job-%s-%d", job.JobID, nextAttemptNumber)
 
 	insertIntentQuery := `
 		INSERT INTO execution_intents (

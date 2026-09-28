@@ -1589,6 +1589,38 @@ Following project review of `18a3a4e..816cc4a`, all required fixes were implemen
 | **Go Reconciler & Control Loop** | `go test -v ./internal/reconciler/... ./internal/executor/...` | **PASS** | Verified `MarkJobAttemptRunning` execution and cancel races. |
 | **Go Binaries Build** | `CGO_ENABLED=0 go build` | **PASS** | Scheduler and executor binaries compile cleanly. |
 
+### [2026-09-28T11:45:00Z] Phase 2 / Milestone M2: Outbox Resilience, Superseded Release Skipping & Toolchain Pinning
+
+- **Milestone:** P2 / M2 — Usable MVP & Outbox Resilience Hardening
+- **Status:** COMPLETED & VERIFIED
+- **Deliverables & Hardening:**
+  1. **Outbox Broker Outage Resilience (ADR-0002 §4, `apps/api/app/workers/outbox_dispatcher.py`):**
+     - Added migration `0004_add_outbox_next_attempt_at` adding indexed `next_attempt_at` timestamp column to `outbox_events`.
+     - In `OutboxDispatcher.drain_batch`: transient broker/connection failures never mark outbox events `FAILED`. Events remain in `PENDING` with exponential backoff on `next_attempt_at` (`min(300, 2 ^ retry_count)`).
+     - Added bounded 2.0s network timeout on JetStream publish.
+     - Added administrative helper `requeue_failed_outbox_events` to restore failed outbox events to `PENDING`.
+     - Hardened AST topic validator in `apps/api/tests/test_contracts.py` to prevent treating maintenance helper functions as outbox event creators.
+     - Verified with `test_outbox_broker_outage_never_fails_and_recovers_to_published` and `test_outbox_permanent_error_and_requeue`.
+  2. **Release Superseding & Generation Fencing (`runtime/internal/store/postgres.go`):**
+     - Updated `ScanUnadmittedReleases` to skip superseded releases, only admitting the highest `release_number` per application when multiple unadmitted releases exist.
+     - Enforced deterministic resource naming per ADR-0003: `hc-svc-{app_id}-{generation}` and `hc-job-{job_id}-{attempt_number}`.
+     - Hardened `MarkReleaseHealthy` so `applications.current_release_id` is updated only if the execution intent's `target_generation` equals `applications.desired_generation`.
+     - Added comprehensive test `TestPostgresStore_ScanUnadmittedReleases_SupersededReleaseSkipped`.
+  3. **Dependency Pinning & Hash Verification (`requirements.lock`, `.github/workflows/ci.yml`):**
+     - Replaced unhashed requirements with fully resolved `--require-hashes` `requirements.lock` at repository root.
+     - Updated CI pipeline to install via `pip install --require-hashes -r requirements.lock`.
+     - Tagged Keycloak development-only labels in Compose and realm configuration.
+- **Verification Evidence:**
+  - Python tests: `108 passed, 1 skipped` (Keycloak discovery skip when local server is down) across full test suite.
+  - Go test suite: `go test -v ./...` passed 100% across all packages in `runtime`.
+  - Static analysis: `ruff check apps/api` passed, `mypy --explicit-package-bases app` passed with 0 errors across 33 files.
+  - OpenAPI spec: `openapi-spec-validator contracts/openapi/v1.yaml` passed.
+  - Alembic check: clean against both `hamicloud` and `hamicloud_test` databases.
+  - Frontend: `oxlint` clean, `tsc -b && vite build` passed.
+  - GitHub Actions CI Run: [Run 36416691182](https://github.com/hami9/hamicloud/actions/runs/36416691182) 100% green (`Go Build & Concurrency Tests` in 51s, `Python Lint & Tests` in 1m52s).
+- **Commit SHAs:** `0711720`, `2e286d7`, `1443b0b`.
+
+
 
 
 

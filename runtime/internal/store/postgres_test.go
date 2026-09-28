@@ -42,7 +42,35 @@ func connectTestStore(t *testing.T, ctx context.Context) *PostgresStore {
 		}
 		t.Skipf("skipping integration test, cannot connect to postgres at %s: %v", target, err)
 	}
+	t.Cleanup(func() {
+		st.Close()
+	})
 	return st
+}
+
+func createTestWorkspace(t *testing.T, ctx context.Context, st *PostgresStore, name string) string {
+	t.Helper()
+	wsID := NewUUID()
+	now := time.Now().UTC()
+	slug := strings.ToLower(strings.ReplaceAll(name, " ", "-")) + "-" + wsID[:8]
+	_, err := st.pool.Exec(ctx, `
+		INSERT INTO workspaces (id, name, slug, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $4)
+		ON CONFLICT (id) DO NOTHING;
+	`, wsID, name, slug, now)
+	if err != nil {
+		t.Fatalf("insert test workspace: %v", err)
+	}
+
+	t.Cleanup(func() {
+		cleanCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, err := st.pool.Exec(cleanCtx, `DELETE FROM workspaces WHERE id = $1;`, wsID); err != nil {
+			t.Logf("cleanup test workspace %s: %v", wsID, err)
+		}
+	})
+
+	return wsID
 }
 
 // TestPostgresStore_MarkJobAttemptSucceeded_CancelRace asserts that when a job enters CANCEL_REQUESTED
@@ -52,24 +80,14 @@ func connectTestStore(t *testing.T, ctx context.Context) *PostgresStore {
 func TestPostgresStore_MarkJobAttemptSucceeded_CancelRace(t *testing.T) {
 	ctx := context.Background()
 	st := connectTestStore(t, ctx)
-	defer st.Close()
 
 	now := time.Now().UTC()
-	wsID := NewUUID()
+	wsID := createTestWorkspace(t, ctx, st, "D4 Race WS")
 	jobID := NewUUID()
 	attemptID := NewUUID()
 	intentID := NewUUID()
 
 	_, err := st.pool.Exec(ctx, `
-		INSERT INTO workspaces (id, name, slug, created_at, updated_at)
-		VALUES ($1, 'D4 Race WS', $2, $3, $3)
-		ON CONFLICT (id) DO NOTHING;
-	`, wsID, "d4-race-"+wsID[:8], now)
-	if err != nil {
-		t.Fatalf("insert test workspace: %v", err)
-	}
-
-	_, err = st.pool.Exec(ctx, `
 		INSERT INTO jobs (
 			id, workspace_id, name, image_digest, command_args, env_vars,
 			timeout_seconds, max_retries, current_attempt_number, state, created_at, updated_at
@@ -156,15 +174,13 @@ func TestPostgresStore_MarkJobAttemptSucceeded_CancelRace(t *testing.T) {
 func TestPostgresStore_MarkJobAttemptFailed_CancelRace(t *testing.T) {
 	ctx := context.Background()
 	st := connectTestStore(t, ctx)
-	defer st.Close()
 
 	now := time.Now().UTC()
-	wsID := NewUUID()
+	wsID := createTestWorkspace(t, ctx, st, "D5 Race WS")
 	jobID := NewUUID()
 	attemptID := NewUUID()
 	intentID := NewUUID()
 
-	_, _ = st.pool.Exec(ctx, `INSERT INTO workspaces (id, name, slug, created_at, updated_at) VALUES ($1, 'D5 Race WS', $2, $3, $3) ON CONFLICT (id) DO NOTHING;`, wsID, "d5-race-"+wsID[:8], now)
 	_, _ = st.pool.Exec(ctx, `INSERT INTO jobs (id, workspace_id, name, image_digest, command_args, env_vars, timeout_seconds, max_retries, current_attempt_number, state, created_at, updated_at) VALUES ($1, $2, 'd5-race-job', 'sha256:dummy', '[]', '{}', 60, 3, 1, 'RUNNING', $3, $3);`, jobID, wsID, now)
 	_, _ = st.pool.Exec(ctx, `INSERT INTO job_attempts (id, job_id, workspace_id, attempt_number, state, lease_epoch, created_at, updated_at) VALUES ($1, $2, $3, 1, 'RUNNING', 1, $4, $4);`, attemptID, jobID, wsID, now)
 	_, _ = st.pool.Exec(ctx, `INSERT INTO execution_intents (id, workspace_id, resource_type, job_attempt_id, target_generation, deterministic_resource_name, status, lease_epoch, created_at, updated_at) VALUES ($1, $2, 'JOB_ATTEMPT', $3, 1, 'job-res-d5', 'CLAIMED', 1, $4, $4);`, intentID, wsID, attemptID, now)
@@ -189,7 +205,6 @@ func TestPostgresStore_MarkJobAttemptFailed_CancelRace(t *testing.T) {
 func TestPostgresStore_UnfencedIntentRejected(t *testing.T) {
 	ctx := context.Background()
 	st := connectTestStore(t, ctx)
-	defer st.Close()
 
 	epochs := []int{0, -1}
 	for _, epoch := range epochs {
@@ -219,15 +234,13 @@ func TestPostgresStore_UnfencedIntentRejected(t *testing.T) {
 func TestPostgresStore_MarkJobAttemptRunning_SuccessAndFencing(t *testing.T) {
 	ctx := context.Background()
 	st := connectTestStore(t, ctx)
-	defer st.Close()
 
 	now := time.Now().UTC()
-	wsID := NewUUID()
+	wsID := createTestWorkspace(t, ctx, st, "Running WS")
 	jobID := NewUUID()
 	attemptID := NewUUID()
 	intentID := NewUUID()
 
-	_, _ = st.pool.Exec(ctx, `INSERT INTO workspaces (id, name, slug, created_at, updated_at) VALUES ($1, 'Running WS', $2, $3, $3) ON CONFLICT (id) DO NOTHING;`, wsID, "run-ws-"+wsID[:8], now)
 	_, _ = st.pool.Exec(ctx, `INSERT INTO jobs (id, workspace_id, name, image_digest, command_args, env_vars, timeout_seconds, max_retries, current_attempt_number, state, created_at, updated_at) VALUES ($1, $2, 'run-job', 'sha256:dummy', '[]', '{}', 60, 3, 1, 'STARTING', $3, $3);`, jobID, wsID, now)
 	_, _ = st.pool.Exec(ctx, `INSERT INTO job_attempts (id, job_id, workspace_id, attempt_number, state, lease_epoch, created_at, updated_at) VALUES ($1, $2, $3, 1, 'STARTING', 1, $4, $4);`, attemptID, jobID, wsID, now)
 	_, _ = st.pool.Exec(ctx, `INSERT INTO execution_intents (id, workspace_id, resource_type, job_attempt_id, target_generation, deterministic_resource_name, status, lease_epoch, created_at, updated_at) VALUES ($1, $2, 'JOB_ATTEMPT', $3, 1, 'job-res-run', 'CLAIMED', 1, $4, $4);`, intentID, wsID, attemptID, now)
@@ -267,15 +280,13 @@ func TestPostgresStore_MarkJobAttemptRunning_SuccessAndFencing(t *testing.T) {
 func TestPostgresStore_MarkJobAttemptSucceeded_TerminalJobNotOverwritten(t *testing.T) {
 	ctx := context.Background()
 	st := connectTestStore(t, ctx)
-	defer st.Close()
 
 	now := time.Now().UTC()
-	wsID := NewUUID()
+	wsID := createTestWorkspace(t, ctx, st, "Term WS")
 	jobID := NewUUID()
 	attemptID := NewUUID()
 	intentID := NewUUID()
 
-	_, _ = st.pool.Exec(ctx, `INSERT INTO workspaces (id, name, slug, created_at, updated_at) VALUES ($1, 'Term WS', $2, $3, $3) ON CONFLICT (id) DO NOTHING;`, wsID, "term-ws-"+wsID[:8], now)
 	_, _ = st.pool.Exec(ctx, `INSERT INTO jobs (id, workspace_id, name, image_digest, command_args, env_vars, timeout_seconds, max_retries, current_attempt_number, state, created_at, updated_at) VALUES ($1, $2, 'term-job', 'sha256:dummy', '[]', '{}', 60, 3, 1, 'FAILED', $3, $3);`, jobID, wsID, now)
 	_, _ = st.pool.Exec(ctx, `INSERT INTO job_attempts (id, job_id, workspace_id, attempt_number, state, lease_epoch, created_at, updated_at) VALUES ($1, $2, $3, 1, 'STARTING', 1, $4, $4);`, attemptID, jobID, wsID, now)
 	_, _ = st.pool.Exec(ctx, `INSERT INTO execution_intents (id, workspace_id, resource_type, job_attempt_id, target_generation, deterministic_resource_name, status, lease_epoch, created_at, updated_at) VALUES ($1, $2, 'JOB_ATTEMPT', $3, 1, 'job-res-term', 'CLAIMED', 1, $4, $4);`, intentID, wsID, attemptID, now)
@@ -309,15 +320,13 @@ func TestPostgresStore_MarkJobAttemptSucceeded_TerminalJobNotOverwritten(t *test
 func TestPostgresStore_MarkJobAttemptCancelled_StaleEpochReturnsFencingError(t *testing.T) {
 	ctx := context.Background()
 	st := connectTestStore(t, ctx)
-	defer st.Close()
 
 	now := time.Now().UTC()
-	wsID := NewUUID()
+	wsID := createTestWorkspace(t, ctx, st, "Fence WS")
 	jobID := NewUUID()
 	attemptID := NewUUID()
 	intentID := NewUUID()
 
-	_, _ = st.pool.Exec(ctx, `INSERT INTO workspaces (id, name, slug, created_at, updated_at) VALUES ($1, 'Fence WS', $2, $3, $3) ON CONFLICT (id) DO NOTHING;`, wsID, "fence-ws-"+wsID[:8], now)
 	_, _ = st.pool.Exec(ctx, `INSERT INTO jobs (id, workspace_id, name, image_digest, command_args, env_vars, timeout_seconds, max_retries, current_attempt_number, state, created_at, updated_at) VALUES ($1, $2, 'fence-job', 'sha256:dummy', '[]', '{}', 60, 3, 1, 'CANCEL_REQUESTED', $3, $3);`, jobID, wsID, now)
 	_, _ = st.pool.Exec(ctx, `INSERT INTO job_attempts (id, job_id, workspace_id, attempt_number, state, lease_epoch, created_at, updated_at) VALUES ($1, $2, $3, 1, 'RUNNING', 2, $4, $4);`, attemptID, jobID, wsID, now)
 	// Intent has lease_epoch = 2
@@ -356,15 +365,13 @@ func TestPostgresStore_MarkJobAttemptCancelled_StaleEpochReturnsFencingError(t *
 func TestPostgresStore_MarkJobAttemptCancelled_GuardsOnCancelRequested(t *testing.T) {
 	ctx := context.Background()
 	st := connectTestStore(t, ctx)
-	defer st.Close()
 
 	now := time.Now().UTC()
-	wsID := NewUUID()
+	wsID := createTestWorkspace(t, ctx, st, "CancelGuard WS")
 	jobID := NewUUID()
 	attemptID := NewUUID()
 	intentID := NewUUID()
 
-	_, _ = st.pool.Exec(ctx, `INSERT INTO workspaces (id, name, slug, created_at, updated_at) VALUES ($1, 'CancelGuard WS', $2, $3, $3) ON CONFLICT (id) DO NOTHING;`, wsID, "cg-ws-"+wsID[:8], now)
 	// Job is in RUNNING (not CANCEL_REQUESTED)
 	_, _ = st.pool.Exec(ctx, `INSERT INTO jobs (id, workspace_id, name, image_digest, command_args, env_vars, timeout_seconds, max_retries, current_attempt_number, state, created_at, updated_at) VALUES ($1, $2, 'cg-job', 'sha256:dummy', '[]', '{}', 60, 3, 1, 'RUNNING', $3, $3);`, jobID, wsID, now)
 	_, _ = st.pool.Exec(ctx, `INSERT INTO job_attempts (id, job_id, workspace_id, attempt_number, state, lease_epoch, created_at, updated_at) VALUES ($1, $2, $3, 1, 'RUNNING', 1, $4, $4);`, attemptID, jobID, wsID, now)
@@ -452,21 +459,15 @@ func TestSafeDBTarget_DoesNotLeakPassword(t *testing.T) {
 func TestPostgresStore_CreateJobAttemptIntent_RetryBudgetExhausted(t *testing.T) {
 	ctx := context.Background()
 	st := connectTestStore(t, ctx)
-	defer st.Close()
 
 	now := time.Now().UTC()
-	wsID := NewUUID()
+	wsID := createTestWorkspace(t, ctx, st, "Retry Budget WS")
 	jobID := NewUUID()
-
-	_, err := st.pool.Exec(ctx, `INSERT INTO workspaces (id, name, slug, created_at, updated_at) VALUES ($1, 'Retry Budget WS', $2, $3, $3) ON CONFLICT (id) DO NOTHING;`, wsID, "rb-ws-"+wsID[:8], now)
-	if err != nil {
-		t.Fatalf("insert test workspace: %v", err)
-	}
 
 	maxRetries := 2
 	currentAttempt := maxRetries + 1 // 3
 
-	_, err = st.pool.Exec(ctx, `
+	_, err := st.pool.Exec(ctx, `
 		INSERT INTO jobs (
 			id, workspace_id, name, image_digest, command_args, env_vars,
 			timeout_seconds, max_retries, current_attempt_number, state, created_at, updated_at

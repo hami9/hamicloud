@@ -1620,10 +1620,26 @@ Following project review of `18a3a4e..816cc4a`, all required fixes were implemen
   - GitHub Actions CI Run: [Run 36416691182](https://github.com/hami9/hamicloud/actions/runs/36416691182) 100% green (`Go Build & Concurrency Tests` in 51s, `Python Lint & Tests` in 1m52s).
 - **Commit SHAs:** `0711720`, `2e286d7`, `1443b0b`.
 
+### [2026-09-28T15:55:00Z] Phase 2 / Milestone M1/M2: NATS JetStream Event-Driven Dispatch & Runtime Control Loops
 
-
-
-
-
-
-
+- **Milestone:** P2 / M1 & M2 — Event-Driven Dispatch & Control Loop Responsiveness (ADR-0002 §4)
+- **Status:** COMPLETED & VERIFIED
+- **Deliverables & Hardening:**
+  1. **NATS JetStream Event Listener (`runtime/internal/bus/listener.go`, `listener_test.go`):**
+     - Implemented `EventListener` subscribing to NATS JetStream event subjects (`job.submitted.v1`, `app.deployment.requested.v1`, `app.rollback.requested.v1`, `job.>`, `app.>`, `workload.>`).
+     - Defined `Wakeable` interface allowing multiple control loop workers to register for event notifications.
+     - Implemented graceful degradation: if NATS is unreachable at startup or disconnects, the listener logs a warning and maintains periodic database polling without crashing or blocking.
+  2. **Non-blocking Control Loop Wakeup (`runtime/internal/scheduler`, `runtime/internal/executor`):**
+     - Added `Wake()` method and non-blocking `wakeCh` channel to `Scheduler` (`runtime/internal/scheduler/scheduler.go`) and `Executor` (`runtime/internal/executor/executor.go`).
+     - Wired event-driven triggers into `hamicloud-scheduler` (admission events) and `hamicloud-executor` (workload/lifecycle events).
+     - Added unit tests `TestScheduler_Wake` and `TestExecutor_Wake`.
+  3. **Dependency Updates & Binaries Rebuild (`runtime/go.mod`, `runtime/go.sum`):**
+     - Added `github.com/nats-io/nats.go v1.39.1`.
+- **Verification Evidence:**
+  - Go test suite: `go test -v ./...` passed 100% across all packages (`bus`, `executor`, `scheduler`, `domain`, `reconciler`, `store`).
+  - Go static checks: `gofmt -l .` clean, `go vet ./...` 0 warnings/errors.
+  - Python tests: `108 passed, 1 skipped` in 68s (`pytest apps/api`).
+  - Static linters: `ruff check apps/api` passed, `mypy --explicit-package-bases app` clean on 33 source files.
+  - Database schema: `alembic check` clean on both `hamicloud` and `hamicloud_test`.
+  - Frontend: `oxlint` 0 warnings/errors, `npm run build` compiled in 821ms.
+- **Commit SHA:** `3d30a17`.

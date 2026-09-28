@@ -1643,3 +1643,27 @@ Following project review of `18a3a4e..816cc4a`, all required fixes were implemen
   - Database schema: `alembic check` clean on both `hamicloud` and `hamicloud_test`.
   - Frontend: `oxlint` 0 warnings/errors, `npm run build` compiled in 821ms.
 - **Commit SHA:** `3d30a17`.
+
+### [2026-09-28T16:20:00Z] Phase 2 / Milestone M2: Expired Lease Recovery & Worker Crash Self-Healing (ADR-0002 §4, M2 Exit Criterion 9)
+
+- **Milestone:** P2 / M2 — Usable MVP & Self-Healing Resilience
+- **Status:** COMPLETED & VERIFIED
+- **Deliverables & Hardening:**
+  1. **Service Release Lease Reclamation (`runtime/internal/store/postgres.go`):**
+     - Updated `ClaimNextServiceRelease` to reclaim expired claimed intents (`status = 'CLAIMED' AND lease_expires_at < NOW()`).
+     - Safely increments `lease_epoch` and updates `claimed_by`, fencing out any stale/crashed previous worker.
+  2. **Job Attempt Abandonment Recovery (`runtime/internal/store/postgres.go`):**
+     - Added `RecoverExpiredJobIntents` scanning claimed job intents whose lease expired without renewal.
+     - Finalizes abandoned attempts to `FAILED` with explicit `failure_reason = 'Worker lease expired; executor lost'`.
+     - Transitions jobs to `RETRY_WAIT` (or `FAILED` if retry budget exhausted, or `CANCELLED` if cancellation was requested).
+     - Marks the abandoned intent `TERMINATED`.
+  3. **Scheduler Self-Healing Loop (`runtime/internal/scheduler/scheduler.go`):**
+     - Wired `RecoverExpiredJobIntents` into `Scheduler.RunOnce` prior to retry requeue and admission passes.
+  4. **Integration & E2E Validation (`runtime/internal/store/postgres_test.go`, `apps/api/tests/test_m2_jobs_e2e.py`):**
+     - Added unit tests `TestPostgresStore_ClaimNextServiceRelease_ReclaimsExpiredLease` and `TestPostgresStore_RecoverExpiredJobIntents`.
+     - Added E2E test `test_m2_e2e_executor_crash_and_restart_recovers_job` simulating executor crash on attempt 1, automatic recovery into `RETRY_WAIT`, requeuing to `QUEUED`, admission of attempt 2, and clean execution to completion.
+- **Verification Evidence:**
+  - Go tests: 14/14 store tests passed, all packages clean.
+  - Python tests: 110 tests collected, 109 passed, 1 skipped (live Keycloak).
+  - Linters: `ruff check apps/api` passed, `mypy` clean on 33 files, `gofmt -l .` clean.
+- **Commit SHA:** `1ce154b`.

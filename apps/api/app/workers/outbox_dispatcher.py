@@ -1,12 +1,13 @@
 import asyncio
-from datetime import timedelta
+from datetime import datetime, timedelta
 import json
 import logging
-from typing import Optional
+from typing import Optional, Sequence, Union
+import uuid
 from nats.aio.client import Client as NATSClient
 from nats.js import JetStreamContext
 from nats.js.api import StreamConfig
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import settings
@@ -46,6 +47,7 @@ class OutboxDispatcher:
         self.nc: Optional[NATSClient] = None
         self.js: Optional[JetStreamContext] = None
         self._stop_event = asyncio.Event()
+        self._last_purge_at: Optional[datetime] = None
 
     async def connect(self) -> None:
         """Establish connection to NATS and ensure JetStream stream exists."""
@@ -96,9 +98,16 @@ class OutboxDispatcher:
 
         async with self.session_factory() as session:
             async with session.begin():
+                now = utc_now()
                 stmt = (
                     select(OutboxEvent)
                     .where(OutboxEvent.status == OutboxStatus.PENDING)
+                    .where(
+                        or_(
+                            OutboxEvent.next_attempt_at.is_(None),
+                            OutboxEvent.next_attempt_at <= now,
+                        )
+                    )
                     .order_by(OutboxEvent.created_at.asc())
                     .limit(limit)
                     .with_for_update(skip_locked=True)
@@ -108,7 +117,6 @@ class OutboxDispatcher:
                 if not events:
                     return 0
 
-                now = utc_now()
                 for event in events:
                     # Construct message payload and deduplication headers
                     payload_bytes = json.dumps(event.payload_json).encode("utf-8")
@@ -122,10 +130,12 @@ class OutboxDispatcher:
                             headers[str(k)] = str(v)
 
                     try:
+                        # Bound individual publish network I/O timeout to 2.0s
                         ack = await self.js.publish(
                             subject=event.topic,
                             payload=payload_bytes,
                             headers=headers,
+                            timeout=2.0,
                         )
                         event.status = OutboxStatus.PUBLISHED
                         event.published_at = now
@@ -137,18 +147,44 @@ class OutboxDispatcher:
                             ack.seq,
                         )
                     except Exception as exc:
-                        event.retry_count += 1
-                        logger.warning(
-                            "Failed to publish outbox event %s to topic %s (attempt %d/%d): %s",
-                            event.event_id,
-                            event.topic,
-                            event.retry_count,
-                            self.max_retries,
-                            exc,
-                        )
-                        if event.retry_count >= self.max_retries:
+                        # Differentiate permanent, event-specific errors from transient broker outages
+                        err_str = str(exc).lower()
+                        is_permanent = False
+                        if isinstance(exc, (ValueError, TypeError)):
+                            is_permanent = True
+                        elif "no stream" in err_str or ("no responders" in err_str and "stream" in err_str):
+                            is_permanent = True
+                        else:
+                            try:
+                                from nats.js.errors import NoStreamResponseError
+                                if isinstance(exc, NoStreamResponseError):
+                                    is_permanent = True
+                            except ImportError:
+                                pass
+
+                        if is_permanent:
                             event.status = OutboxStatus.FAILED
-                            logger.error("Outbox event %s reached max retries and marked FAILED", event.event_id)
+                            logger.error(
+                                "Permanent failure for outbox event %s to topic %s: %s",
+                                event.event_id,
+                                event.topic,
+                                exc,
+                            )
+                        else:
+                            # Broker/connection failure: NEVER mark FAILED (ADR-0002).
+                            # Keep status=PENDING with exponential backoff.
+                            event.retry_count += 1
+                            backoff_seconds = min(300, 2 ** min(event.retry_count, 8))
+                            event.next_attempt_at = now + timedelta(seconds=backoff_seconds)
+                            event.status = OutboxStatus.PENDING
+                            logger.warning(
+                                "Transient broker failure for outbox event %s to topic %s (attempt %d): %s. Backoff: %ds",
+                                event.event_id,
+                                event.topic,
+                                event.retry_count,
+                                exc,
+                                backoff_seconds,
+                            )
 
                 # Commit updates to all processed events in the batch
                 await session.flush()
@@ -164,6 +200,18 @@ class OutboxDispatcher:
 
         try:
             while not self._stop_event.is_set():
+                now = utc_now()
+                # Scheduled daily purge check (ADR-0002 §4)
+                if self._last_purge_at is None or (now - self._last_purge_at).total_seconds() >= 86400:
+                    try:
+                        async with self.session_factory() as purge_session:
+                            purged = await purge_expired_outbox_events(purge_session)
+                            if purged > 0:
+                                logger.info("Purged %d expired outbox events", purged)
+                            self._last_purge_at = now
+                    except Exception as pe:
+                        logger.error("Error during scheduled outbox purge: %s", pe, exc_info=True)
+
                 try:
                     drained = await self.drain_batch()
                     # If events were drained, immediately try draining next batch (backlog work-stealing)
@@ -203,3 +251,26 @@ async def purge_expired_outbox_events(
     await session.commit()
     rowcount = getattr(result, "rowcount", 0)
     return int(rowcount) if rowcount is not None else 0
+
+
+async def requeue_failed_outbox_events(
+    session: AsyncSession,
+    event_ids: Optional[Sequence[Union[uuid.UUID, str]]] = None,
+) -> int:
+    """Requeue FAILED outbox events back to PENDING with immediate attempt."""
+    stmt = (
+        update(OutboxEvent)
+        .where(OutboxEvent.status == OutboxStatus.FAILED)
+        .values(
+            status=OutboxStatus.PENDING,
+            retry_count=0,
+            next_attempt_at=utc_now(),
+        )
+    )
+    if event_ids:
+        stmt = stmt.where(OutboxEvent.event_id.in_(event_ids))
+    res = await session.execute(stmt)
+    await session.commit()
+    rowcount = getattr(res, "rowcount", 0)
+    return int(rowcount) if rowcount is not None else 0
+

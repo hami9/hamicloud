@@ -34,6 +34,9 @@ class OutboxEvent(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         index=True,
     )
     retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    next_attempt_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
     published_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

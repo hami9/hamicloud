@@ -91,8 +91,11 @@ async def test_outbox_drain_batch_publishes_to_jetstream(test_workspace):
 
 
 @pytest.mark.asyncio
-async def test_outbox_retry_on_publish_failure(test_workspace):
-    """Verify that publish failures increment retry_count and eventually transition to FAILED."""
+async def test_outbox_broker_outage_never_fails_and_recovers_to_published(test_workspace):
+    """Verify that transient broker/connection failure keeps event PENDING with backoff,
+
+    and when broker recovers, the event is successfully PUBLISHED (ADR-0002).
+    """
     ws_id = test_workspace
 
     event = create_outbox_event(
@@ -106,40 +109,108 @@ async def test_outbox_retry_on_publish_failure(test_workspace):
         session.add(event)
         await session.commit()
 
-    dispatcher = OutboxDispatcher(max_retries=3)
+    dispatcher = OutboxDispatcher()
     try:
         await dispatcher.connect()
-
-        # Simulate publish failure by replacing js.publish with a failing stub
         assert dispatcher.js is not None
 
-        async def failing_publish(*args, **kwargs):
-            raise RuntimeError("Simulated NATS cluster outage")
+        # Simulate NATS broker down for 5 ticks
+        async def broker_down(*args, **kwargs):
+            raise ConnectionError("NATS connection refused: broker down")
 
-        dispatcher.js.publish = failing_publish  # type: ignore[assignment]
+        dispatcher.js.publish = broker_down  # type: ignore[assignment]
 
-        # 1. First failure
+        for tick in range(1, 6):
+            # Reset next_attempt_at to now so each simulated tick evaluates the event
+            async with AsyncSessionLocal() as session:
+                db_e = (await session.execute(select(OutboxEvent).where(OutboxEvent.event_id == event_id))).scalar_one()
+                db_e.next_attempt_at = utc_now()
+                await session.commit()
+
+            drained = await dispatcher.drain_batch(batch_size=10)
+            assert drained == 0
+
+            async with AsyncSessionLocal() as session:
+                db_e = (await session.execute(select(OutboxEvent).where(OutboxEvent.event_id == event_id))).scalar_one()
+                assert db_e.status == OutboxStatus.PENDING, f"Event must remain PENDING at tick {tick}"
+                assert db_e.retry_count == tick
+                assert db_e.next_attempt_at is not None
+
+        # At t=6, NATS recovers
+        class MockAck:
+            seq = 42
+
+        async def broker_up(*args, **kwargs):
+            return MockAck()
+
+        dispatcher.js.publish = broker_up  # type: ignore[assignment]
+
+        # Reset next_attempt_at to simulate backoff duration elapsing
+        async with AsyncSessionLocal() as session:
+            db_e = (await session.execute(select(OutboxEvent).where(OutboxEvent.event_id == event_id))).scalar_one()
+            db_e.next_attempt_at = utc_now()
+            await session.commit()
+
+        drained = await dispatcher.drain_batch(batch_size=10)
+        assert drained == 1
+
+        # Assert: event ends in PUBLISHED
+        async with AsyncSessionLocal() as session:
+            db_e = (await session.execute(select(OutboxEvent).where(OutboxEvent.event_id == event_id))).scalar_one()
+            assert db_e.status == OutboxStatus.PUBLISHED
+            assert db_e.published_at is not None
+
+    finally:
+        await dispatcher.close()
+
+
+@pytest.mark.asyncio
+async def test_outbox_permanent_error_and_requeue(test_workspace):
+    """Verify that permanent errors mark event FAILED, and requeue_failed_outbox_events restores it to PENDING."""
+    from app.workers.outbox_dispatcher import requeue_failed_outbox_events
+
+    ws_id = test_workspace
+
+    event = create_outbox_event(
+        workspace_id=ws_id,
+        topic=OutboxTopic.JOB_SUBMITTED,
+        payload={"job_id": str(uuid.uuid4())},
+    )
+    event_id = event.event_id
+
+    async with AsyncSessionLocal() as session:
+        session.add(event)
+        await session.commit()
+
+    dispatcher = OutboxDispatcher()
+    try:
+        await dispatcher.connect()
+        assert dispatcher.js is not None
+
+        # Simulate permanent error (no stream matches subject)
+        async def permanent_error(*args, **kwargs):
+            raise RuntimeError("nats: no stream matches subject")
+
+        dispatcher.js.publish = permanent_error  # type: ignore[assignment]
+
         drained = await dispatcher.drain_batch(batch_size=10)
         assert drained == 0
 
-        async with AsyncSessionLocal() as session:
-            db_e = (await session.execute(select(OutboxEvent).where(OutboxEvent.event_id == event_id))).scalar_one()
-            assert db_e.status == OutboxStatus.PENDING
-            assert db_e.retry_count == 1
-
-        # 2. Second failure
-        await dispatcher.drain_batch(batch_size=10)
-        async with AsyncSessionLocal() as session:
-            db_e = (await session.execute(select(OutboxEvent).where(OutboxEvent.event_id == event_id))).scalar_one()
-            assert db_e.status == OutboxStatus.PENDING
-            assert db_e.retry_count == 2
-
-        # 3. Third failure -> Reaches max_retries=3 -> Marked FAILED
-        await dispatcher.drain_batch(batch_size=10)
+        # Assert marked FAILED
         async with AsyncSessionLocal() as session:
             db_e = (await session.execute(select(OutboxEvent).where(OutboxEvent.event_id == event_id))).scalar_one()
             assert db_e.status == OutboxStatus.FAILED
-            assert db_e.retry_count == 3
+
+        # Requeue failed events
+        async with AsyncSessionLocal() as session:
+            requeued_count = await requeue_failed_outbox_events(session, [event_id])
+            assert requeued_count == 1
+
+        # Assert restored to PENDING with retry_count=0
+        async with AsyncSessionLocal() as session:
+            db_e = (await session.execute(select(OutboxEvent).where(OutboxEvent.event_id == event_id))).scalar_one()
+            assert db_e.status == OutboxStatus.PENDING
+            assert db_e.retry_count == 0
 
     finally:
         await dispatcher.close()

@@ -108,15 +108,21 @@ We adopt the **Transactional Outbox Pattern** with **Periodic Reconciliation Fal
      SELECT id, event_id, topic, payload_json 
      FROM outbox_events 
      WHERE status = 'PENDING' 
-       AND created_at < NOW() - INTERVAL '10 seconds'
+       AND (next_attempt_at IS NULL OR next_attempt_at <= NOW())
      ORDER BY created_at ASC 
      LIMIT 100 
      FOR UPDATE SKIP LOCKED;
      ```
-     Repairs events that were committed to the outbox but never received an initial dispatch ACK from NATS JetStream due to dispatcher process restarts.
+     Repairs events that were committed to the outbox but never received an initial dispatch ACK from NATS JetStream due to dispatcher process restarts or transient broker network outages.
 
-4. **Outbox Retention and Purge Ownership:**
-   Published outbox events are retained in `outbox_events` for exactly 7 days to facilitate operational troubleshooting, auditing, and re-delivery verification. A dedicated control-plane housekeeping cron worker (owned by the API background maintenance service, running daily at 02:00 UTC) physically purges expired rows:
+4. **Broker Outage Tolerance, Exponential Backoff, and Requeue Semantics:**
+   A message broker outage or network partition must **never** cause committed outbox events to become permanently dead or lost (`status = 'FAILED'`).
+   - **Transient Broker / Network Failures:** The event remains `status = 'PENDING'`. Its `retry_count` is incremented and exponential backoff is scheduled via `next_attempt_at = NOW() + INTERVAL '1 second' * MIN(300, 2 ^ retry_count)`. When the broker returns online, the dispatcher resumes delivery automatically.
+   - **Permanent Errors:** Reserved strictly for unrecoverable event-specific errors (e.g. invalid subject rejecting stream assignment). An administrative helper (`requeue_failed_outbox_events`) is provided to reset `FAILED` events to `PENDING` with immediate attempt if stream configuration is corrected.
+   - **Batch Network I/O and Row Lock Bounds:** Publishing occurs within the transaction to guarantee atomic status transitions upon JetStream ACK. To strictly bound row lock holding time during degraded network conditions, each message publish is enforced with a per-event 2.0s network timeout, and total batch size is bounded (`OUTBOX_BATCH_SIZE`, default 100).
+
+5. **Outbox Retention and Purge Ownership:**
+   Published outbox events are retained in `outbox_events` for exactly 7 days to facilitate operational troubleshooting, auditing, and re-delivery verification. A dedicated control-plane housekeeping routine running daily in the `OutboxDispatcher` physically purges expired rows:
    ```sql
    DELETE FROM outbox_events 
    WHERE status = 'PUBLISHED' 
@@ -131,7 +137,9 @@ We adopt the **Transactional Outbox Pattern** with **Periodic Reconciliation Fal
 - Guaranteed zero work loss: database failure rolls back the entire request cleanly, and message broker failure never loses committed work.
 - Decoupled latency: API responses are not bound to broker latency or cluster health.
 - Self-healing platform that automatically recovers after broker outages across all workloads (jobs, releases, cancellations, outbox).
+- Automatic recovery from broker downtime without operator intervention via exponential backoff on `next_attempt_at`.
 
 ### Negative / Tradeoffs
 - Slight latency between database commit and worker wake-up (typically < 15ms with outbox polling/LISTEN-NOTIFY).
-- Outbox table requires periodic vacuuming and cleanup of published events (retained for 7 days, purged by the background housekeeping worker).
+- Outbox table requires periodic vacuuming and cleanup of published events (retained for 7 days, purged by the scheduled daily housekeeping worker).
+- Database row locks are briefly held during NATS publishing within the batch transaction, bounded by the 2.0s per-message publish timeout.

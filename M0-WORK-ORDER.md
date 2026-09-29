@@ -76,11 +76,11 @@ Each decision has a default. Unless the owner has changed one, work with the def
 | D3 | Pagination needs at least one list endpoint, and the Roadmap defines none | **Approved by the owner on 2026-09-19.** Added GET /v1/workspaces/{ws}/jobs and GET /v1/apps/{app}/releases to the Roadmap table with a dated note. | T12 |
 | D4 | A cancellation that races a workload finishing | The logical job ends `CANCELLED`; the attempt keeps `SUCCEEDED` and its exit code. There is no `CANCEL_REQUESTED → SUCCEEDED` edge. | T20, T21 |
 | D5 | Go transitions the Roadmap diagram does not allow: `QUEUED→CANCELLED`, `ADMITTED→CANCELLED`, `ADMITTED→FAILED`, `RETRY_WAIT→CANCELLED`, `CANCEL_REQUESTED→FAILED`, `CANCEL_REQUESTED→SUCCEEDED` | Remove them all, following the Roadmap literally. The owner may keep one only by amending the Roadmap first, with a reason. | T21 |
-| D6 | Python version | 3.12 everywhere. **OWNER** installs 3.12 locally; then recreate `.venv`. | T24 |
-| D7 | Keycloak version for the local reference identity provider | **Pending owner confirmation.** (Keycloak 24.0.5 was used as local dev baseline; owner will confirm or change). | T27 |
+| D6 | Python version | **Approved by the owner on 2026-09-29.** Python 3.12 pinned in CI and universal requirements.lock, with floating patch documented in compatibility matrix. | T24 |
+| D7 | Keycloak version for the local reference identity provider | **Approved by the owner on 2026-09-29.** Pinned to Keycloak 24.0.5 (`quay.io/keycloak/keycloak:24.0.5@sha256:f8ade94c1d0ad2f2fa7734a455fee5392764f402c43ca35e9af6bf63a2541dc9`) for local development. | T27 |
 | D8 | GitHub repository and remote | **Resolved (owner, 2026-09-23).** Published to origin main. | None |
 | D9 | Commit `MASTER-PLAN.md` (currently untracked) | Yes, in the Phase 1 commit. | Phase 1 |
-| D10 | Reset the dev database after the new migrations are tested on it | Dev DB was reset on 2026-09-26 before owner confirmation; owner to accept or restore from deploy/compose/hamicloud_dev_pre_phase4_backup.sql. | T29 |
+| D10 | Reset the dev database after the new migrations are tested on it | **Approved by the owner on 2026-09-29.** Reset accepted; schema verified with zero drift against head migrations. | T29 |
 | D11 | `ON DELETE` for the new `workspace_id` foreign keys | `CASCADE`, like the other tenant tables. `audit_events` keeps `SET NULL` because audit records outlive a workspace; state this in ADR-0004. | T16, T20 |
 | D12 | Ruff lint rule scope pinned to select = ["E4", "E7", "E9", "F"] | Temporarily narrows gate to syntax, runtime errors, and undefined/unused symbols (E4, E7, E9, F) during M0 to avoid blocking on pre-existing style/modernization findings; wider rule set (B, UP, RUF) re-enabled in T24. | T24 |
 

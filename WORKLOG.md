@@ -1667,3 +1667,13 @@ Following project review of `18a3a4e..816cc4a`, all required fixes were implemen
   - Python tests: 110 tests collected, 109 passed, 1 skipped (live Keycloak).
   - Linters: `ruff check apps/api` passed, `mypy` clean on 33 files, `gofmt -l .` clean.
 - **Commit SHA:** `1ce154b`.
+
+### [2026-09-29T16:10:00Z] Owner Decisions D6, D7, D10 & Roadmap API Rows Approval
+
+- **Milestone:** Architecture & Governance Baseline
+- **Status:** APPROVED & RECORDED
+- **Approvals & Governance Updates:**
+  1. **Decision D6 (Python Runtime Version):** Approved Python 3.12 specification with documented floating patch resolution (`3.12.14` in CI) and universal hash-pinned `requirements.lock`.
+  2. **Decision D7 (Reference IdP Version):** Approved Keycloak 24.0.5 (`quay.io/keycloak/keycloak:24.0.5@sha256:f8ade94c1d0ad2f2fa7734a455fee5392764f402c43ca35e9af6bf63a2541dc9`) for development.
+  3. **Decision D10 (Dev Database Reset):** Approved development database reset; verified zero drift against head migrations.
+  4. **Roadmap API Rows (`HamiCloud-Roadmap.md`):** Formally approved `GET /v1/workspaces/{ws}/apps` (list applications), `GET /v1/apps/{app}` (inspect application), and `GET /v1/jobs/{job}/output` (download job output) into the public API contract table.

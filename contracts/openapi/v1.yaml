@@ -253,6 +253,15 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/RepositoryListResponse'
+              example:
+                items:
+                  - id: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+                    workspace_id: "550e8400-e29b-41d4-a716-446655440000"
+                    name: "payment-service"
+                    repo_url: "https://github.com/example-org/payment-service"
+                    default_branch: "main"
+                    created_at: "2026-09-19T12:00:00Z"
+                next_cursor: null
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '403':
@@ -281,6 +290,11 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/CreateRepositoryRequest'
+            example:
+              name: "payment-service"
+              repo_url: "https://github.com/example-org/payment-service"
+              webhook_secret: "whsec_01HVG89ABCDEF1234567890"
+              default_branch: "main"
       responses:
         '201':
           description: Repository connected successfully
@@ -291,6 +305,13 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/RepositoryResponse'
+              example:
+                id: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+                workspace_id: "550e8400-e29b-41d4-a716-446655440000"
+                name: "payment-service"
+                repo_url: "https://github.com/example-org/payment-service"
+                default_branch: "main"
+                created_at: "2026-09-19T12:00:00Z"
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '403':
@@ -506,6 +527,9 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/UpdateApplicationRequest'
+            example:
+              repository_id: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+              git_branch: "main"
       responses:
         '200':
           description: Application updated successfully
@@ -516,6 +540,19 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApplicationResponse'
+              example:
+                id: "7ff5bafe-b321-4ab6-a9f9-9d3eb15feda3"
+                workspace_id: "550e8400-e29b-41d4-a716-446655440000"
+                name: "Payment Service"
+                slug: "payment-service"
+                workload_type: "HTTP_SERVICE"
+                desired_generation: 1
+                current_release_id: null
+                repository_id: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+                dockerfile_path: "Dockerfile"
+                context_dir: "."
+                git_branch: "main"
+                created_at: "2026-09-19T12:00:00Z"
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '403':
@@ -734,6 +771,10 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/TriggerBuildRequest'
+            example:
+              commit_sha: "7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b"
+              git_ref: "main"
+              commit_message: "feat: add user authentication"
       responses:
         '202':
           description: Build requested and release created in REQUESTED state
@@ -744,6 +785,17 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ReleaseResponse'
+              example:
+                id: "309bbd1e-07f4-4bdf-b9b7-e81d48381601"
+                application_id: "7ff5bafe-b321-4ab6-a9f9-9d3eb15feda3"
+                workspace_id: "550e8400-e29b-41d4-a716-446655440000"
+                release_number: 1
+                image_digest: "pending"
+                config_json:
+                  port: 8080
+                  health_path: "/healthz"
+                status: "REQUESTED"
+                created_at: "2026-09-19T12:00:00Z"
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '403':
@@ -791,6 +843,17 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ReleaseResponse'
+              example:
+                id: "309bbd1e-07f4-4bdf-b9b7-e81d48381601"
+                application_id: "7ff5bafe-b321-4ab6-a9f9-9d3eb15feda3"
+                workspace_id: "550e8400-e29b-41d4-a716-446655440000"
+                release_number: 1
+                image_digest: "registry.hamicloud.local/payment-service:sha-7a8b9c0@sha256:d57c292233604f3d2f2d93e25b16952d7e10c73e04eb9df69335ef076228383a"
+                config_json:
+                  port: 8080
+                  health_path: "/healthz"
+                status: "IMAGE_READY"
+                created_at: "2026-09-19T12:00:00Z"
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '403':
@@ -825,6 +888,13 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/RepositoryResponse'
+              example:
+                id: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+                workspace_id: "550e8400-e29b-41d4-a716-446655440000"
+                name: "payment-service"
+                repo_url: "https://github.com/example-org/payment-service"
+                default_branch: "main"
+                created_at: "2026-09-19T12:00:00Z"
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '403':
@@ -876,6 +946,12 @@ paths:
             schema:
               type: object
               additionalProperties: true
+            example:
+              ref: "refs/heads/main"
+              after: "7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b"
+              head_commit:
+                id: "7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b"
+                message: "Update main service"
       responses:
         '200':
           description: Webhook processed, ping acknowledged, or duplicate delivery ignored
@@ -888,6 +964,9 @@ paths:
                     type: string
                   action:
                     type: string
+              example:
+                status: "ignored"
+                action: "PING"
         '202':
           description: Webhook push accepted and build requested
           content:
@@ -902,6 +981,10 @@ paths:
                   release_id:
                     type: string
                     format: uuid
+              example:
+                status: "accepted"
+                action: "BUILD_TRIGGERED"
+                release_id: "309bbd1e-07f4-4bdf-b9b7-e81d48381601"
         '400':
           $ref: '#/components/responses/400BadRequest'
         '401':

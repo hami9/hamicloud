@@ -1752,5 +1752,27 @@ Following project review of `18a3a4e..816cc4a`, all required fixes were implemen
   3. **Master Plan Transition:** Collapsed A.2 M1 to closed status in `MASTER-PLAN.md`; advanced current position to Milestone M2 (open).
   4. **Quality Gates & CI:** CI run `36722549910` 100% green; local Go and Python suites clean.
 
+### [2026-09-30T17:25:00Z] Phase 2 / Milestone M2: Formal Closure & Transition to M3
+
+- **Milestone:** P2 / M2 (Usable MVP)
+- **Status:** COMPLETED & CLOSED
+- **Deliverables & Evidence:**
+  1. **All 12 Acceptance Criteria Verified:**
+     - User workspace sign-in & creation (`POST /v1/workspaces`).
+     - Approved image deployment with live Ingress URL (`POST /v1/apps/{app}/deployments`, `KubeWorkloadRunner`).
+     - Rollout progress, diagnostic readiness alert callout, and terminal logs in UI.
+     - Finite job execution & authorized output download (`POST /v1/workspaces/{ws}/jobs`, `GET /v1/jobs/{job}/output`).
+     - Controlled transient failure retry backoff & budget exhaustion (`docs/evidence/demos/failed-job.md`).
+     - Idempotency on duplicate submissions (`docs/evidence/demos/duplicate-submission.md`).
+     - Job cancellation confirmed final state (`POST /v1/jobs/{job}/cancel`).
+     - Service rollback to previous healthy release (`POST /v1/apps/{app}/rollbacks`).
+     - Worker crash lease discovery and attempt recovery (`docs/evidence/demos/worker-restart.md`).
+     - Fresh local installation reproduction from documented steps (`docs/evidence/demos/fresh-installation.md`).
+     - Demos recorded in `docs/evidence/demos/`.
+     - Authoritative evidence record committed to `docs/evidence/M2.md`.
+  2. **Master Plan Transition:** Collapsed A.3 M2 to closed status in `MASTER-PLAN.md`; advanced current position to Milestone M3 (open).
+  3. **Quality Gates & CI:** CI run `36723651517` 100% green; full test suite passing.
+
+
 
 

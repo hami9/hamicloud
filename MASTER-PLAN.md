@@ -86,14 +86,14 @@ P2, 36–48 hours. JetStream dispatch, intents, leases, retry policy, cancellati
 - [ ] An invited user signs in and creates a workspace/project.
 - [ ] Deploys an approved image, sees its HTTPS URL, opens a working HTTP service.
 - [ ] Sees rollout progress, readiness failure and logs in the dashboard.
-- [ ] Runs a finite job and downloads its authorized output.
-- [ ] A controlled transient failure retries within the declared budget.
-- [ ] Repeating the same submission returns the same operation.
-- [ ] Cancels work and sees its confirmed final state.
-- [ ] Rolls a service back to its previous healthy image/configuration.
-- [ ] Restarting API, scheduler or executor does not silently lose accepted work.
+- [x] Runs a finite job and downloads its authorized output.
+- [x] A controlled transient failure retries within the declared budget.
+- [x] Repeating the same submission returns the same operation.
+- [x] Cancels work and sees its confirmed final state.
+- [x] Rolls a service back to its previous healthy image/configuration.
+- [x] Restarting API, scheduler or executor does not silently lose accepted work.
 - [ ] A fresh local installation reproduces this flow from documented steps.
-- [ ] Duplicate submission, worker restart and failed job demos recorded.
+- [x] Duplicate submission, worker restart and failed job demos recorded.
 - [ ] Evidence record committed.
 
 ## A.4 M3 — Source-to-URL `[ ]`

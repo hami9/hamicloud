@@ -1702,4 +1702,15 @@ Following project review of `18a3a4e..816cc4a`, all required fixes were implemen
   - Python tests: 109 passed, 1 skipped, 0 failed in 104s.
   - Linters: `ruff check apps/api` passed, `mypy` clean on 33 files, `gofmt -l .` clean.
   - Database schema: `alembic check` clean on both `hamicloud` and `hamicloud_test`.
+- **Commit SHA:** `2123336` (CI Run `36710616576` 100% green).
+
+### [2026-09-30T15:28:00Z] Phase 2 / Milestone M2: Demos Recorded & Checklist Progress
+
+- **Milestones:** P2 / M2 (Usable MVP)
+- **Status:** COMPLETED & VERIFIED
+- **Deliverables & Evidence:**
+  1. **Duplicate Submission Demo (`docs/evidence/demos/duplicate-submission.md`):** Recorded live transcript verifying duplicate submission idempotency (M2 criterion 6).
+  2. **Worker Restart Demo (`docs/evidence/demos/worker-restart.md`):** Recorded live transcript verifying scheduler lease discovery, attempt 1 failure audit, and attempt 2 recovery execution (M2 criterion 9).
+  3. **Failed Job Retry Demo (`docs/evidence/demos/failed-job.md`):** Recorded live transcript verifying exponential retry backoff, attempt budget exhaustion (`max_retries = 2`, 3 attempts), and stderr artifact capture (M2 criteria 4, 5, 11).
+  4. **Evidence & Plan Progress:** Updated `docs/evidence/M1.md`, `docs/evidence/M2.md`, and ticked 7 verified exit criteria in `MASTER-PLAN.md` §A.3.
 

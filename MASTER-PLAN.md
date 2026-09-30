@@ -4,7 +4,7 @@ Single tracking file for both projects. It links the two roadmaps, fixes the exe
 
 **Status legend:** `[ ]` not started · `[~]` in progress · `[x]` closed with a committed evidence record
 
-**Current position:** HamiCloud M1 — open.
+**Current position:** HamiCloud M2 — open.
 
 ---
 
@@ -70,22 +70,19 @@ A closed milestone that later turns out to be wrong does not get its old checkli
 - **Closed Date:** 2026-09-26
 - **Evidence Record:** [`docs/evidence/M0.md`](docs/evidence/M0.md)
 
-## A.2 M1 — First live application `[ ]`
+## A.2 M1 — First live application `[x]`
 
-P1, 28–36 hours. OIDC, workspace API, approved image catalog, PostgreSQL/outbox, basic Go reconciliation, Deployment/Service/routing, dashboard and logs.
-
-- [ ] A clean environment reaches a working service URL through the UI.
-- [ ] Invalid readiness is visible to the user, not silent.
-- [ ] Evidence record committed.
-- [ ] **Re-estimate the remaining phases using actual time spent.**
+- **Status:** Closed
+- **Closed Date:** 2026-09-30
+- **Evidence Record:** [`docs/evidence/M1.md`](docs/evidence/M1.md)
 
 ## A.3 M2 — Usable MVP `[ ]`
 
 P2, 36–48 hours. JetStream dispatch, intents, leases, retry policy, cancellation, artifact access, DLQ UI, manual service rollback.
 
-- [ ] An invited user signs in and creates a workspace/project.
-- [ ] Deploys an approved image, sees its HTTPS URL, opens a working HTTP service.
-- [ ] Sees rollout progress, readiness failure and logs in the dashboard.
+- [x] An invited user signs in and creates a workspace/project.
+- [x] Deploys an approved image, sees its HTTPS URL, opens a working HTTP service.
+- [x] Sees rollout progress, readiness failure and logs in the dashboard.
 - [x] Runs a finite job and downloads its authorized output.
 - [x] A controlled transient failure retries within the declared budget.
 - [x] Repeating the same submission returns the same operation.

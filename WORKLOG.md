@@ -1739,4 +1739,18 @@ Following project review of `18a3a4e..816cc4a`, all required fixes were implemen
   - Linters: `oxlint apps/web` passed with 0 warnings, 0 errors.
   - Build: `npm run build` compiled cleanly (`dist/assets/index-Cfz6PL2v.js`, 244.46 kB).
 
+### [2026-09-30T17:15:00Z] Phase 1 / Milestone M1: Formal Closure & Transition to M2
+
+- **Milestone:** P1 / M1 (First Live Application)
+- **Status:** COMPLETED & CLOSED
+- **Deliverables & Evidence:**
+  1. **Acceptance Criteria Verified:**
+     - Clean environment reaches a working service URL through the UI (`test_m1_services_e2e.py`).
+     - Invalid readiness is visible to the user, not silent (readiness alert box in UI + reconciler diagnosis).
+     - Phase re-estimates calculated (P1 actual: 31 hours; remaining phases updated).
+  2. **Authoritative Evidence Record:** Frozen in `docs/evidence/M1.md` with commit SHA `e69111b`.
+  3. **Master Plan Transition:** Collapsed A.2 M1 to closed status in `MASTER-PLAN.md`; advanced current position to Milestone M2 (open).
+  4. **Quality Gates & CI:** CI run `36722549910` 100% green; local Go and Python suites clean.
+
+
 

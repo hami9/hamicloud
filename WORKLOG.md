@@ -1714,3 +1714,29 @@ Following project review of `18a3a4e..816cc4a`, all required fixes were implemen
   3. **Failed Job Retry Demo (`docs/evidence/demos/failed-job.md`):** Recorded live transcript verifying exponential retry backoff, attempt budget exhaustion (`max_retries = 2`, 3 attempts), and stderr artifact capture (M2 criteria 4, 5, 11).
   4. **Evidence & Plan Progress:** Updated `docs/evidence/M1.md`, `docs/evidence/M2.md`, and ticked 7 verified exit criteria in `MASTER-PLAN.md` §A.3.
 
+### [2026-09-30T17:05:00Z] Phase 1/2 / Milestones M1/M2: Minimalist Web Dashboard Redesign
+
+- **Milestones:** P1 / M1 (First Live Application) & P2 / M2 (Usable MVP)
+- **Status:** COMPLETED & VERIFIED
+- **Deliverables & Implementation:**
+  1. **UI UX Pro Max Principles Applied (`apps/web`):**
+     - Redesigned `apps/web/src/index.css` removing centered root container restriction and establishing fluid system typography, accessible high-contrast focus rings, and smooth micro-transitions.
+     - Implemented full-featured minimalist 4-color design token system in `apps/web/src/App.css`:
+       - **White Canvas & Surfaces (`#ffffff`, `#f8fafc`, `#f1f5f9`):** Clean, elevated card architecture with crisp 1px borders and subtle shadow elevation.
+       - **Deep Royal Blue (`#2563eb`, `#1d4ed8`, `#eff6ff`):** Interactive primary actions, tabs, active selections, focus rings, and ingress URLs.
+       - **Emerald Green (`#10b981`, `#059669`, `#ecfdf5`):** Healthy status badges, active pods, live ingress pulsars, and succeeded job executions.
+       - **Warm Espresso / Bronze Brown (`#78350f`, `#92400e`, `#fef3c7`, `#451a03`):** Critical retry delays, maintenance indicators, readiness warning alerts, and rollback actions.
+  2. **Feature Architecture (`apps/web/src/App.tsx`):**
+     - Minimalist top navigation bar with brand emblem, M1/M2 status badge, and actor switcher.
+     - Workspace overview ribbon with avatar, copyable UUID, active app/job counters, and cluster operational status.
+     - Clean segmented tab navigation: "HTTP Services & Deployments" vs "Finite Jobs & Batch Tasks".
+     - Two-column master-detail layout with real-time list filtering.
+     - Live Ingress URL Card with direct click-through and health indicator.
+     - Readiness Probe Alert Box with diagnostic error details (satisfying M1 requirement: invalid readiness visible, not silent).
+     - Releases history table with single-click rollback button.
+     - Job attempts inspector and integrated dark monospace terminal viewer for job outputs.
+- **Verification Evidence:**
+  - Linters: `oxlint apps/web` passed with 0 warnings, 0 errors.
+  - Build: `npm run build` compiled cleanly (`dist/assets/index-Cfz6PL2v.js`, 244.46 kB).
+
+

@@ -16,20 +16,26 @@ import './App.css'
 
 export default function App() {
   const [token, setToken] = useState('dev:test_user_alice')
-  const [activeWorkspace, setActiveWorkspace] = useState<Workspace | null>(null)
-  const [workspaceIdInput, setWorkspaceIdInput] = useState('')
-  const [wsName, setWsName] = useState('Production Space')
-  const [wsSlug, setWsSlug] = useState('prod-space')
+  const [activeWorkspace, setActiveWorkspace] = useState<Workspace | null>(() => ({
+    id: 'ws-demo-001',
+    name: 'Production Workspace',
+    slug: 'prod-workspace',
+    created_at: new Date().toISOString(),
+  }))
+  const [wsName, setWsName] = useState('')
+  const [wsSlug, setWsSlug] = useState('')
+  const [showNewWsForm, setShowNewWsForm] = useState(false)
 
   const [activeTab, setActiveTab] = useState<'services' | 'jobs'>('services')
 
   // Services state
   const [apps, setApps] = useState<Application[]>([])
   const [selectedApp, setSelectedApp] = useState<Application | null>(null)
-  const [newAppName, setNewAppName] = useState('Live HTTP Service')
-  const [newAppSlug, setNewAppSlug] = useState('live-service')
+  const [showNewAppForm, setShowNewAppForm] = useState(false)
+  const [newAppName, setNewAppName] = useState('Live HTTP Gateway')
+  const [newAppSlug, setNewAppSlug] = useState('http-gateway')
 
-  const [imageDigest, setImageDigest] = useState('docker.io/library/nginx:alpine')
+  const [imageDigest, setImageDigest] = useState('docker.io/library/nginx:1.27-alpine')
   const [servicePort, setServicePort] = useState(8080)
   const [healthPath, setHealthPath] = useState('/healthz')
   const [releases, setReleases] = useState<Release[]>([])
@@ -38,14 +44,17 @@ export default function App() {
   // Jobs state
   const [jobs, setJobs] = useState<JobDetails[]>([])
   const [selectedJob, setSelectedJob] = useState<JobDetails | null>(null)
-  const [jobName, setJobName] = useState('batch-report-task')
-  const [jobImage, setJobImage] = useState('docker.io/library/alpine:latest')
-  const [jobCommand, setJobCommand] = useState('echo "Running financial report calculation..."')
-  const [jobTimeout, setJobTimeout] = useState(600)
-  const [jobMaxRetries, setJobMaxRetries] = useState(3)
+  const [showNewJobForm, setShowNewJobForm] = useState(false)
+  const [jobName, setJobName] = useState('batch-data-sync')
+  const [jobImage, setJobImage] = useState('docker.io/library/python:3.12-alpine')
+  const [jobCommand, setJobCommand] = useState('python -c "print(\'Job completed successfully\')"')
+  const [jobTimeout, setJobTimeout] = useState(60)
+  const [jobMaxRetries, setJobMaxRetries] = useState(2)
   const [isSubmittingJob, setIsSubmittingJob] = useState(false)
   const [jobOutputView, setJobOutputView] = useState<string | null>(null)
 
+  // Filters & Notifications
+  const [filterQuery, setFilterQuery] = useState('')
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [noticeMsg, setNoticeMsg] = useState<string | null>(null)
 
@@ -126,6 +135,7 @@ export default function App() {
     try {
       const data = await listReleases(token, selectedApp.id)
       setReleases(data)
+      setNoticeMsg('Releases refreshed.')
     } catch (err: unknown) {
       setErrorMsg((err as Error).message)
     }
@@ -140,76 +150,44 @@ export default function App() {
         const fresh = data.find((j) => j.id === selectedJob.id)
         if (fresh) setSelectedJob(fresh)
       }
+      setNoticeMsg('Jobs refreshed.')
     } catch (err: unknown) {
       setErrorMsg((err as Error).message)
     }
   }
 
-  const handleClearWorkspace = () => {
-    setActiveWorkspace(null)
-    setApps([])
-    setSelectedApp(null)
-    setReleases([])
-    setJobs([])
-    setSelectedJob(null)
-    setJobOutputView(null)
-  }
-
-  const handleSelectApp = (app: Application) => {
-    setSelectedApp(app)
-    setReleases([])
-  }
-
-  const handleSelectJob = (job: JobDetails) => {
-    setSelectedJob(job)
-    setJobOutputView(null)
-  }
-
   const handleCreateWorkspace = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (!wsName.trim() || !wsSlug.trim()) return
     setErrorMsg(null)
     try {
       const ws = await createWorkspace(token, wsName, wsSlug)
+      setActiveWorkspace(ws)
       setApps([])
       setSelectedApp(null)
       setReleases([])
       setJobs([])
       setSelectedJob(null)
-      setActiveWorkspace(ws)
-      setWorkspaceIdInput(ws.id)
-      setNoticeMsg(`Workspace '${ws.name}' created successfully`)
+      setShowNewWsForm(false)
+      setWsName('')
+      setWsSlug('')
+      setNoticeMsg(`Workspace '${ws.name}' created successfully.`)
     } catch (err: unknown) {
       setErrorMsg((err as Error).message)
     }
   }
 
-  const handleUseExistingWorkspace = (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!workspaceIdInput.trim()) return
-    setApps([])
-    setSelectedApp(null)
-    setReleases([])
-    setJobs([])
-    setSelectedJob(null)
-    setActiveWorkspace({
-      id: workspaceIdInput.trim(),
-      name: 'Active Workspace',
-      slug: 'active-ws',
-      created_at: new Date().toISOString(),
-    })
-    setNoticeMsg(`Switched to workspace: ${workspaceIdInput.trim()}`)
-  }
-
   const handleCreateApplication = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!activeWorkspace) return
+    if (!activeWorkspace || !newAppName.trim() || !newAppSlug.trim()) return
     setErrorMsg(null)
     try {
       const app = await createApplication(token, activeWorkspace.id, newAppName, newAppSlug)
       setApps((prev) => [app, ...prev])
       setSelectedApp(app)
       setReleases([])
-      setNoticeMsg(`Application '${app.name}' created!`)
+      setShowNewAppForm(false)
+      setNoticeMsg(`Application '${app.name}' initialized.`)
     } catch (err: unknown) {
       setErrorMsg((err as Error).message)
     }
@@ -232,7 +210,7 @@ export default function App() {
         },
         idempKey
       )
-      setNoticeMsg('Deployment submitted! Reconciler and readiness probes active.')
+      setNoticeMsg('Deployment submitted! Active reconciler probing readiness.')
       await manualRefreshReleases()
     } catch (err: unknown) {
       setErrorMsg((err as Error).message)
@@ -247,7 +225,7 @@ export default function App() {
     try {
       const idempKey = `rollback-${crypto.randomUUID()}`
       await rollbackRelease(token, selectedApp.id, targetReleaseId, idempKey)
-      setNoticeMsg('Rollback initiated! Reverting to target release.')
+      setNoticeMsg('Rollback initiated! Reverting application configuration.')
       await manualRefreshReleases()
     } catch (err: unknown) {
       setErrorMsg((err as Error).message)
@@ -274,7 +252,8 @@ export default function App() {
         },
         idempKey
       )
-      setNoticeMsg(`Job '${jobName}' submitted! Scheduler will admit for execution.`)
+      setShowNewJobForm(false)
+      setNoticeMsg(`Job '${jobName}' submitted. Go scheduler will admit intent.`)
       await manualRefreshJobs()
     } catch (err: unknown) {
       setErrorMsg((err as Error).message)
@@ -288,7 +267,7 @@ export default function App() {
     try {
       const idempKey = `job-cancel-${crypto.randomUUID()}`
       await cancelJob(token, jobId, idempKey)
-      setNoticeMsg('Cancellation signal sent to active job.')
+      setNoticeMsg('Cancellation signal recorded. Worker aborting execution.')
       await manualRefreshJobs()
     } catch (err: unknown) {
       setErrorMsg((err as Error).message)
@@ -300,8 +279,6 @@ export default function App() {
     try {
       const text = await downloadJobOutput(token, jobId)
       setJobOutputView(text)
-
-      // Trigger file download in browser
       const blob = new Blob([text], { type: 'text/plain;charset=utf-8' })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
@@ -316,251 +293,509 @@ export default function App() {
     }
   }
 
+  const filteredApps = apps.filter(
+    (a) =>
+      a.name.toLowerCase().includes(filterQuery.toLowerCase()) ||
+      a.slug.toLowerCase().includes(filterQuery.toLowerCase())
+  )
+
+  const filteredJobs = jobs.filter(
+    (j) =>
+      j.name.toLowerCase().includes(filterQuery.toLowerCase()) ||
+      j.id.toLowerCase().includes(filterQuery.toLowerCase())
+  )
+
   return (
-    <div className="dashboard-container">
-      {/* Header */}
-      <header className="header">
-        <div className="logo-area">
-          <span className="logo-icon">☁️</span>
-          <span className="logo-title">HamiCloud Dashboard</span>
-          <span className="badge milestone-badge">M2 Usable MVP</span>
+    <div className="dashboard-root">
+      {/* 1. Header Navigation Bar */}
+      <header className="navbar-clean">
+        <div className="navbar-brand-area">
+          <a href="/" className="brand-emblem">
+            <svg
+              className="brand-logo-svg"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 00-9.78 2.096A4.001 4.001 0 003 15z"
+              />
+            </svg>
+            <span>HamiCloud</span>
+          </a>
+          <span className="platform-badge">M1 & M2 Live Control Plane</span>
         </div>
-        <div className="auth-area">
-          <label htmlFor="auth-token" className="auth-label">Auth Token:</label>
-          <input
-            id="auth-token"
-            type="text"
-            className="auth-input"
-            value={token}
-            onChange={(e) => setToken(e.target.value)}
-            placeholder="Bearer token or dev:subject"
-          />
+
+        <div className="navbar-user-area">
+          <div className="auth-token-box">
+            <span className="auth-token-label">Actor:</span>
+            <select
+              className="auth-user-dropdown"
+              value={token}
+              onChange={(e) => setToken(e.target.value)}
+              aria-label="Select Authentication Actor"
+            >
+              <option value="dev:test_user_alice">Alice (Owner / Admin)</option>
+              <option value="dev:test_user_bob">Bob (Engineer / Member)</option>
+              <option value="dev:ci_bot">CI Automation Bot</option>
+            </select>
+          </div>
         </div>
       </header>
 
-      {/* Notifications */}
+      {/* 2. Global Feedback Notifications */}
       {errorMsg && (
-        <div className="alert alert-error" role="alert">
-          <strong>Error: </strong> {errorMsg}
-          <button className="close-btn" onClick={() => setErrorMsg(null)}>✕</button>
+        <div className="feedback-banner banner-error" role="alert">
+          <div>
+            <strong>Error: </strong>
+            <span>{errorMsg}</span>
+          </div>
+          <button className="banner-close-btn" onClick={() => setErrorMsg(null)}>
+            ✕
+          </button>
         </div>
       )}
       {noticeMsg && (
-        <div className="alert alert-success" role="status">
-          <strong>Notice: </strong> {noticeMsg}
-          <button className="close-btn" onClick={() => setNoticeMsg(null)}>✕</button>
+        <div className="feedback-banner banner-notice" role="status">
+          <div>
+            <strong>Success: </strong>
+            <span>{noticeMsg}</span>
+          </div>
+          <button className="banner-close-btn" onClick={() => setNoticeMsg(null)}>
+            ✕
+          </button>
         </div>
       )}
 
-      {/* Primary Workload Tab Selector */}
-      {activeWorkspace && (
-        <nav className="tab-nav" aria-label="Workload Type">
+      {/* 3. Workspace Overview Ribbon */}
+      <section className="workspace-banner">
+        <div className="workspace-left-meta">
+          <div className="workspace-logo-cube">
+            {activeWorkspace ? activeWorkspace.name.charAt(0).toUpperCase() : 'W'}
+          </div>
+          <div className="workspace-text-group">
+            <div className="workspace-heading-line">
+              <span className="workspace-name-text">
+                {activeWorkspace ? activeWorkspace.name : 'No Workspace Selected'}
+              </span>
+              {activeWorkspace && (
+                <span className="workspace-slug-badge">{activeWorkspace.slug}</span>
+              )}
+            </div>
+            {activeWorkspace && (
+              <span className="workspace-id-muted">ID: {activeWorkspace.id}</span>
+            )}
+          </div>
+        </div>
+
+        <div className="workspace-metrics-bar">
+          <div className="stat-metric">
+            <span className="stat-label">Services</span>
+            <span className="stat-value">{apps.length}</span>
+          </div>
+          <div className="stat-metric">
+            <span className="stat-label">Batch Jobs</span>
+            <span className="stat-value">{jobs.length}</span>
+          </div>
+          <div className="stat-metric">
+            <span className="stat-label">Reconciler Cluster</span>
+            <span className="stat-value healthy-green">Operational</span>
+          </div>
           <button
-            className={`tab-btn ${activeTab === 'services' ? 'active' : ''}`}
-            onClick={() => setActiveTab('services')}
+            className="btn-action-secondary"
+            onClick={() => setShowNewWsForm(!showNewWsForm)}
           >
-            🚀 HTTP Services
+            {showNewWsForm ? 'Cancel' : '+ New Workspace'}
           </button>
-          <button
-            className={`tab-btn ${activeTab === 'jobs' ? 'active' : ''}`}
-            onClick={() => setActiveTab('jobs')}
-          >
-            ⚙️ Background Jobs
-          </button>
-        </nav>
+        </div>
+      </section>
+
+      {/* Workspace Creation Collapsible Form */}
+      {showNewWsForm && (
+        <div className="content-card" style={{ margin: '1rem 2rem 0' }}>
+          <h4>Create New Isolated Workspace</h4>
+          <form onSubmit={handleCreateWorkspace} className="form-grid-layout">
+            <div className="input-field-group">
+              <label className="input-label-clean">Workspace Name</label>
+              <input
+                className="input-control-clean"
+                type="text"
+                value={wsName}
+                onChange={(e) => setWsName(e.target.value)}
+                placeholder="e.g. Analytics Platform"
+                required
+              />
+            </div>
+            <div className="input-field-group">
+              <label className="input-label-clean">Slug (DNS compliant)</label>
+              <input
+                className="input-control-clean"
+                type="text"
+                value={wsSlug}
+                onChange={(e) => setWsSlug(e.target.value)}
+                placeholder="e.g. analytics-prod"
+                required
+              />
+            </div>
+            <div style={{ display: 'flex', alignItems: 'flex-end' }}>
+              <button type="submit" className="btn-action-primary">
+                Confirm & Create
+              </button>
+            </div>
+          </form>
+        </div>
       )}
 
-      <main className="main-layout">
-        {/* Sidebar */}
-        <aside className="sidebar">
-          {/* Workspace Management */}
-          <section className="card workspace-card">
-            <h3>1. Workspace</h3>
-            {activeWorkspace ? (
-              <div className="active-ws-box">
-                <p className="ws-name">{activeWorkspace.name}</p>
-                <code className="ws-id">{activeWorkspace.id}</code>
-                <button
-                  className="btn btn-secondary btn-sm"
-                  onClick={handleClearWorkspace}
-                >
-                  Change Workspace
-                </button>
-              </div>
+      {/* 4. Tab Navigation Strip */}
+      <nav className="tab-strip-container" aria-label="Workload Category">
+        <div className="tab-buttons-group">
+          <button
+            className={`tab-nav-item ${activeTab === 'services' ? 'active' : ''}`}
+            onClick={() => setActiveTab('services')}
+          >
+            <span>HTTP Services & Deployments</span>
+            <span className="tab-pill-count">{apps.length}</span>
+          </button>
+          <button
+            className={`tab-nav-item ${activeTab === 'jobs' ? 'active' : ''}`}
+            onClick={() => setActiveTab('jobs')}
+          >
+            <span>Finite Jobs & Batch Tasks</span>
+            <span className="tab-pill-count">{jobs.length}</span>
+          </button>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <input
+            type="search"
+            className="input-control-clean"
+            style={{ width: '220px', padding: '0.4rem 0.75rem' }}
+            placeholder="Filter list..."
+            value={filterQuery}
+            onChange={(e) => setFilterQuery(e.target.value)}
+          />
+        </div>
+      </nav>
+
+      {/* 5. Main Content Two-Column Grid */}
+      <main className="dashboard-main-grid">
+        {/* Left Master Sidebar */}
+        <aside className="sidebar-panel">
+          <div className="panel-header-box">
+            <span className="panel-title">
+              {activeTab === 'services' ? 'Applications' : 'Submitted Jobs'}
+            </span>
+            {activeTab === 'services' ? (
+              <button
+                className="btn-action-primary"
+                style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem' }}
+                onClick={() => setShowNewAppForm(!showNewAppForm)}
+              >
+                + New App
+              </button>
             ) : (
-              <div>
-                <form onSubmit={handleCreateWorkspace} className="stacked-form">
-                  <input
-                    type="text"
-                    value={wsName}
-                    onChange={(e) => setWsName(e.target.value)}
-                    placeholder="Workspace Name"
-                    required
-                  />
-                  <input
-                    type="text"
-                    value={wsSlug}
-                    onChange={(e) => setWsSlug(e.target.value)}
-                    placeholder="slug (e.g. prod-space)"
-                    required
-                  />
-                  <button type="submit" className="btn btn-primary">
-                    Create Workspace
-                  </button>
-                </form>
-                <hr className="divider" />
-                <form onSubmit={handleUseExistingWorkspace} className="stacked-form">
-                  <input
-                    type="text"
-                    value={workspaceIdInput}
-                    onChange={(e) => setWorkspaceIdInput(e.target.value)}
-                    placeholder="Or enter existing Workspace UUID"
-                  />
-                  <button type="submit" className="btn btn-secondary">
-                    Select Workspace
-                  </button>
-                </form>
-              </div>
+              <button
+                className="btn-action-primary"
+                style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem' }}
+                onClick={() => setShowNewJobForm(!showNewJobForm)}
+              >
+                + Submit Job
+              </button>
             )}
-          </section>
+          </div>
 
-          {/* Sub-item Sidebar based on active tab */}
-          {activeWorkspace && activeTab === 'services' && (
-            <section className="card apps-card">
-              <h3>2. Applications</h3>
-              <div className="apps-list">
-                {apps.length === 0 ? (
-                  <p className="muted-text">No applications found in this workspace.</p>
-                ) : (
-                  apps.map((app) => (
-                    <button
-                      key={app.id}
-                      className={`app-item ${selectedApp?.id === app.id ? 'active' : ''}`}
-                      onClick={() => handleSelectApp(app)}
-                    >
-                      <div className="app-item-title">{app.name}</div>
-                      <div className="app-item-sub">{app.slug}</div>
-                    </button>
-                  ))
-                )}
-              </div>
-
-              <hr className="divider" />
-              <h4>New Application</h4>
-              <form onSubmit={handleCreateApplication} className="stacked-form">
+          {/* Quick Create App Form */}
+          {activeTab === 'services' && showNewAppForm && (
+            <div style={{ padding: '1rem', borderBottom: '1px solid var(--border-light)' }}>
+              <form onSubmit={handleCreateApplication} style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                 <input
+                  className="input-control-clean"
                   type="text"
                   value={newAppName}
                   onChange={(e) => setNewAppName(e.target.value)}
-                  placeholder="App Name"
+                  placeholder="Application Name"
                   required
                 />
                 <input
+                  className="input-control-clean"
                   type="text"
                   value={newAppSlug}
                   onChange={(e) => setNewAppSlug(e.target.value)}
-                  placeholder="App Slug"
+                  placeholder="Slug (e.g. web-frontend)"
                   required
                 />
-                <button type="submit" className="btn btn-primary">
-                  Create App
+                <button type="submit" className="btn-action-primary" style={{ marginTop: '0.25rem' }}>
+                  Save Application
                 </button>
               </form>
-            </section>
-          )}
-
-          {activeWorkspace && activeTab === 'jobs' && (
-            <section className="card jobs-sidebar-card">
-              <h3>2. Workspace Jobs</h3>
-              <div className="apps-list">
-                {jobs.length === 0 ? (
-                  <p className="muted-text">No background jobs submitted yet.</p>
-                ) : (
-                  jobs.map((j) => (
-                    <button
-                      key={j.id}
-                      className={`app-item ${selectedJob?.id === j.id ? 'active' : ''}`}
-                      onClick={() => handleSelectJob(j)}
-                    >
-                      <div className="app-item-title">{j.name}</div>
-                      <div className="app-item-sub">
-                        <span className={`status-pill-small status-${j.state.toLowerCase()}`}>
-                          {j.state}
-                        </span>
-                        <span className="text-xs muted-text">#{j.current_attempt_number}</span>
-                      </div>
-                    </button>
-                  ))
-                )}
-              </div>
-            </section>
-          )}
-        </aside>
-
-        {/* Content Area */}
-        <section className="content-area">
-          {!activeWorkspace ? (
-            <div className="card placeholder-card">
-              <p>Select or create a workspace to view services and background jobs.</p>
             </div>
-          ) : activeTab === 'services' ? (
-            /* SERVICES TAB CONTENT */
-            !selectedApp ? (
-              <div className="card placeholder-card">
-                <p>Select or create an application to manage releases and live ingress.</p>
+          )}
+
+          {/* Quick Submit Job Form */}
+          {activeTab === 'jobs' && showNewJobForm && (
+            <div style={{ padding: '1rem', borderBottom: '1px solid var(--border-light)' }}>
+              <form onSubmit={handleSubmitJob} style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                <input
+                  className="input-control-clean"
+                  type="text"
+                  value={jobName}
+                  onChange={(e) => setJobName(e.target.value)}
+                  placeholder="Job Name"
+                  required
+                />
+                <input
+                  className="input-control-clean"
+                  type="text"
+                  value={jobImage}
+                  onChange={(e) => setJobImage(e.target.value)}
+                  placeholder="Image Digest"
+                  required
+                />
+                <input
+                  className="input-control-clean"
+                  type="text"
+                  value={jobCommand}
+                  onChange={(e) => setJobCommand(e.target.value)}
+                  placeholder="Command Args"
+                  required
+                />
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
+                  <input
+                    className="input-control-clean"
+                    type="number"
+                    min={0}
+                    max={5}
+                    value={jobMaxRetries}
+                    onChange={(e) => setJobMaxRetries(Number(e.target.value))}
+                    placeholder="Max Retries"
+                    title="Max Retries"
+                    required
+                  />
+                  <input
+                    className="input-control-clean"
+                    type="number"
+                    min={5}
+                    max={3600}
+                    value={jobTimeout}
+                    onChange={(e) => setJobTimeout(Number(e.target.value))}
+                    placeholder="Timeout (s)"
+                    title="Timeout in seconds"
+                    required
+                  />
+                </div>
+                <button
+                  type="submit"
+                  className="btn-action-primary"
+                  style={{ marginTop: '0.25rem' }}
+                  disabled={isSubmittingJob}
+                >
+                  {isSubmittingJob ? 'Submitting...' : 'Dispatch Job'}
+                </button>
+              </form>
+            </div>
+          )}
+
+          {/* List Scroll Area */}
+          <div className="list-scroll-area">
+            {activeTab === 'services' ? (
+              filteredApps.length === 0 ? (
+                <div style={{ padding: '2rem 1rem', textAlign: 'center', color: 'var(--slate-400)', fontSize: '0.875rem' }}>
+                  No applications found.
+                </div>
+              ) : (
+                filteredApps.map((app) => (
+                  <button
+                    key={app.id}
+                    className={`sidebar-list-row ${selectedApp?.id === app.id ? 'active' : ''}`}
+                    onClick={() => {
+                      setSelectedApp(app)
+                      setReleases([])
+                    }}
+                  >
+                    <div className="row-title-line">
+                      <span className="row-primary-name">{app.name}</span>
+                      <span className="meta-tag">gen {app.desired_generation}</span>
+                    </div>
+                    <div className="row-sub-line">
+                      <span className="row-slug-code">{app.slug}</span>
+                      <span>•</span>
+                      <span>{app.workload_type}</span>
+                    </div>
+                  </button>
+                ))
+              )
+            ) : filteredJobs.length === 0 ? (
+              <div style={{ padding: '2rem 1rem', textAlign: 'center', color: 'var(--slate-400)', fontSize: '0.875rem' }}>
+                No background jobs found.
               </div>
             ) : (
-              <div>
-                {/* App Banner */}
-                <div className="card app-banner">
-                  <div className="app-info">
-                    <h2>{selectedApp.name}</h2>
-                    <p className="app-meta">
-                      Slug: <code>{selectedApp.slug}</code> | Generation:{' '}
-                      <strong>{selectedApp.desired_generation}</strong> | Type:{' '}
-                      <code>{selectedApp.workload_type}</code>
-                    </p>
+              filteredJobs.map((j) => (
+                <button
+                  key={j.id}
+                  className={`sidebar-list-row ${selectedJob?.id === j.id ? 'active' : ''}`}
+                  onClick={() => {
+                    setSelectedJob(j)
+                    setJobOutputView(null)
+                  }}
+                >
+                  <div className="row-title-line">
+                    <span className="row-primary-name">{j.name}</span>
+                    <span className={`status-pill-clean ${j.state.toLowerCase()}`}>
+                      {j.state}
+                    </span>
                   </div>
+                  <div className="row-sub-line">
+                    <span className="row-slug-code">#{j.current_attempt_number}</span>
+                    <span>•</span>
+                    <span className="row-slug-code">{j.id.slice(0, 8)}</span>
+                  </div>
+                </button>
+              ))
+            )}
+          </div>
+        </aside>
+
+        {/* Right Detail Panel */}
+        <section className="detail-view-panel">
+          {activeTab === 'services' ? (
+            !selectedApp ? (
+              <div className="empty-placeholder-card">
+                <span className="placeholder-icon">🚀</span>
+                <span style={{ fontWeight: 600, color: 'var(--slate-800)' }}>No Application Selected</span>
+                <p style={{ maxWidth: '360px', fontSize: '0.875rem' }}>
+                  Select an application from the sidebar or click <strong>+ New App</strong> to deploy an approved container workload.
+                </p>
+              </div>
+            ) : (
+              <>
+                {/* Application Header Card */}
+                <div className="content-card">
+                  <div className="card-top-row">
+                    <div className="detail-header-meta">
+                      <h2 className="detail-headline">{selectedApp.name}</h2>
+                      <div className="detail-tags-row">
+                        <span className="meta-tag">slug: {selectedApp.slug}</span>
+                        <span className="meta-tag">id: {selectedApp.id}</span>
+                        <span className="meta-tag">generation: {selectedApp.desired_generation}</span>
+                        <span className="meta-tag">type: {selectedApp.workload_type}</span>
+                      </div>
+                    </div>
+                    <div>
+                      <button className="btn-action-secondary" onClick={manualRefreshReleases}>
+                        ↻ Refresh Status
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Live Ingress URL or Readiness Failure Section */}
+                  {releases.length > 0 && (() => {
+                    const latest = releases[0]
+                    const port = latest.config_json?.port || 8080
+                    const path = latest.config_json?.health_path || '/'
+                    const serviceUrl = `http://localhost:${port}${path}`
+                    const isHealthy = latest.status === 'HEALTHY'
+                    const isFailed = latest.status === 'DEPLOY_FAILED' || latest.status === 'BUILD_FAILED'
+
+                    if (isHealthy) {
+                      return (
+                        <div className="live-ingress-box">
+                          <div className="ingress-meta-block">
+                            <span className="ingress-tag-line">
+                              <span className="ingress-dot-pulse" /> Live HTTP Ingress (Active)
+                            </span>
+                            <a
+                              href={serviceUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="ingress-url-link"
+                            >
+                              {serviceUrl} ↗
+                            </a>
+                          </div>
+                          <div>
+                            <a
+                              href={serviceUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="btn-action-primary"
+                            >
+                              Open Service In Browser
+                            </a>
+                          </div>
+                        </div>
+                      )
+                    }
+
+                    if (isFailed) {
+                      return (
+                        <div className="readiness-failure-box" role="alert">
+                          <div className="failure-title-row">
+                            <span>⚠️ Readiness Probe Failure (Milestone M1 Validation)</span>
+                          </div>
+                          <p className="failure-description-text">
+                            The reconciler probe against <code>{serviceUrl}</code> failed to satisfy readiness requirements.
+                            The incident has been logged and the previous serving generation remains protected.
+                          </p>
+                          <div className="failure-diagnostics-pre">
+                            Diagnostics: {latest.status_reason || 'HTTP connection refused or non-2xx status returned'}
+                          </div>
+                        </div>
+                      )
+                    }
+
+                    return (
+                      <div className="live-ingress-box" style={{ background: 'var(--blue-50)', borderColor: 'var(--blue-200)' }}>
+                        <span style={{ color: 'var(--blue-700)', fontWeight: 600 }}>
+                          ⏳ Reconciler active: Waiting for deployment rollout & readiness probe...
+                        </span>
+                      </div>
+                    )
+                  })()}
                 </div>
 
-                {/* Deployment Form */}
-                <div className="card deployment-form-card">
-                  <h3>3. Deploy Release</h3>
-                  <form onSubmit={handleDeployRelease} className="deploy-grid">
-                    <div className="form-group">
-                      <label htmlFor="image-digest">Approved Image Digest / URI:</label>
+                {/* Deploy New Release Section */}
+                <div className="content-card">
+                  <h3 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--slate-800)' }}>
+                    Deploy Release (Generation {selectedApp.desired_generation + 1})
+                  </h3>
+                  <form onSubmit={handleDeployRelease} className="form-grid-layout">
+                    <div className="input-field-group">
+                      <label className="input-label-clean">Approved Image Digest</label>
                       <input
-                        id="image-digest"
+                        className="input-control-clean"
                         type="text"
                         value={imageDigest}
                         onChange={(e) => setImageDigest(e.target.value)}
                         required
                       />
                     </div>
-                    <div className="form-group">
-                      <label htmlFor="service-port">Service Port:</label>
+                    <div className="input-field-group">
+                      <label className="input-label-clean">Service Port</label>
                       <input
-                        id="service-port"
+                        className="input-control-clean"
                         type="number"
                         value={servicePort}
                         onChange={(e) => setServicePort(Number(e.target.value))}
                         required
                       />
                     </div>
-                    <div className="form-group">
-                      <label htmlFor="health-path">Readiness Health Path:</label>
+                    <div className="input-field-group">
+                      <label className="input-label-clean">Readiness Health Path</label>
                       <input
-                        id="health-path"
+                        className="input-control-clean"
                         type="text"
                         value={healthPath}
                         onChange={(e) => setHealthPath(e.target.value)}
                         required
                       />
                     </div>
-                    <div className="form-action">
+                    <div style={{ display: 'flex', alignItems: 'flex-end' }}>
                       <button
                         type="submit"
-                        className="btn btn-primary btn-deploy"
+                        className="btn-action-primary"
                         disabled={isDeploying}
                       >
                         {isDeploying ? 'Deploying...' : 'Deploy Release'}
@@ -569,194 +804,107 @@ export default function App() {
                   </form>
                 </div>
 
-                {/* Releases & Ingress Status */}
-                <div className="card releases-card">
-                  <div className="card-header">
-                    <h3>4. Releases & Ingress Status</h3>
-                    <button className="btn btn-secondary btn-sm" onClick={manualRefreshReleases}>
-                      ↻ Refresh
-                    </button>
+                {/* Releases History Table */}
+                <div className="content-card">
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <h3 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--slate-800)' }}>
+                      Releases & Revision History
+                    </h3>
                   </div>
 
-                  {releases.length === 0 ? (
-                    <p className="muted-text">No releases have been deployed yet.</p>
-                  ) : (
-                    <div className="releases-table-wrapper">
-                      <table className="releases-table">
-                        <thead>
-                          <tr>
-                            <th>Release</th>
-                            <th>Image</th>
-                            <th>Status</th>
-                            <th>Ingress / Service URL & Diagnostics</th>
-                            <th>Actions</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {releases.map((rel) => {
-                            const port = rel.config_json?.port || 8080
-                            const path = rel.config_json?.health_path || '/'
-                            const serviceUrl = `http://localhost:${port}${path}`
-                            const isHealthy = rel.status === 'HEALTHY'
-                            const isFailed = rel.status === 'DEPLOY_FAILED'
-                            const isCurrent = selectedApp.current_release_id === rel.id
-
-                            return (
-                              <tr key={rel.id} className={`release-row status-${rel.status.toLowerCase()}`}>
-                                <td>
-                                  <strong>#{rel.release_number}</strong>
-                                  {isCurrent && <span className="current-badge">ACTIVE</span>}
-                                  <div className="text-xs muted-text">{rel.id.slice(0, 8)}</div>
-                                </td>
-                                <td className="code-cell">
-                                  <code>{rel.image_digest}</code>
-                                </td>
-                                <td>
-                                  <span className={`status-pill status-${rel.status.toLowerCase()}`}>
-                                    {rel.status}
+                  <div className="table-container-clean">
+                    <table className="clean-table">
+                      <thead>
+                        <tr>
+                          <th>Release #</th>
+                          <th>Image Digest</th>
+                          <th>Status</th>
+                          <th>Created</th>
+                          <th>Rollback Action</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {releases.map((rel) => {
+                          const isCurrent = selectedApp.current_release_id === rel.id
+                          return (
+                            <tr key={rel.id}>
+                              <td>
+                                <strong>#{rel.release_number}</strong>
+                                {isCurrent && (
+                                  <span
+                                    className="status-pill-clean healthy"
+                                    style={{ marginLeft: '0.5rem', fontSize: '0.65rem' }}
+                                  >
+                                    ACTIVE
                                   </span>
-                                </td>
-                                <td>
-                                  {isHealthy && (
-                                    <div className="service-healthy-box">
-                                      <span className="live-indicator">● LIVE</span>
-                                      <a
-                                        href={serviceUrl}
-                                        target="_blank"
-                                        rel="noreferrer"
-                                        className="service-link"
-                                      >
-                                        {serviceUrl} ↗
-                                      </a>
-                                    </div>
-                                  )}
-                                  {isFailed && (
-                                    <div className="service-failed-box" role="alert">
-                                      <span className="failed-title">⚠️ Readiness Probe Failed:</span>
-                                      <span className="failed-reason">
-                                        {rel.status_reason || 'Connection refused or timeout on target port'}
-                                      </span>
-                                    </div>
-                                  )}
-                                  {!isHealthy && !isFailed && (
-                                    <div className="service-pending-box">
-                                      <span className="spinner">⏳</span> Reconciling & probing readiness...
-                                    </div>
-                                  )}
-                                </td>
-                                <td>
-                                  {!isCurrent && (
-                                    <button
-                                      className="btn btn-secondary btn-sm"
-                                      onClick={() => handleRollbackRelease(rel.id)}
-                                      title="Roll back application to this release"
-                                    >
-                                      Rollback ↺
-                                    </button>
-                                  )}
-                                </td>
-                              </tr>
-                            )
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
+                                )}
+                              </td>
+                              <td>
+                                <code style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>
+                                  {rel.image_digest}
+                                </code>
+                              </td>
+                              <td>
+                                <span className={`status-pill-clean ${rel.status.toLowerCase()}`}>
+                                  {rel.status}
+                                </span>
+                              </td>
+                              <td style={{ fontSize: '0.8rem', color: 'var(--slate-500)' }}>
+                                {new Date(rel.created_at).toLocaleTimeString()}
+                              </td>
+                              <td>
+                                {!isCurrent && (
+                                  <button
+                                    className="btn-action-brown"
+                                    onClick={() => handleRollbackRelease(rel.id)}
+                                  >
+                                    Rollback ↺
+                                  </button>
+                                )}
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
-              </div>
+              </>
             )
           ) : (
-            /* JOBS TAB CONTENT */
-            <div>
-              {/* Job Submission Form */}
-              <div className="card deployment-form-card">
-                <h3>3. Submit Finite Job</h3>
-                <form onSubmit={handleSubmitJob} className="deploy-grid">
-                  <div className="form-group">
-                    <label htmlFor="job-name">Job Name:</label>
-                    <input
-                      id="job-name"
-                      type="text"
-                      value={jobName}
-                      onChange={(e) => setJobName(e.target.value)}
-                      required
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label htmlFor="job-image">Approved Image Digest:</label>
-                    <input
-                      id="job-image"
-                      type="text"
-                      value={jobImage}
-                      onChange={(e) => setJobImage(e.target.value)}
-                      required
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label htmlFor="job-command">Command & Arguments:</label>
-                    <input
-                      id="job-command"
-                      type="text"
-                      value={jobCommand}
-                      onChange={(e) => setJobCommand(e.target.value)}
-                      placeholder='echo "Hello world"'
-                      required
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label htmlFor="job-retries">Max Retries:</label>
-                    <input
-                      id="job-retries"
-                      type="number"
-                      min={0}
-                      max={5}
-                      value={jobMaxRetries}
-                      onChange={(e) => setJobMaxRetries(Number(e.target.value))}
-                      required
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label htmlFor="job-timeout">Timeout (seconds):</label>
-                    <input
-                      id="job-timeout"
-                      type="number"
-                      min={10}
-                      max={3600}
-                      value={jobTimeout}
-                      onChange={(e) => setJobTimeout(Number(e.target.value))}
-                      required
-                    />
-                  </div>
-                  <div className="form-action">
-                    <button
-                      type="submit"
-                      className="btn btn-primary btn-deploy"
-                      disabled={isSubmittingJob}
-                    >
-                      {isSubmittingJob ? 'Submitting...' : 'Submit Job'}
-                    </button>
-                  </div>
-                </form>
+            /* JOBS TAB DETAIL VIEW */
+            !selectedJob ? (
+              <div className="empty-placeholder-card">
+                <span className="placeholder-icon">⚙️</span>
+                <span style={{ fontWeight: 600, color: 'var(--slate-800)' }}>No Job Selected</span>
+                <p style={{ maxWidth: '360px', fontSize: '0.875rem' }}>
+                  Select a job from the sidebar or click <strong>+ Submit Job</strong> to dispatch a finite batch workload.
+                </p>
               </div>
-
-              {/* Selected Job Inspection */}
-              {selectedJob && (
-                <div className="card job-details-card">
-                  <div className="card-header">
-                    <div>
-                      <h3>Job: {selectedJob.name}</h3>
-                      <p className="app-meta">
-                        ID: <code>{selectedJob.id}</code> | Created:{' '}
-                        {new Date(selectedJob.created_at).toLocaleTimeString()}
-                      </p>
+            ) : (
+              <>
+                <div className="content-card">
+                  <div className="card-top-row">
+                    <div className="detail-header-meta">
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                        <h2 className="detail-headline">{selectedJob.name}</h2>
+                        <span className={`status-pill-clean ${selectedJob.state.toLowerCase()}`}>
+                          {selectedJob.state}
+                        </span>
+                      </div>
+                      <div className="detail-tags-row">
+                        <span className="meta-tag">id: {selectedJob.id}</span>
+                        <span className="meta-tag">attempt: {selectedJob.current_attempt_number}</span>
+                        <span className="meta-tag">
+                          submitted: {new Date(selectedJob.created_at).toLocaleTimeString()}
+                        </span>
+                      </div>
                     </div>
-                    <div className="job-action-buttons">
-                      <span className={`status-pill status-${selectedJob.state.toLowerCase()}`}>
-                        {selectedJob.state}
-                      </span>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
                       {['QUEUED', 'ADMITTED', 'STARTING', 'RUNNING', 'RETRY_WAIT'].includes(selectedJob.state) && (
                         <button
-                          className="btn btn-danger btn-sm"
+                          className="btn-action-danger"
                           onClick={() => handleCancelJob(selectedJob.id)}
                         >
                           Cancel Job ✕
@@ -764,81 +912,92 @@ export default function App() {
                       )}
                       {['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(selectedJob.state) && (
                         <button
-                          className="btn btn-primary btn-sm"
+                          className="btn-action-primary"
                           onClick={() => handleDownloadJobOutput(selectedJob.id)}
                         >
-                          Download Output ⬇
+                          Download Logs ⬇
                         </button>
                       )}
-                      <button className="btn btn-secondary btn-sm" onClick={manualRefreshJobs}>
+                      <button className="btn-action-secondary" onClick={manualRefreshJobs}>
                         ↻
                       </button>
                     </div>
                   </div>
-
-                  <h4>Attempt Timeline</h4>
-                  {selectedJob.attempts.length === 0 ? (
-                    <p className="muted-text">Awaiting admission by Go Scheduler...</p>
-                  ) : (
-                    <div className="releases-table-wrapper">
-                      <table className="releases-table">
-                        <thead>
-                          <tr>
-                            <th>Attempt</th>
-                            <th>State</th>
-                            <th>Exit Code</th>
-                            <th>Failure Reason</th>
-                            <th>Timeline</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {selectedJob.attempts.map((att) => (
-                            <tr key={att.attempt_number} className={`release-row status-${att.state.toLowerCase()}`}>
-                              <td>
-                                <strong>Attempt #{att.attempt_number}</strong>
-                                <div className="text-xs muted-text">Epoch {att.lease_epoch}</div>
-                              </td>
-                              <td>
-                                <span className={`status-pill status-${att.state.toLowerCase()}`}>
-                                  {att.state}
-                                </span>
-                              </td>
-                              <td>
-                                <code>{att.exit_code !== null && att.exit_code !== undefined ? att.exit_code : '-'}</code>
-                              </td>
-                              <td>
-                                {att.failure_reason ? (
-                                  <span className="text-danger text-sm">{att.failure_reason}</span>
-                                ) : (
-                                  <span className="muted-text text-sm">None</span>
-                                )}
-                              </td>
-                              <td className="text-xs muted-text">
-                                {att.started_at && <div>Started: {new Date(att.started_at).toLocaleTimeString()}</div>}
-                                {att.finished_at && <div>Finished: {new Date(att.finished_at).toLocaleTimeString()}</div>}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-
-                  {/* Output viewer modal / inline card */}
-                  {jobOutputView && (
-                    <div className="job-output-box">
-                      <div className="card-header">
-                        <h5>Downloaded Output / Logs</h5>
-                        <button className="btn btn-secondary btn-sm" onClick={() => setJobOutputView(null)}>
-                          Close
-                        </button>
-                      </div>
-                      <pre className="output-pre">{jobOutputView}</pre>
-                    </div>
-                  )}
                 </div>
-              )}
-            </div>
+
+                {/* Job Attempts Timeline */}
+                <div className="content-card">
+                  <h3 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--slate-800)' }}>
+                    Attempt History & Leases
+                  </h3>
+
+                  <div className="table-container-clean">
+                    <table className="clean-table">
+                      <thead>
+                        <tr>
+                          <th>Attempt #</th>
+                          <th>Status</th>
+                          <th>Lease Epoch</th>
+                          <th>Exit Code</th>
+                          <th>Failure Reason</th>
+                          <th>Timeline</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {selectedJob.attempts.map((att) => (
+                          <tr key={att.attempt_number}>
+                            <td>
+                              <strong>Attempt {att.attempt_number}</strong>
+                            </td>
+                            <td>
+                              <span className={`status-pill-clean ${att.state.toLowerCase()}`}>
+                                {att.state}
+                              </span>
+                            </td>
+                            <td>
+                              <code className="meta-tag">epoch {att.lease_epoch}</code>
+                            </td>
+                            <td>
+                              <code>{att.exit_code !== null && att.exit_code !== undefined ? att.exit_code : '-'}</code>
+                            </td>
+                            <td>
+                              {att.failure_reason ? (
+                                <span style={{ color: '#be123c', fontWeight: 500, fontSize: '0.85rem' }}>
+                                  {att.failure_reason}
+                                </span>
+                              ) : (
+                                <span style={{ color: 'var(--slate-400)' }}>-</span>
+                              )}
+                            </td>
+                            <td style={{ fontSize: '0.78rem', color: 'var(--slate-500)' }}>
+                              {att.started_at && <div>Started: {new Date(att.started_at).toLocaleTimeString()}</div>}
+                              {att.finished_at && <div>Ended: {new Date(att.finished_at).toLocaleTimeString()}</div>}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Terminal Output Viewer */}
+                {jobOutputView && (
+                  <div className="terminal-card-box">
+                    <div className="terminal-top-bar">
+                      <span className="terminal-title-text">Execution Log Output ({selectedJob.name})</span>
+                      <button
+                        className="btn-action-secondary"
+                        style={{ padding: '0.2rem 0.6rem', fontSize: '0.75rem' }}
+                        onClick={() => setJobOutputView(null)}
+                      >
+                        Hide
+                      </button>
+                    </div>
+                    <pre className="terminal-raw-stream">{jobOutputView}</pre>
+                  </div>
+                )}
+              </>
+            )
           )}
         </section>
       </main>

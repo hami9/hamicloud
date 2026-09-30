@@ -13,6 +13,8 @@ from app.models.quota import QuotaReservation, QuotaResourceClass, QuotaStatus
 from app.models.idempotency import IdempotencyRecord
 from app.models.secret import SecretReference
 from app.models.audit import AuditEvent
+from app.models.repository import Repository
+from app.models.webhook_delivery import WebhookDelivery
 
 __all__ = [
     "Base",
@@ -38,4 +40,6 @@ __all__ = [
     "IdempotencyRecord",
     "SecretReference",
     "AuditEvent",
+    "Repository",
+    "WebhookDelivery",
 ]

@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hamicloud.dev/schemas/events/app.build.completed.v1.json",
+  "title": "AppBuildCompletedV1",
+  "type": "object",
+  "required": [
+    "event_id",
+    "timestamp",
+    "workspace_id",
+    "application_id",
+    "release_id",
+    "image_digest",
+    "status"
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "workspace_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "application_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "release_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "image_digest": {
+      "type": "string"
+    },
+    "commit_sha": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "HEALTHY",
+        "BUILD_FAILED"
+      ]
+    }
+  },
+  "additionalProperties": false
+}

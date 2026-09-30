@@ -9,6 +9,7 @@ from app.db.base import Base, SqlEnum, TimestampMixin, UUIDPrimaryKeyMixin
 if TYPE_CHECKING:
     from app.models.application import Application
     from app.models.job import Job
+    from app.models.repository import Repository
 
 
 class WorkspaceRole(str, enum.Enum):
@@ -31,6 +32,9 @@ class Workspace(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     )
     jobs: Mapped[List["Job"]] = relationship(
         "Job", back_populates="workspace", cascade="all, delete-orphan"
+    )
+    repositories: Mapped[List["Repository"]] = relationship(
+        "Repository", back_populates="workspace", cascade="all, delete-orphan"
     )
 
     __table_args__ = (
@@ -56,4 +60,3 @@ class WorkspaceMembership(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __table_args__ = (
         UniqueConstraint("workspace_id", "user_subject", name="uq_workspace_membership_user"),
     )
-

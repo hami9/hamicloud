@@ -1,13 +1,14 @@
 import enum
 import uuid
 from typing import TYPE_CHECKING, Any, Dict, Optional
-from sqlalchemy import JSON, ForeignKey, Integer, String, UniqueConstraint, Uuid
+from sqlalchemy import JSON, ForeignKey, Integer, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, SqlEnum, TimestampMixin, UUIDPrimaryKeyMixin
 
 if TYPE_CHECKING:
     from app.models.application import Application
+    from app.models.repository import Repository
 
 
 class ReleaseStatus(str, enum.Enum):
@@ -31,7 +32,7 @@ class Release(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     )
     release_number: Mapped[int] = mapped_column(Integer, nullable=False)
     commit_sha: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
-    image_digest: Mapped[str] = mapped_column(String(255), nullable=False)
+    image_digest: Mapped[str] = mapped_column(String(255), nullable=False, default="pending")
     config_json: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     status: Mapped[ReleaseStatus] = mapped_column(
         SqlEnum(ReleaseStatus, 50),
@@ -41,13 +42,25 @@ class Release(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     )
     status_reason: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
 
+    repository_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        Uuid, ForeignKey("repositories.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    git_ref: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    commit_message: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    build_duration_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    build_logs: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
     application: Mapped["Application"] = relationship(
         "Application",
         back_populates="releases",
         foreign_keys=[application_id],
     )
+    repository: Mapped[Optional["Repository"]] = relationship(
+        "Repository",
+        back_populates="releases",
+        foreign_keys=[repository_id],
+    )
 
     __table_args__ = (
         UniqueConstraint("application_id", "release_number", name="uq_release_app_number"),
     )
-

@@ -1,12 +1,17 @@
 import { useState, useEffect } from 'react'
-import type { Workspace, Application, Release, JobDetails } from './api'
+import type { Workspace, Application, Release, JobDetails, Repository } from './api'
 import {
   createWorkspace,
   createApplication,
+  updateApplication,
   listApplications,
   deployRelease,
   listReleases,
   rollbackRelease,
+  connectRepository,
+  listRepositories,
+  triggerBuild,
+  processBuild,
   listWorkspaceJobs,
   submitJob,
   cancelJob,
@@ -34,6 +39,20 @@ export default function App() {
   const [showNewAppForm, setShowNewAppForm] = useState(false)
   const [newAppName, setNewAppName] = useState('Live HTTP Gateway')
   const [newAppSlug, setNewAppSlug] = useState('http-gateway')
+
+  // Repositories & Build state (Milestone M3)
+  const [repos, setRepos] = useState<Repository[]>([])
+  const [showConnectRepoForm, setShowConnectRepoForm] = useState(false)
+  const [newRepoName, setNewRepoName] = useState('demo-service')
+  const [newRepoUrl, setNewRepoUrl] = useState('https://github.com/hamicloud/demo-service')
+  const [newRepoSecret, setNewRepoSecret] = useState('supersecret-webhook-token')
+  const [newRepoBranch, setNewRepoBranch] = useState('main')
+  const [isConnectingRepo, setIsConnectingRepo] = useState(false)
+
+  const [buildGitBranch, setBuildGitBranch] = useState('main')
+  const [buildCommitSha, setBuildCommitSha] = useState('')
+  const [buildCommitMsg, setBuildCommitMsg] = useState('')
+  const [isTriggeringBuild, setIsTriggeringBuild] = useState(false)
 
   const [imageDigest, setImageDigest] = useState('docker.io/library/nginx:1.27-alpine')
   const [servicePort, setServicePort] = useState(8080)
@@ -68,6 +87,22 @@ export default function App() {
           setApps(data)
           setSelectedApp(data.length > 0 ? data[0] : null)
         }
+      })
+      .catch((err: unknown) => {
+        if (!ignore) setErrorMsg((err as Error).message)
+      })
+    return () => {
+      ignore = true
+    }
+  }, [activeWorkspace, token])
+
+  // Fetch repositories when active workspace changes
+  useEffect(() => {
+    if (!activeWorkspace) return
+    let ignore = false
+    listRepositories(token, activeWorkspace.id)
+      .then((data) => {
+        if (!ignore) setRepos(data)
       })
       .catch((err: unknown) => {
         if (!ignore) setErrorMsg((err as Error).message)
@@ -227,6 +262,95 @@ export default function App() {
       await rollbackRelease(token, selectedApp.id, targetReleaseId, idempKey)
       setNoticeMsg('Rollback initiated! Reverting application configuration.')
       await manualRefreshReleases()
+    } catch (err: unknown) {
+      setErrorMsg((err as Error).message)
+    }
+  }
+
+  const handleConnectRepository = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!activeWorkspace || !newRepoName.trim() || !newRepoUrl.trim()) return
+    setErrorMsg(null)
+    setIsConnectingRepo(true)
+    try {
+      const repo = await connectRepository(
+        token,
+        activeWorkspace.id,
+        newRepoName.trim(),
+        newRepoUrl.trim(),
+        newRepoSecret.trim() || 'default-secret',
+        newRepoBranch.trim() || 'main'
+      )
+      setRepos((prev) => [repo, ...prev])
+      setShowConnectRepoForm(false)
+      setNoticeMsg(`Repository '${repo.name}' connected. Webhook active at /v1/webhooks/github/${repo.id}`)
+
+      if (selectedApp && !selectedApp.repository_id) {
+        const updated = await updateApplication(token, selectedApp.id, { repository_id: repo.id })
+        setSelectedApp(updated)
+        setApps((prev) => prev.map((a) => (a.id === updated.id ? updated : a)))
+      }
+    } catch (err: unknown) {
+      setErrorMsg((err as Error).message)
+    } finally {
+      setIsConnectingRepo(false)
+    }
+  }
+
+  const handleLinkRepository = async (repoId: string) => {
+    if (!selectedApp) return
+    setErrorMsg(null)
+    try {
+      const updated = await updateApplication(token, selectedApp.id, { repository_id: repoId })
+      setSelectedApp(updated)
+      setApps((prev) => prev.map((a) => (a.id === updated.id ? updated : a)))
+      setNoticeMsg(`Linked repository to application '${selectedApp.name}'.`)
+    } catch (err: unknown) {
+      setErrorMsg((err as Error).message)
+    }
+  }
+
+  const handleTriggerBuild = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!selectedApp) return
+    setErrorMsg(null)
+    setIsTriggeringBuild(true)
+    try {
+      const rel = await triggerBuild(
+        token,
+        selectedApp.id,
+        buildCommitSha.trim() || undefined,
+        buildGitBranch.trim() || 'main',
+        buildCommitMsg.trim() || undefined
+      )
+      setNoticeMsg(`Build triggered for release #${rel.release_number}. Dispatching to BuildKit worker.`)
+      setBuildCommitSha('')
+      setBuildCommitMsg('')
+      await manualRefreshReleases()
+    } catch (err: unknown) {
+      setErrorMsg((err as Error).message)
+    } finally {
+      setIsTriggeringBuild(false)
+    }
+  }
+
+  const handleProcessBuild = async (releaseId: string, succeed: boolean) => {
+    setErrorMsg(null)
+    try {
+      const rel = await processBuild(
+        token,
+        releaseId,
+        succeed,
+        succeed ? undefined : 'Docker build failed: exit status 1 during npm run build'
+      )
+      setNoticeMsg(`Build processed for release #${rel.release_number}: status is now ${rel.status}`)
+      await manualRefreshReleases()
+      if (activeWorkspace) {
+        const freshApps = await listApplications(token, activeWorkspace.id)
+        setApps(freshApps)
+        const updatedSelected = freshApps.find((a) => a.id === selectedApp?.id)
+        if (updatedSelected) setSelectedApp(updatedSelected)
+      }
     } catch (err: unknown) {
       setErrorMsg((err as Error).message)
     }
@@ -756,6 +880,174 @@ export default function App() {
                   })()}
                 </div>
 
+                {/* Milestone M3: Source-to-URL Git Repository & Build Card */}
+                <div className="content-card">
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <h3 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--slate-800)', margin: 0 }}>
+                      Source Code & Automated Builds
+                    </h3>
+                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                      <button
+                        className="btn-action-subtle"
+                        onClick={() => setShowConnectRepoForm(!showConnectRepoForm)}
+                      >
+                        {showConnectRepoForm ? 'Cancel' : '+ Connect Repository'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Connect Repository Form Modal/Block */}
+                  {showConnectRepoForm && (
+                    <div className="repo-card-box" style={{ background: 'var(--color-white)' }}>
+                      <span style={{ fontWeight: 600, fontSize: '0.85rem', color: 'var(--slate-800)' }}>
+                        Connect Git Repository to Workspace
+                      </span>
+                      <form onSubmit={handleConnectRepository} className="form-grid-layout" style={{ marginTop: '0.5rem' }}>
+                        <div className="input-field-group">
+                          <label className="input-label-clean">Repository Name</label>
+                          <input
+                            className="input-control-clean"
+                            value={newRepoName}
+                            onChange={(e) => setNewRepoName(e.target.value)}
+                            placeholder="e.g. backend-api"
+                            required
+                          />
+                        </div>
+                        <div className="input-field-group">
+                          <label className="input-label-clean">Git Remote URL</label>
+                          <input
+                            className="input-control-clean"
+                            value={newRepoUrl}
+                            onChange={(e) => setNewRepoUrl(e.target.value)}
+                            placeholder="https://github.com/org/repo"
+                            required
+                          />
+                        </div>
+                        <div className="input-field-group">
+                          <label className="input-label-clean">Webhook HMAC Secret</label>
+                          <input
+                            className="input-control-clean"
+                            value={newRepoSecret}
+                            onChange={(e) => setNewRepoSecret(e.target.value)}
+                            placeholder="secret-token"
+                            required
+                          />
+                        </div>
+                        <div className="input-field-group">
+                          <label className="input-label-clean">Default Branch</label>
+                          <input
+                            className="input-control-clean"
+                            value={newRepoBranch}
+                            onChange={(e) => setNewRepoBranch(e.target.value)}
+                            placeholder="main"
+                            required
+                          />
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'flex-end' }}>
+                          <button
+                            type="submit"
+                            className="btn-action-emerald"
+                            disabled={isConnectingRepo}
+                          >
+                            {isConnectingRepo ? 'Connecting...' : 'Connect & Link Repo'}
+                          </button>
+                        </div>
+                      </form>
+                    </div>
+                  )}
+
+                  {/* Repository Details and Trigger Build */}
+                  {selectedApp.repository_id ? (
+                    (() => {
+                      const repo = repos.find((r) => r.id === selectedApp.repository_id)
+                      return (
+                        <div className="repo-card-box">
+                          <div className="repo-meta-row">
+                            <span className="git-badge">
+                              📦 {repo ? repo.name : `Repo ${selectedApp.repository_id.slice(0, 8)}`}
+                            </span>
+                            <span className="git-badge">
+                              🌿 branch: {selectedApp.git_branch || 'main'}
+                            </span>
+                            {repo && (
+                              <a
+                                href={repo.repo_url}
+                                target="_blank"
+                                rel="noreferrer"
+                                style={{ fontSize: '0.82rem', color: 'var(--blue-600)', textDecoration: 'none' }}
+                              >
+                                {repo.repo_url} ↗
+                              </a>
+                            )}
+                            <span className="webhook-badge">
+                              🔔 Webhook: /v1/webhooks/github/{selectedApp.repository_id}
+                            </span>
+                          </div>
+
+                          {/* Trigger Build Form */}
+                          <form onSubmit={handleTriggerBuild} style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'flex-end', marginTop: '0.25rem' }}>
+                            <div className="input-field-group" style={{ flex: '1', minWidth: '130px' }}>
+                              <label className="input-label-clean">Git Branch / Ref</label>
+                              <input
+                                className="input-control-clean"
+                                value={buildGitBranch}
+                                onChange={(e) => setBuildGitBranch(e.target.value)}
+                                placeholder="main"
+                                required
+                              />
+                            </div>
+                            <div className="input-field-group" style={{ flex: '1.5', minWidth: '180px' }}>
+                              <label className="input-label-clean">Commit SHA (optional)</label>
+                              <input
+                                className="input-control-clean"
+                                value={buildCommitSha}
+                                onChange={(e) => setBuildCommitSha(e.target.value)}
+                                placeholder="Auto-generated if empty"
+                              />
+                            </div>
+                            <div className="input-field-group" style={{ flex: '2', minWidth: '220px' }}>
+                              <label className="input-label-clean">Commit Message (optional)</label>
+                              <input
+                                className="input-control-clean"
+                                value={buildCommitMsg}
+                                onChange={(e) => setBuildCommitMsg(e.target.value)}
+                                placeholder="e.g. Update user dashboard styling"
+                              />
+                            </div>
+                            <button
+                              type="submit"
+                              className="btn-action-primary"
+                              disabled={isTriggeringBuild}
+                            >
+                              {isTriggeringBuild ? 'Dispatching...' : '⚡ Trigger Source Build'}
+                            </button>
+                          </form>
+                        </div>
+                      )
+                    })()
+                  ) : (
+                    <div className="repo-card-box" style={{ textAlign: 'center', padding: '1.25rem' }}>
+                      <p style={{ margin: 0, fontSize: '0.875rem', color: 'var(--slate-600)' }}>
+                        No Git repository connected to this application. Connect a repository above or link an existing one.
+                      </p>
+                      {repos.length > 0 && (
+                        <div style={{ marginTop: '0.75rem', display: 'flex', justifyContent: 'center', gap: '0.5rem', alignItems: 'center' }}>
+                          <span style={{ fontSize: '0.8rem', color: 'var(--slate-500)' }}>Link existing repository:</span>
+                          {repos.map((r) => (
+                            <button
+                              key={r.id}
+                              className="btn-action-subtle"
+                              onClick={() => handleLinkRepository(r.id)}
+                            >
+                              🔗 {r.name}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
                 {/* Deploy New Release Section */}
                 <div className="content-card">
                   <h3 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--slate-800)' }}>
@@ -817,15 +1109,19 @@ export default function App() {
                       <thead>
                         <tr>
                           <th>Release #</th>
-                          <th>Image Digest</th>
+                          <th>Source / Commit</th>
+                          <th>Image Artifact</th>
                           <th>Status</th>
+                          <th>Duration</th>
                           <th>Created</th>
-                          <th>Rollback Action</th>
+                          <th>Actions</th>
                         </tr>
                       </thead>
                       <tbody>
                         {releases.map((rel) => {
                           const isCurrent = selectedApp.current_release_id === rel.id
+                          const isBuilding = rel.status === 'REQUESTED' || rel.status === 'BUILDING'
+                          const isFailed = rel.status === 'BUILD_FAILED' || rel.status === 'DEPLOY_FAILED'
                           return (
                             <tr key={rel.id}>
                               <td>
@@ -840,27 +1136,100 @@ export default function App() {
                                 )}
                               </td>
                               <td>
-                                <code style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>
-                                  {rel.image_digest}
-                                </code>
+                                {rel.commit_sha ? (
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                                    <span className="git-badge" style={{ fontSize: '0.72rem' }}>
+                                      {rel.git_ref || 'main'} @ {rel.commit_sha.slice(0, 7)}
+                                    </span>
+                                    {rel.commit_message && (
+                                      <span
+                                        style={{
+                                          fontSize: '0.75rem',
+                                          color: 'var(--slate-500)',
+                                          maxWidth: '200px',
+                                          overflow: 'hidden',
+                                          textOverflow: 'ellipsis',
+                                          whiteSpace: 'nowrap',
+                                        }}
+                                        title={rel.commit_message}
+                                      >
+                                        {rel.commit_message}
+                                      </span>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <span style={{ fontSize: '0.75rem', color: 'var(--slate-400)' }}>Direct Deploy</span>
+                                )}
+                              </td>
+                              <td>
+                                {rel.image_digest === 'pending' ? (
+                                  <span style={{ color: 'var(--brown-600)', fontStyle: 'italic', fontSize: '0.8rem' }}>
+                                    ⏳ build pending...
+                                  </span>
+                                ) : (
+                                  <code style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>
+                                    {rel.image_digest}
+                                  </code>
+                                )}
                               </td>
                               <td>
                                 <span className={`status-pill-clean ${rel.status.toLowerCase()}`}>
                                   {rel.status}
                                 </span>
+                                {isFailed && rel.status_reason && (
+                                  <div
+                                    style={{
+                                      fontSize: '0.7rem',
+                                      color: '#be123c',
+                                      marginTop: '0.25rem',
+                                      maxWidth: '180px',
+                                      overflow: 'hidden',
+                                      textOverflow: 'ellipsis',
+                                      whiteSpace: 'nowrap',
+                                    }}
+                                    title={rel.status_reason}
+                                  >
+                                    ⚠️ {rel.status_reason}
+                                  </div>
+                                )}
+                              </td>
+                              <td style={{ fontSize: '0.8rem', color: 'var(--slate-600)', fontFamily: 'var(--font-mono)' }}>
+                                {rel.build_duration_ms ? `${(rel.build_duration_ms / 1000).toFixed(1)}s` : '—'}
                               </td>
                               <td style={{ fontSize: '0.8rem', color: 'var(--slate-500)' }}>
                                 {new Date(rel.created_at).toLocaleTimeString()}
                               </td>
                               <td>
-                                {!isCurrent && (
-                                  <button
-                                    className="btn-action-brown"
-                                    onClick={() => handleRollbackRelease(rel.id)}
-                                  >
-                                    Rollback ↺
-                                  </button>
-                                )}
+                                <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+                                  {isBuilding && (
+                                    <>
+                                      <button
+                                        className="btn-action-emerald"
+                                        style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
+                                        onClick={() => handleProcessBuild(rel.id, true)}
+                                        title="Simulate BuildKit completion"
+                                      >
+                                        ✓ Pass Build
+                                      </button>
+                                      <button
+                                        className="btn-action-danger"
+                                        style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
+                                        onClick={() => handleProcessBuild(rel.id, false)}
+                                        title="Simulate build error"
+                                      >
+                                        ✕ Fail Build
+                                      </button>
+                                    </>
+                                  )}
+                                  {!isCurrent && rel.status === 'HEALTHY' && (
+                                    <button
+                                      className="btn-action-brown"
+                                      onClick={() => handleRollbackRelease(rel.id)}
+                                    >
+                                      Rollback ↺
+                                    </button>
+                                  )}
+                                </div>
                               </td>
                             </tr>
                           )

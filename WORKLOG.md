@@ -1773,6 +1773,35 @@ Following project review of `18a3a4e..816cc4a`, all required fixes were implemen
   2. **Master Plan Transition:** Collapsed A.3 M2 to closed status in `MASTER-PLAN.md`; advanced current position to Milestone M3 (open).
   3. **Quality Gates & CI:** CI run `36723651517` 100% green; full test suite passing.
 
+### [2026-09-30T18:15:00Z] Phase 3 / Milestone M3: Formal Closure & Transition to M4
+
+- **Milestone:** P3 / M3 (Source-to-URL)
+- **Status:** COMPLETED & CLOSED
+- **Deliverables & Evidence:**
+  1. **All 4 Acceptance Criteria Verified (MASTER-PLAN.md §A.4):**
+     - Two commits produce traceable releases (`test_m3_two_commits_produce_traceable_releases`).
+     - A failed build preserves the currently serving application (`test_m3_failed_build_preserves_currently_serving_application`).
+     - A duplicate webhook does not duplicate a build (`test_m3_duplicate_webhook_does_not_duplicate_build`).
+     - Authoritative evidence record committed to `docs/evidence/M3.md`.
+  2. **Components Delivered:**
+     - Database migration `0005_source_builds_and_repos.py` introducing `repositories` and `webhook_deliveries` tables, plus application and release build metadata columns.
+     - Pydantic models & OpenAPI 3.1 specification sync for `repositories`, `webhooks`, and `builds`.
+     - HMAC-SHA256 signature verification and delivery deduplication on GitHub webhooks.
+     - Scheduler admission protection (`image_digest != 'pending'`) in Go runtime store.
+     - Minimalist UI UX Pro Max frontend enhancements in `apps/web` (repository card, trigger build form, enhanced releases revision history, and interactive build simulator).
+  3. **Quality Gates & Verification:**
+     - Automated test suite `apps/api/tests/test_m3_source_to_url.py`: 5/5 passed.
+     - Event contract suite `apps/api/tests/test_contracts.py`: 7/7 passed.
+     - Application endpoints suite `apps/api/tests/test_application_endpoints.py`: 3/3 passed.
+     - OpenAPI schema validation `contracts/openapi/v1.yaml`: OK (0 errors).
+     - Database schema drift `alembic check`: OK (zero drift).
+     - Python linters & type checker: `ruff` (all checks passed), `mypy` (0 issues in 46 files).
+     - Go runtime test suite: 9/9 packages passed (100%).
+     - Web dashboard: `oxlint` (0 errors), `npm run build` (compiled cleanly).
+  4. **Master Plan Transition:**
+     - Collapsed A.4 M3 to closed status in `MASTER-PLAN.md`.
+     - Advanced current position to `HamiCloud M4 — open`.
+
 
 
 

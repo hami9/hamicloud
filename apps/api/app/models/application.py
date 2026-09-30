@@ -8,6 +8,7 @@ from app.db.base import Base, SqlEnum, TimestampMixin, UUIDPrimaryKeyMixin
 
 if TYPE_CHECKING:
     from app.models.release import Release
+    from app.models.repository import Repository
     from app.models.workspace import Workspace
 
 
@@ -32,8 +33,15 @@ class Application(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     current_release_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         Uuid, ForeignKey("releases.id", ondelete="SET NULL", use_alter=True), nullable=True
     )
+    repository_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        Uuid, ForeignKey("repositories.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    dockerfile_path: Mapped[str] = mapped_column(String(255), nullable=False, default="Dockerfile")
+    context_dir: Mapped[str] = mapped_column(String(255), nullable=False, default=".")
+    git_branch: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, default="main")
 
     workspace: Mapped["Workspace"] = relationship("Workspace", back_populates="applications")
+    repository: Mapped[Optional["Repository"]] = relationship("Repository", back_populates="applications")
     releases: Mapped[List["Release"]] = relationship(
         "Release",
         back_populates="application",
@@ -44,4 +52,3 @@ class Application(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __table_args__ = (
         UniqueConstraint("workspace_id", "slug", name="uq_application_workspace_slug"),
     )
-

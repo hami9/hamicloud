@@ -88,11 +88,13 @@ func (s *PostgresStore) ScanUnadmittedReleases(ctx context.Context, limit int) (
 		JOIN applications a ON a.id = r.application_id
 		JOIN workspaces w ON w.id = r.workspace_id
 		WHERE r.status IN ('IMAGE_READY', 'REQUESTED')
+		  AND r.image_digest != 'pending'
 		  AND r.release_number = (
 		      SELECT MAX(r2.release_number)
 		      FROM releases r2
 		      WHERE r2.application_id = r.application_id
 		        AND r2.status IN ('IMAGE_READY', 'REQUESTED')
+		        AND r2.image_digest != 'pending'
 		  )
 		  AND NOT EXISTS (
 		      SELECT 1 FROM execution_intents ei

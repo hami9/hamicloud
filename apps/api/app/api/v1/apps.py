@@ -30,8 +30,11 @@ from app.schemas.application import (
     ReleaseListResponse,
     ReleaseResponse,
     RollbackRequest,
+    UpdateApplicationRequest,
 )
 from app.schemas.common import AcceptedOperationResponse
+from app.schemas.repository import TriggerBuildRequest
+from app.services.build_service import BuildService
 
 router = APIRouter(tags=["Applications"])
 
@@ -69,6 +72,10 @@ async def create_application(
         slug=payload.slug,
         workload_type=payload.workload_type,
         desired_generation=1,
+        repository_id=payload.repository_id,
+        dockerfile_path=payload.dockerfile_path,
+        context_dir=payload.context_dir,
+        git_branch=payload.git_branch,
     )
     db.add(app)
     try:
@@ -94,6 +101,10 @@ async def create_application(
         workload_type=app.workload_type.value,
         desired_generation=app.desired_generation,
         current_release_id=app.current_release_id,
+        repository_id=app.repository_id,
+        dockerfile_path=app.dockerfile_path,
+        context_dir=app.context_dir,
+        git_branch=app.git_branch,
         created_at=app.created_at,
     )
 
@@ -406,6 +417,11 @@ async def list_releases(
             config_json=r.config_json or {},
             status=r.status,
             status_reason=r.status_reason,
+            commit_sha=r.commit_sha,
+            git_ref=r.git_ref,
+            commit_message=r.commit_message,
+            build_duration_ms=r.build_duration_ms,
+            build_logs=r.build_logs,
             created_at=r.created_at,
         )
         for r in releases
@@ -457,6 +473,10 @@ async def list_workspace_applications(
             workload_type=app.workload_type.value,
             desired_generation=app.desired_generation,
             current_release_id=app.current_release_id,
+            repository_id=app.repository_id,
+            dockerfile_path=app.dockerfile_path,
+            context_dir=app.context_dir,
+            git_branch=app.git_branch,
             created_at=app.created_at,
         )
         for app in apps
@@ -495,5 +515,224 @@ async def get_application(
         workload_type=app.workload_type.value,
         desired_generation=app.desired_generation,
         current_release_id=app.current_release_id,
+        repository_id=app.repository_id,
+        dockerfile_path=app.dockerfile_path,
+        context_dir=app.context_dir,
+        git_branch=app.git_branch,
         created_at=app.created_at,
+    )
+
+
+@router.patch(
+    "/apps/{app_id}",
+    response_model=ApplicationResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def update_application(
+    app_id: uuid.UUID,
+    payload: UpdateApplicationRequest,
+    caller: Caller = Depends(get_caller),
+    db: AsyncSession = Depends(get_db),
+) -> ApplicationResponse:
+    stmt = select(Application).where(Application.id == app_id)
+    app = (await db.execute(stmt)).scalar_one_or_none()
+    if not app:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Application not found",
+        )
+
+    await authorize_workspace_access(
+        db, caller, app.workspace_id, min_role=WorkspaceRole.DEVELOPER, not_found_detail="Application not found"
+    )
+
+    if payload.repository_id is not None:
+        from app.models.repository import Repository
+        repo = (
+            await db.execute(
+                select(Repository).where(
+                    Repository.id == payload.repository_id,
+                    Repository.workspace_id == app.workspace_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if not repo:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Repository not found in this workspace",
+            )
+        app.repository_id = payload.repository_id
+    elif "repository_id" in payload.model_fields_set and payload.repository_id is None:
+        app.repository_id = None
+
+    if payload.name is not None:
+        app.name = payload.name
+    if payload.dockerfile_path is not None:
+        app.dockerfile_path = payload.dockerfile_path
+    if payload.context_dir is not None:
+        app.context_dir = payload.context_dir
+    if payload.git_branch is not None:
+        app.git_branch = payload.git_branch
+
+    await db.commit()
+    await db.refresh(app)
+
+    return ApplicationResponse(
+        id=app.id,
+        workspace_id=app.workspace_id,
+        name=app.name,
+        slug=app.slug,
+        workload_type=app.workload_type.value,
+        desired_generation=app.desired_generation,
+        current_release_id=app.current_release_id,
+        repository_id=app.repository_id,
+        dockerfile_path=app.dockerfile_path,
+        context_dir=app.context_dir,
+        git_branch=app.git_branch,
+        created_at=app.created_at,
+    )
+
+
+@router.post(
+    "/apps/{app_id}/builds",
+    response_model=ReleaseResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def trigger_build(
+    app_id: uuid.UUID,
+    payload: TriggerBuildRequest,
+    caller: Caller = Depends(get_caller),
+    db: AsyncSession = Depends(get_db),
+) -> ReleaseResponse:
+    app = (
+        await db.execute(select(Application).where(Application.id == app_id))
+    ).scalar_one_or_none()
+    if not app:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Application not found",
+        )
+
+    await authorize_workspace_access(
+        db, caller, app.workspace_id, min_role=WorkspaceRole.DEVELOPER, not_found_detail="Application not found"
+    )
+
+    if not app.repository_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Application has no connected Git repository",
+        )
+
+    rel_max_stmt = select(func.coalesce(func.max(Release.release_number), 0)).where(
+        Release.application_id == app.id
+    )
+    release_max = (await db.execute(rel_max_stmt)).scalar() or 0
+    next_release_number = release_max + 1
+
+    commit_sha = payload.commit_sha or uuid.uuid4().hex[:40]
+    git_ref = payload.git_ref or app.git_branch or "main"
+
+    latest_rel_stmt = (
+        select(Release)
+        .where(Release.application_id == app.id)
+        .order_by(Release.release_number.desc())
+        .limit(1)
+    )
+    latest_rel = (await db.execute(latest_rel_stmt)).scalar_one_or_none()
+    config_json = latest_rel.config_json if latest_rel else {"port": 8080, "health_path": "/healthz"}
+
+    release = Release(
+        id=uuid.uuid4(),
+        application_id=app.id,
+        workspace_id=app.workspace_id,
+        repository_id=app.repository_id,
+        release_number=next_release_number,
+        commit_sha=commit_sha,
+        git_ref=git_ref,
+        commit_message=payload.commit_message or "Manual trigger build",
+        image_digest="pending",
+        config_json=config_json,
+        status=ReleaseStatus.REQUESTED,
+    )
+    db.add(release)
+
+    outbox_evt = create_outbox_event(
+        workspace_id=app.workspace_id,
+        topic=OutboxTopic.APP_BUILD_REQUESTED,
+        payload={
+            "release_id": str(release.id),
+            "application_id": str(app.id),
+            "workspace_id": str(app.workspace_id),
+            "repository_id": str(app.repository_id),
+            "commit_sha": commit_sha,
+            "git_ref": git_ref,
+            "dockerfile_path": app.dockerfile_path,
+            "context_dir": app.context_dir,
+        },
+    )
+    db.add(outbox_evt)
+    await db.commit()
+    await db.refresh(release)
+
+    return ReleaseResponse(
+        id=release.id,
+        application_id=release.application_id,
+        workspace_id=release.workspace_id,
+        release_number=release.release_number,
+        image_digest=release.image_digest,
+        config_json=release.config_json or {},
+        status=release.status,
+        status_reason=release.status_reason,
+        commit_sha=release.commit_sha,
+        git_ref=release.git_ref,
+        commit_message=release.commit_message,
+        build_duration_ms=release.build_duration_ms,
+        build_logs=release.build_logs,
+        created_at=release.created_at,
+    )
+
+
+@router.post(
+    "/releases/{release_id}/process-build",
+    response_model=ReleaseResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def process_release_build(
+    release_id: uuid.UUID,
+    succeed: bool = Query(True),
+    failure_reason: Optional[str] = Query(None),
+    caller: Caller = Depends(get_caller),
+    db: AsyncSession = Depends(get_db),
+) -> ReleaseResponse:
+    release = (
+        await db.execute(select(Release).where(Release.id == release_id))
+    ).scalar_one_or_none()
+    if not release:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Release not found",
+        )
+
+    await authorize_workspace_access(
+        db, caller, release.workspace_id, min_role=WorkspaceRole.DEVELOPER, not_found_detail="Release not found"
+    )
+
+    updated_release = await BuildService.process_build(
+        db, release_id, succeed=succeed, failure_reason=failure_reason
+    )
+    return ReleaseResponse(
+        id=updated_release.id,
+        application_id=updated_release.application_id,
+        workspace_id=updated_release.workspace_id,
+        release_number=updated_release.release_number,
+        image_digest=updated_release.image_digest,
+        config_json=updated_release.config_json or {},
+        status=updated_release.status,
+        status_reason=updated_release.status_reason,
+        commit_sha=updated_release.commit_sha,
+        git_ref=updated_release.git_ref,
+        commit_message=updated_release.commit_message,
+        build_duration_ms=updated_release.build_duration_ms,
+        build_logs=updated_release.build_logs,
+        created_at=updated_release.created_at,
     )

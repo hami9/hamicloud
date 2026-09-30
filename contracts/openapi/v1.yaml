@@ -230,6 +230,82 @@ paths:
         '405':
           $ref: '#/components/responses/405MethodNotAllowed'
 
+  /v1/workspaces/{workspace_id}/repositories:
+    get:
+      summary: List repositories in workspace
+      description: Retrieve all connected Git repositories for a workspace; requires VIEWER role or higher.
+      operationId: listRepositories
+      parameters:
+        - name: workspace_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+            example: "550e8400-e29b-41d4-a716-446655440000"
+      responses:
+        '200':
+          description: List of connected repositories
+          headers:
+            X-Correlation-ID:
+              $ref: '#/components/headers/X-Correlation-ID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RepositoryListResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+        '405':
+          $ref: '#/components/responses/405MethodNotAllowed'
+    post:
+      summary: Connect a Git repository to workspace
+      description: Connects a GitHub repository to workspace for automated builds; requires DEVELOPER role or higher.
+      operationId: createRepository
+      parameters:
+        - name: workspace_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+            example: "550e8400-e29b-41d4-a716-446655440000"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateRepositoryRequest'
+      responses:
+        '201':
+          description: Repository connected successfully
+          headers:
+            X-Correlation-ID:
+              $ref: '#/components/headers/X-Correlation-ID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RepositoryResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '409':
+          $ref: '#/components/responses/409Conflict'
+        '422':
+          $ref: '#/components/responses/422UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+        '405':
+          $ref: '#/components/responses/405MethodNotAllowed'
+
   /v1/workspaces/{workspace_id}/jobs:
     get:
       summary: List jobs in workspace
@@ -408,6 +484,46 @@ paths:
           $ref: '#/components/responses/403Forbidden'
         '404':
           $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+        '405':
+          $ref: '#/components/responses/405MethodNotAllowed'
+    patch:
+      summary: Update application details or linked repository
+      description: Update application configuration; requires DEVELOPER role or higher.
+      operationId: updateApplication
+      parameters:
+        - name: app_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+            example: "7ff5bafe-b321-4ab6-a9f9-9d3eb15feda3"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateApplicationRequest'
+      responses:
+        '200':
+          description: Application updated successfully
+          headers:
+            X-Correlation-ID:
+              $ref: '#/components/headers/X-Correlation-ID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApplicationResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '422':
+          $ref: '#/components/responses/422UnprocessableEntity'
         '500':
           $ref: '#/components/responses/500InternalServerError'
         '405':
@@ -594,6 +710,204 @@ paths:
           $ref: '#/components/responses/409Conflict'
         '422':
           $ref: '#/components/responses/422UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+        '405':
+          $ref: '#/components/responses/405MethodNotAllowed'
+
+  /v1/apps/{app_id}/builds:
+    post:
+      summary: Manually trigger a source build for an application
+      description: Triggers a BuildKit container image build from the connected Git repository; requires DEVELOPER role or higher.
+      operationId: triggerApplicationBuild
+      parameters:
+        - name: app_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+            example: "7ff5bafe-b321-4ab6-a9f9-9d3eb15feda3"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TriggerBuildRequest'
+      responses:
+        '202':
+          description: Build requested and release created in REQUESTED state
+          headers:
+            X-Correlation-ID:
+              $ref: '#/components/headers/X-Correlation-ID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReleaseResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '422':
+          $ref: '#/components/responses/422UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+        '405':
+          $ref: '#/components/responses/405MethodNotAllowed'
+
+  /v1/releases/{release_id}/process-build:
+    post:
+      summary: Process BuildKit build result
+      description: Internal/worker callback to report build success or failure; requires DEVELOPER role or higher.
+      operationId: processReleaseBuild
+      parameters:
+        - name: release_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+            example: "123e4567-e89b-12d3-a456-426614174000"
+        - name: succeed
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: true
+        - name: failure_reason
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Build processed and release updated
+          headers:
+            X-Correlation-ID:
+              $ref: '#/components/headers/X-Correlation-ID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReleaseResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+        '405':
+          $ref: '#/components/responses/405MethodNotAllowed'
+
+  /v1/repositories/{repository_id}:
+    get:
+      summary: Get repository details
+      description: Retrieve connected repository metadata; requires VIEWER role or higher in workspace.
+      operationId: getRepository
+      parameters:
+        - name: repository_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+            example: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+      responses:
+        '200':
+          description: Repository details
+          headers:
+            X-Correlation-ID:
+              $ref: '#/components/headers/X-Correlation-ID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RepositoryResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+        '405':
+          $ref: '#/components/responses/405MethodNotAllowed'
+
+  /v1/webhooks/github/{repository_id}:
+    post:
+      summary: GitHub Webhook receiver
+      description: Ingests signed GitHub webhook push events and triggers build pipelines. Unauthenticated by bearer token; authenticated via HMAC-SHA256 signature in X-Hub-Signature-256 header.
+      operationId: handleGithubWebhook
+      security: []
+      parameters:
+        - name: repository_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+            example: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+        - name: X-GitHub-Delivery
+          in: header
+          required: true
+          schema:
+            type: string
+            example: "72d3162e-cc78-11e3-81ab-4c9367dc0958"
+        - name: X-GitHub-Event
+          in: header
+          required: false
+          schema:
+            type: string
+            default: "push"
+            example: "push"
+        - name: X-Hub-Signature-256
+          in: header
+          required: true
+          schema:
+            type: string
+            example: "sha256=d57c292233604f3d2f2d93e25b16952d7e10c73e04eb9df69335ef076228383a"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Webhook processed, ping acknowledged, or duplicate delivery ignored
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  action:
+                    type: string
+        '202':
+          description: Webhook push accepted and build requested
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  action:
+                    type: string
+                  release_id:
+                    type: string
+                    format: uuid
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
         '500':
           $ref: '#/components/responses/500InternalServerError'
         '405':
@@ -1204,10 +1518,54 @@ components:
           type: string
           enum: [HTTP_SERVICE]
           example: "HTTP_SERVICE"
+        repository_id:
+          type: [string, 'null']
+          format: uuid
+          example: null
+        dockerfile_path:
+          type: string
+          default: "Dockerfile"
+          example: "Dockerfile"
+        context_dir:
+          type: string
+          default: "."
+          example: "."
+        git_branch:
+          type: [string, 'null']
+          default: "main"
+          example: "main"
       example:
         name: "Payment Service"
         slug: "payment-service"
         workload_type: "HTTP_SERVICE"
+
+    UpdateApplicationRequest:
+      type: object
+      properties:
+        name:
+          type: [string, 'null']
+          minLength: 1
+          maxLength: 100
+          example: "Payment Service"
+        repository_id:
+          type: [string, 'null']
+          format: uuid
+          example: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+        dockerfile_path:
+          type: [string, 'null']
+          maxLength: 255
+          example: "Dockerfile"
+        context_dir:
+          type: [string, 'null']
+          maxLength: 255
+          example: "."
+        git_branch:
+          type: [string, 'null']
+          maxLength: 100
+          example: "main"
+      example:
+        repository_id: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+        git_branch: "main"
 
     ApplicationResponse:
       type: object
@@ -1237,6 +1595,19 @@ components:
           type: [string, 'null']
           format: uuid
           example: null
+        repository_id:
+          type: [string, 'null']
+          format: uuid
+          example: null
+        dockerfile_path:
+          type: string
+          example: "Dockerfile"
+        context_dir:
+          type: string
+          example: "."
+        git_branch:
+          type: [string, 'null']
+          example: "main"
         created_at:
           type: string
           format: date-time
@@ -1249,6 +1620,10 @@ components:
         workload_type: "HTTP_SERVICE"
         desired_generation: 1
         current_release_id: null
+        repository_id: null
+        dockerfile_path: "Dockerfile"
+        context_dir: "."
+        git_branch: "main"
         created_at: "2026-09-19T12:00:00Z"
 
     ApplicationListResponse:
@@ -1571,6 +1946,21 @@ components:
         status_reason:
           type: [string, 'null']
           example: null
+        commit_sha:
+          type: [string, 'null']
+          example: null
+        git_ref:
+          type: [string, 'null']
+          example: null
+        commit_message:
+          type: [string, 'null']
+          example: null
+        build_duration_ms:
+          type: [integer, 'null']
+          example: null
+        build_logs:
+          type: [string, 'null']
+          example: null
         created_at:
           type: string
           format: date-time
@@ -1611,3 +2001,107 @@ components:
             status: "IMAGE_READY"
             created_at: "2026-09-19T12:00:00Z"
         next_cursor: null
+
+    CreateRepositoryRequest:
+      type: object
+      required: [name, repo_url, webhook_secret]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          example: "payment-service"
+        repo_url:
+          type: string
+          minLength: 1
+          maxLength: 255
+          example: "https://github.com/example-org/payment-service"
+        webhook_secret:
+          type: string
+          minLength: 1
+          maxLength: 255
+          example: "whsec_01HVG89ABCDEF1234567890"
+        default_branch:
+          type: string
+          maxLength: 100
+          default: "main"
+          example: "main"
+      example:
+        name: "payment-service"
+        repo_url: "https://github.com/example-org/payment-service"
+        webhook_secret: "whsec_01HVG89ABCDEF1234567890"
+        default_branch: "main"
+
+    RepositoryResponse:
+      type: object
+      required: [id, workspace_id, name, repo_url, default_branch, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+        workspace_id:
+          type: string
+          format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        name:
+          type: string
+          example: "payment-service"
+        repo_url:
+          type: string
+          example: "https://github.com/example-org/payment-service"
+        default_branch:
+          type: string
+          example: "main"
+        created_at:
+          type: string
+          format: date-time
+          example: "2026-09-19T12:00:00Z"
+      example:
+        id: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+        workspace_id: "550e8400-e29b-41d4-a716-446655440000"
+        name: "payment-service"
+        repo_url: "https://github.com/example-org/payment-service"
+        default_branch: "main"
+        created_at: "2026-09-19T12:00:00Z"
+
+    RepositoryListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/RepositoryResponse'
+        next_cursor:
+          type: [string, 'null']
+          example: null
+      example:
+        items:
+          - id: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+            workspace_id: "550e8400-e29b-41d4-a716-446655440000"
+            name: "payment-service"
+            repo_url: "https://github.com/example-org/payment-service"
+            default_branch: "main"
+            created_at: "2026-09-19T12:00:00Z"
+        next_cursor: null
+
+    TriggerBuildRequest:
+      type: object
+      properties:
+        commit_sha:
+          type: [string, 'null']
+          maxLength: 40
+          example: "7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b"
+        git_ref:
+          type: [string, 'null']
+          maxLength: 100
+          example: "main"
+        commit_message:
+          type: [string, 'null']
+          maxLength: 255
+          example: "feat: add user authentication"
+      example:
+        commit_sha: "7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b"
+        git_ref: "main"
+        commit_message: "feat: add user authentication"

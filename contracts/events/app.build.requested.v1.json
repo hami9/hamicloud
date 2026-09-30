@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hamicloud.dev/schemas/events/app.build.requested.v1.json",
+  "title": "AppBuildRequestedV1",
+  "type": "object",
+  "required": [
+    "event_id",
+    "timestamp",
+    "workspace_id",
+    "application_id",
+    "release_id",
+    "repository_id",
+    "commit_sha",
+    "git_ref"
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "workspace_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "application_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "release_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "repository_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "repo_url": {
+      "type": "string"
+    },
+    "commit_sha": {
+      "type": "string"
+    },
+    "git_ref": {
+      "type": "string",
+      "default": "main"
+    },
+    "dockerfile_path": {
+      "type": "string",
+      "default": "Dockerfile"
+    },
+    "context_dir": {
+      "type": "string",
+      "default": "."
+    }
+  },
+  "additionalProperties": false
+}

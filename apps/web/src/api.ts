@@ -13,6 +13,19 @@ export interface Application {
   workload_type: string
   desired_generation: number
   current_release_id: string | null
+  repository_id?: string | null
+  dockerfile_path?: string
+  context_dir?: string
+  git_branch?: string | null
+  created_at: string
+}
+
+export interface Repository {
+  id: string
+  workspace_id: string
+  name: string
+  repo_url: string
+  default_branch: string
   created_at: string
 }
 
@@ -29,6 +42,11 @@ export interface Release {
   }
   status: 'REQUESTED' | 'BUILDING' | 'IMAGE_READY' | 'DEPLOYING' | 'HEALTHY' | 'BUILD_FAILED' | 'DEPLOY_FAILED'
   status_reason?: string | null
+  commit_sha?: string | null
+  git_ref?: string | null
+  commit_message?: string | null
+  build_duration_ms?: number | null
+  build_logs?: string | null
   created_at: string
 }
 
@@ -52,6 +70,7 @@ function getHeaders(token: string, idempotencyKey?: string): HeadersInit {
   }
   return headers
 }
+
 async function extractErrorMessage(res: Response, fallback: string): Promise<string> {
   try {
     const data = await res.json()
@@ -87,12 +106,23 @@ export async function createApplication(
   token: string,
   workspaceId: string,
   name: string,
-  slug: string
+  slug: string,
+  repositoryId?: string | null,
+  dockerfilePath: string = 'Dockerfile',
+  contextDir: string = '.',
+  gitBranch: string = 'main'
 ): Promise<Application> {
   const res = await fetch(`/v1/workspaces/${workspaceId}/apps`, {
     method: 'POST',
     headers: getHeaders(token),
-    body: JSON.stringify({ name, slug, workload_type: 'HTTP_SERVICE' }),
+    body: JSON.stringify({
+      name,
+      slug,
+      repository_id: repositoryId || null,
+      dockerfile_path: dockerfilePath,
+      context_dir: contextDir,
+      git_branch: gitBranch,
+    }),
   })
   if (!res.ok) {
     const msg = await extractErrorMessage(res, 'Failed to create application')
@@ -114,13 +144,24 @@ export async function listApplications(token: string, workspaceId: string): Prom
   return data.items || []
 }
 
-export async function getApplication(token: string, appId: string): Promise<Application> {
+export async function updateApplication(
+  token: string,
+  appId: string,
+  payload: {
+    name?: string
+    repository_id?: string | null
+    dockerfile_path?: string
+    context_dir?: string
+    git_branch?: string
+  }
+): Promise<Application> {
   const res = await fetch(`/v1/apps/${appId}`, {
-    method: 'GET',
+    method: 'PATCH',
     headers: getHeaders(token),
+    body: JSON.stringify(payload),
   })
   if (!res.ok) {
-    const msg = await extractErrorMessage(res, 'Failed to get application')
+    const msg = await extractErrorMessage(res, 'Failed to update application')
     throw new Error(msg)
   }
   return res.json()
@@ -175,6 +216,89 @@ export async function rollbackRelease(
   return res.json()
 }
 
+export async function connectRepository(
+  token: string,
+  workspaceId: string,
+  name: string,
+  repoUrl: string,
+  webhookSecret: string,
+  defaultBranch: string = 'main'
+): Promise<Repository> {
+  const res = await fetch(`/v1/workspaces/${workspaceId}/repositories`, {
+    method: 'POST',
+    headers: getHeaders(token),
+    body: JSON.stringify({
+      name,
+      repo_url: repoUrl,
+      webhook_secret: webhookSecret,
+      default_branch: defaultBranch,
+    }),
+  })
+  if (!res.ok) {
+    const msg = await extractErrorMessage(res, 'Failed to connect repository')
+    throw new Error(msg)
+  }
+  return res.json()
+}
+
+export async function listRepositories(token: string, workspaceId: string): Promise<Repository[]> {
+  const res = await fetch(`/v1/workspaces/${workspaceId}/repositories`, {
+    method: 'GET',
+    headers: getHeaders(token),
+  })
+  if (!res.ok) {
+    const msg = await extractErrorMessage(res, 'Failed to list repositories')
+    throw new Error(msg)
+  }
+  const data = await res.json()
+  return data.items || []
+}
+
+export async function triggerBuild(
+  token: string,
+  appId: string,
+  commitSha?: string,
+  gitRef: string = 'main',
+  commitMessage?: string
+): Promise<Release> {
+  const res = await fetch(`/v1/apps/${appId}/builds`, {
+    method: 'POST',
+    headers: getHeaders(token),
+    body: JSON.stringify({
+      commit_sha: commitSha || null,
+      git_ref: gitRef,
+      commit_message: commitMessage || null,
+    }),
+  })
+  if (!res.ok) {
+    const msg = await extractErrorMessage(res, 'Failed to trigger build')
+    throw new Error(msg)
+  }
+  return res.json()
+}
+
+export async function processBuild(
+  token: string,
+  releaseId: string,
+  succeed: boolean = true,
+  failureReason?: string
+): Promise<Release> {
+  const params = new URLSearchParams()
+  params.set('succeed', String(succeed))
+  if (failureReason) {
+    params.set('failure_reason', failureReason)
+  }
+  const res = await fetch(`/v1/releases/${releaseId}/process-build?${params.toString()}`, {
+    method: 'POST',
+    headers: getHeaders(token),
+  })
+  if (!res.ok) {
+    const msg = await extractErrorMessage(res, 'Failed to process build')
+    throw new Error(msg)
+  }
+  return res.json()
+}
+
 export type JobState =
   | 'QUEUED'
   | 'ADMITTED'
@@ -182,7 +306,6 @@ export type JobState =
   | 'RUNNING'
   | 'SUCCEEDED'
   | 'RETRY_WAIT'
-  | 'RECOVERY_PENDING'
   | 'FAILED'
   | 'CANCEL_REQUESTED'
   | 'CANCELLED'
@@ -194,7 +317,7 @@ export interface JobAttempt {
   lease_epoch: number
   exit_code?: number | null
   failure_reason?: string | null
-  started_at?: string | null
+  started_at: string
   finished_at?: string | null
 }
 
@@ -256,6 +379,7 @@ export async function cancelJob(
   const res = await fetch(`/v1/jobs/${jobId}/cancel`, {
     method: 'POST',
     headers: getHeaders(token, idempotencyKey),
+    body: JSON.stringify({}),
   })
   if (!res.ok) {
     const msg = await extractErrorMessage(res, 'Failed to cancel job')
@@ -287,4 +411,3 @@ export async function downloadJobOutput(token: string, jobId: string): Promise<s
   }
   return res.text()
 }
-

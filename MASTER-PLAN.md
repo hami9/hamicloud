@@ -4,7 +4,7 @@ Single tracking file for both projects. It links the two roadmaps, fixes the exe
 
 **Status legend:** `[ ]` not started · `[~]` in progress · `[x]` closed with a committed evidence record
 
-**Current position:** HamiCloud M3 — open.
+**Current position:** HamiCloud M4 — open.
 
 ---
 
@@ -82,14 +82,11 @@ A closed milestone that later turns out to be wrong does not get its old checkli
 - **Closed Date:** 2026-09-30
 - **Evidence Record:** [`docs/evidence/M2.md`](docs/evidence/M2.md)
 
-## A.4 M3 — Source-to-URL `[ ]`
+## A.4 M3 — Source-to-URL `[x]`
 
-P3, 36–48 hours. Connected approved repository, signed webhook validation, commit resolution, isolated BuildKit task, registry push, digest-linked release.
-
-- [ ] Two commits produce traceable releases.
-- [ ] A failed build preserves the currently serving application.
-- [ ] A duplicate webhook does not duplicate a build.
-- [ ] Evidence record committed.
+- **Status:** Closed
+- **Closed Date:** 2026-09-30
+- **Evidence Record:** [`docs/evidence/M3.md`](docs/evidence/M3.md)
 
 ## A.5 M4 — Multi-user readiness `[ ]`
 

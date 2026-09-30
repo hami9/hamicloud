@@ -16,6 +16,9 @@ type Config struct {
 	NATSURL              string
 	WorkerID             string
 	ArtifactsDir         string
+	KubeconfigPath       string
+	KubeNamespace        string
+	IngressDomain        string
 	LeaseDuration        time.Duration
 	ReconciliationPeriod time.Duration
 	RunOnce              bool
@@ -63,12 +66,19 @@ func LoadFromEnv() (*Config, error) {
 		return nil, fmt.Errorf("invalid RECONCILIATION_PERIOD_SECONDS: %w", err)
 	}
 
+	kubeconfigPath := getEnv("KUBECONFIG", "")
+	kubeNamespace := getEnv("KUBE_NAMESPACE", "default")
+	ingressDomain := getEnv("INGRESS_DOMAIN", "")
+
 	return &Config{
 		Environment:          env,
 		DatabaseURL:          dbURL,
 		NATSURL:              natsURL,
 		WorkerID:             workerID,
 		ArtifactsDir:         absArtifactsDir,
+		KubeconfigPath:       kubeconfigPath,
+		KubeNamespace:        kubeNamespace,
+		IngressDomain:        ingressDomain,
 		LeaseDuration:        time.Duration(leaseSec) * time.Second,
 		ReconciliationPeriod: time.Duration(reconSec) * time.Second,
 		RunOnce:              getEnv("RUN_ONCE", "false") == "true",

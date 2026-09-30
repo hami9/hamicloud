@@ -40,18 +40,37 @@ func main() {
 	}
 	defer pgStore.Close()
 
-	runner, err := reconciler.NewHTTPProbeRunner(cfg.Environment, "127.0.0.1")
-	if err != nil {
-		logger.Error("Failed to initialize workload runner", "error", err)
-		os.Exit(1)
-	}
-	rec := reconciler.NewServiceReconciler(pgStore, runner, logger)
+	var runner reconciler.WorkloadRunner
+	var jobRunner reconciler.JobTaskRunner
 
-	jobRunner, err := reconciler.NewLocalProcessJobRunner(cfg.Environment, cfg.ArtifactsDir)
-	if err != nil {
-		logger.Error("Failed to initialize job runner", "error", err)
-		os.Exit(1)
+	kubeClient, kubeErr := reconciler.BuildKubeClient(cfg.KubeconfigPath)
+	if kubeErr == nil {
+		logger.Info("Connected to Kubernetes cluster", "namespace", cfg.KubeNamespace, "ingress_domain", cfg.IngressDomain)
+		runner = reconciler.NewKubeWorkloadRunner(kubeClient, cfg.KubeNamespace, cfg.IngressDomain)
+		jobRunner, err = reconciler.NewKubeJobTaskRunner(kubeClient, cfg.KubeNamespace, cfg.ArtifactsDir)
+		if err != nil {
+			logger.Error("Failed to initialize Kubernetes job runner", "error", err)
+			os.Exit(1)
+		}
+	} else {
+		if cfg.Environment != "development" {
+			logger.Error("Failed to initialize Kubernetes client in non-development environment", "error", kubeErr)
+			os.Exit(1)
+		}
+		logger.Warn("Kubernetes cluster unavailable; falling back to development-only HTTPProbeRunner and LocalProcessJobRunner", "warning", kubeErr)
+		runner, err = reconciler.NewHTTPProbeRunner(cfg.Environment, "127.0.0.1")
+		if err != nil {
+			logger.Error("Failed to initialize workload runner", "error", err)
+			os.Exit(1)
+		}
+		jobRunner, err = reconciler.NewLocalProcessJobRunner(cfg.Environment, cfg.ArtifactsDir)
+		if err != nil {
+			logger.Error("Failed to initialize job runner", "error", err)
+			os.Exit(1)
+		}
 	}
+
+	rec := reconciler.NewServiceReconciler(pgStore, runner, logger)
 	jobRec := reconciler.NewJobReconciler(pgStore, jobRunner, logger)
 
 	exec := executor.NewExecutor(pgStore, rec, cfg.WorkerID, cfg.LeaseDuration, logger)

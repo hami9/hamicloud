@@ -1677,3 +1677,29 @@ Following project review of `18a3a4e..816cc4a`, all required fixes were implemen
   2. **Decision D7 (Reference IdP Version):** Approved Keycloak 24.0.5 (`quay.io/keycloak/keycloak:24.0.5@sha256:f8ade94c1d0ad2f2fa7734a455fee5392764f402c43ca35e9af6bf63a2541dc9`) for development.
   3. **Decision D10 (Dev Database Reset):** Approved development database reset; verified zero drift against head migrations.
   4. **Roadmap API Rows (`HamiCloud-Roadmap.md`):** Formally approved `GET /v1/workspaces/{ws}/apps` (list applications), `GET /v1/apps/{app}` (inspect application), and `GET /v1/jobs/{job}/output` (download job output) into the public API contract table.
+
+### [2026-09-30T15:15:00Z] Phase 1/2 / Milestones M1/M2: Kubernetes Workload and Job Runners
+
+- **Milestones:** P1 / M1 (First Live Application) & P2 / M2 (Usable MVP)
+- **Status:** COMPLETED & VERIFIED
+- **Deliverables & Implementation:**
+  1. **Kubernetes Workload Runner (`runtime/internal/reconciler/kube_runner.go`):**
+     - Implemented `KubeWorkloadRunner` satisfying `WorkloadRunner` interface.
+     - Translates claimed releases into deterministic `apps/v1.Deployment`, `core/v1.Service`, and `networking/v1.Ingress` resources with RFC 1123 sanitization.
+     - Inspects deployment readiness via `ReadyReplicas > 0`, condition failure inspection, and pod container waiting/crash statuses.
+     - Provides clean teardown with background propagation.
+  2. **Kubernetes Job Runner (`runtime/internal/reconciler/kube_runner.go`):**
+     - Implemented `KubeJobTaskRunner` satisfying `JobTaskRunner` interface.
+     - Translates claimed job workloads into `batch/v1.Job` resources with `backoffLimit = 0`.
+     - Polls job completion/failure, fetches pod logs into `var/artifacts/{ws}/{job}/output.txt`, and extracts container termination exit codes.
+  3. **Client Factory & Executor Wiring (`runtime/internal/reconciler/kube_runner.go`, `cmd/hamicloud-executor/main.go`):**
+     - Added `BuildKubeClient` validating API server connectivity with 2s timeout.
+     - Wired executor `main.go` to use Kubernetes runners when cluster is available, falling back safely to `HTTPProbeRunner` and `LocalProcessJobRunner` in `ENVIRONMENT=development`.
+  4. **Test Verification (`runtime/internal/reconciler/kube_runner_test.go`):**
+     - Added 6 unit tests with `k8s.io/client-go/kubernetes/fake` covering deployment lifecycle, readiness progression, ingress routing, job success, job failure exit code extraction, and job timeouts.
+- **Verification Evidence:**
+  - Go tests: 100% PASS across all packages in `runtime/` (`bus`, `config`, `domain`, `executor`, `reconciler`, `scheduler`, `store`).
+  - Python tests: 109 passed, 1 skipped, 0 failed in 104s.
+  - Linters: `ruff check apps/api` passed, `mypy` clean on 33 files, `gofmt -l .` clean.
+  - Database schema: `alembic check` clean on both `hamicloud` and `hamicloud_test`.
+

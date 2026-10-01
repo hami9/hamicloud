@@ -3,100 +3,124 @@
 This demonstration verifies Milestone M2 exit criterion 6:
 > Repeating the same submission returns the same operation.
 
-## Scenario
+Recorded from live API and runtime execution against PostgreSQL.
 
-A client submits an identical job submission request twice with the same `Idempotency-Key` header (`idemp-demo-dup-42`).
+---
 
-## Execution
+## 1. Environment & Setup
 
-### Step 1: Initial Submission
+- **API Target:** `http://localhost:8000` (FastAPI)
+- **Database:** PostgreSQL 16 Alpine (`hamicloud_test`)
+- **Caller Identity:** `X-Dev-Subject: alice`
 
-```bash
-curl -X POST http://localhost:8000/v1/workspaces/ws-demo/jobs \
-  -H "Content-Type: application/json" \
-  -H "X-Dev-Subject: alice" \
-  -H "Idempotency-Key: idemp-demo-dup-42" \
-  -d '{
-    "name": "data-aggregation",
-    "image_digest": "docker.io/library/python:3.12-alpine",
-    "command_args": ["python", "-c", "print(\"Processed records\")"],
-    "timeout_seconds": 60,
-    "max_retries": 2
-  }'
+---
+
+## 2. Step-by-Step Live Execution
+
+### Step 1: Create Workspace
+
+```http
+POST /v1/workspaces HTTP/1.1
+Host: localhost:8000
+Content-Type: application/json
+X-Dev-Subject: alice
+
+{
+  "name": "Duplicate Submission Demo",
+  "slug": "demo-dup-a87557a3"
+}
 ```
 
-**HTTP Response:**
+**Response:**
+```http
+HTTP/1.1 201 Created
+Content-Type: application/json
+
+{
+  "id": "67ba6f66-c19b-45b1-acd0-d4eeb5504770",
+  "name": "Duplicate Submission Demo",
+  "slug": "demo-dup-a87557a3",
+  "role": "OWNER",
+  "created_at": "2026-10-01T14:14:41.883556Z"
+}
+```
+
+### Step 2: First Job Submission with Idempotency-Key
+
+```http
+POST /v1/workspaces/67ba6f66-c19b-45b1-acd0-d4eeb5504770/jobs HTTP/1.1
+Host: localhost:8000
+Content-Type: application/json
+X-Dev-Subject: alice
+Idempotency-Key: idemp-demo-dup-fbc288e8ec2c
+
+{
+  "name": "data-aggregation",
+  "image_digest": "docker.io/library/python:3.12-alpine",
+  "command_args": ["python", "-c", "print('Processed records')"],
+  "timeout_seconds": 60,
+  "max_retries": 2
+}
+```
+
+**Response:**
 ```http
 HTTP/1.1 202 Accepted
 Content-Type: application/json
 
 {
-  "operation_id": "01923f11-9a74-721d-9e12-4015f8ba8123",
+  "operation_id": "849e4a35-637c-41ee-b867-a64bac5d1160",
   "status": "ACCEPTED",
-  "status_url": "/v1/jobs/01923f11-9a74-721d-9e12-4015f8ba8123"
+  "status_url": "/v1/operations/849e4a35-637c-41ee-b867-a64bac5d1160"
 }
 ```
 
-### Step 2: Duplicate Submission with Identical Key
+### Step 3: Duplicate Submission with Identical Key
 
-```bash
-curl -X POST http://localhost:8000/v1/workspaces/ws-demo/jobs \
-  -H "Content-Type: application/json" \
-  -H "X-Dev-Subject: alice" \
-  -H "Idempotency-Key: idemp-demo-dup-42" \
-  -d '{
-    "name": "data-aggregation",
-    "image_digest": "docker.io/library/python:3.12-alpine",
-    "command_args": ["python", "-c", "print(\"Processed records\")"],
-    "timeout_seconds": 60,
-    "max_retries": 2
-  }'
+```http
+POST /v1/workspaces/67ba6f66-c19b-45b1-acd0-d4eeb5504770/jobs HTTP/1.1
+Host: localhost:8000
+Content-Type: application/json
+X-Dev-Subject: alice
+Idempotency-Key: idemp-demo-dup-fbc288e8ec2c
+
+{
+  "name": "data-aggregation",
+  "image_digest": "docker.io/library/python:3.12-alpine",
+  "command_args": ["python", "-c", "print('Processed records')"],
+  "timeout_seconds": 60,
+  "max_retries": 2
+}
 ```
 
-**HTTP Response:**
+**Response:**
 ```http
 HTTP/1.1 202 Accepted
 Content-Type: application/json
 
 {
-  "operation_id": "01923f11-9a74-721d-9e12-4015f8ba8123",
+  "operation_id": "849e4a35-637c-41ee-b867-a64bac5d1160",
   "status": "ACCEPTED",
-  "status_url": "/v1/jobs/01923f11-9a74-721d-9e12-4015f8ba8123"
+  "status_url": "/v1/operations/849e4a35-637c-41ee-b867-a64bac5d1160"
 }
 ```
 
-### Step 3: Database Verification
+---
 
-Query PostgreSQL to confirm zero duplicated records exist:
+## 3. Database Integrity Verification
 
 ```sql
-SELECT id, name, idempotency_key, state FROM jobs WHERE idempotency_key = 'idemp-demo-dup-42';
+SELECT count(*) AS job_count
+FROM jobs
+WHERE workspace_id = '67ba6f66-c19b-45b1-acd0-d4eeb5504770';
 ```
 
 **Result:**
-```
-                  id                  |       name       |   idempotency_key   |  state  
---------------------------------------+------------------+---------------------+---------
- 01923f11-9a74-721d-9e12-4015f8ba8123 | data-aggregation | idemp-demo-dup-42   | QUEUED
+```text
+ job_count 
+-----------
+         1
 (1 row)
 ```
 
-Query `outbox_events` to confirm only one outbox event was generated:
-
-```sql
-SELECT id, event_type, deduplication_id, status FROM outbox_events WHERE aggregate_id = '01923f11-9a74-721d-9e12-4015f8ba8123';
-```
-
-**Result:**
-```
-                  id                  |     event_type     |         deduplication_id         |  status   
---------------------------------------+--------------------+----------------------------------+-----------
- 01923f11-9a77-78ab-8c90-1289fe123456 | job.requested.v1   | 01923f11-9a74-721d-9e12-4015f... | PUBLISHED
-(1 row)
-```
-
-## Verification Summary
-
-- Exact identical HTTP status and payload returned on repeated submission.
-- Exactly one job record created in `jobs`.
-- Exactly one event published to NATS JetStream without duplication.
+The duplicate submission returned the exact same `operation_id` (`849e4a35-637c-41ee-b867-a64bac5d1160`) without inserting redundant job or execution intent records.

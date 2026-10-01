@@ -20,13 +20,13 @@ type mockStore struct {
 	renewBlocker chan struct{}
 }
 
-func (m *mockStore) ClaimNextServiceRelease(ctx context.Context, workerID string, leaseDuration time.Duration) (*store.ClaimedWorkload, error) {
+func (m *mockStore) ClaimNextServiceRelease(ctx context.Context, workerID string, leaseDuration time.Duration, workspaceIDs ...string) (*store.ClaimedWorkload, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.claimed, m.claimErr
 }
 
-func (m *mockStore) ClaimNextJobAttempt(ctx context.Context, workerID string, leaseDuration time.Duration) (*store.ClaimedJobWorkload, error) {
+func (m *mockStore) ClaimNextJobAttempt(ctx context.Context, workerID string, leaseDuration time.Duration, workspaceIDs ...string) (*store.ClaimedJobWorkload, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.claimedJob, m.claimErr

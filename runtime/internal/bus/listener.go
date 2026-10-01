@@ -14,11 +14,16 @@ type Wakeable interface {
 	Wake()
 }
 
-// EventListener subscribes to NATS JetStream event topics to trigger immediate reconciliation
+// EventListener subscribes to Core NATS subjects to trigger immediate wakeup
 // passes in registered scheduler and executor loops (ADR-0002).
 //
-// If NATS is unreachable or temporarily down, EventListener degrades gracefully: it logs a warning
-// and allows background workers to rely on their periodic database polling fallback.
+// Note: This uses Core NATS subject subscriptions for low-latency notifications, not JetStream
+// consumer state. Event durability, idempotency, and recovery guarantees are fully backed
+// by the transactional outbox and state machines in PostgreSQL.
+//
+// If NATS is unreachable or temporarily down at startup or during execution, EventListener
+// retries connection with backoff and degrades gracefully, allowing background workers to
+// continue operating on their periodic database polling fallback.
 type EventListener struct {
 	natsURL  string
 	subjects []string
@@ -61,8 +66,8 @@ func (l *EventListener) NotifyTargets() {
 	}
 }
 
-// Start connects to NATS and subscribes to event subjects. If NATS is unavailable,
-// it logs a warning and returns nil so control processes can continue operating on periodic polling.
+// Start connects to NATS and subscribes to event subjects. If NATS is unavailable at startup,
+// it retries connecting in the background with backoff while allowing control processes to rely on periodic polling.
 func (l *EventListener) Start(ctx context.Context) error {
 	opts := []nats.Option{
 		nats.Name("hamicloud-runtime-listener"),
@@ -76,14 +81,30 @@ func (l *EventListener) Start(ctx context.Context) error {
 		}),
 	}
 
-	nc, err := nats.Connect(l.natsURL, opts...)
-	if err != nil {
-		l.logger.Warn("NATS broker unavailable at startup; runtime proceeding in periodic polling mode",
+	retryInterval := 100 * time.Millisecond
+	maxRetryInterval := 2 * time.Second
+
+	var nc *nats.Conn
+	for {
+		var err error
+		nc, err = nats.Connect(l.natsURL, opts...)
+		if err == nil {
+			break
+		}
+		l.logger.Warn("NATS broker unavailable at startup; runtime proceeding in periodic polling mode (retrying)",
 			"nats_url", l.natsURL,
 			"error", err,
 		)
-		<-ctx.Done()
-		return nil
+
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(retryInterval):
+			retryInterval *= 2
+			if retryInterval > maxRetryInterval {
+				retryInterval = maxRetryInterval
+			}
+		}
 	}
 
 	l.mu.Lock()

@@ -603,9 +603,30 @@ func TestPostgresStore_ScanUnadmittedReleases_SupersededReleaseSkipped(t *testin
 	}
 
 	// 7. Claim intent2 (target_generation is 1, while app is now generation 2)
-	workload, err := st.ClaimNextServiceRelease(ctx, "worker-test", 60*time.Second)
+	workload, err := st.ClaimNextServiceRelease(ctx, "worker-test", 60*time.Second, wsID)
 	if err != nil || workload == nil {
 		t.Fatalf("ClaimNextServiceRelease failed: %v", err)
+	}
+
+	// Cycle 2 probe: assert ScanUnadmittedReleases does NOT select older release 1 now that release 2 is DEPLOYING
+	unadmittedCycle2, err := st.ScanUnadmittedReleases(ctx, 10)
+	if err != nil {
+		t.Fatalf("ScanUnadmittedReleases cycle 2 failed: %v", err)
+	}
+	for _, r := range unadmittedCycle2 {
+		if r.ApplicationID == appID {
+			t.Fatalf("cycle 2 scan unexpectedly returned release %s (number %d) for app; older release must not be admitted when newer release is claimed", r.ReleaseID, r.ReleaseNumber)
+		}
+	}
+
+	// Assert release 1 was marked SUPERSEDED in the database
+	var rel1Status string
+	err = st.pool.QueryRow(ctx, `SELECT status FROM releases WHERE id = $1;`, relID1).Scan(&rel1Status)
+	if err != nil {
+		t.Fatalf("query release 1 status: %v", err)
+	}
+	if rel1Status != "SUPERSEDED" {
+		t.Fatalf("expected release 1 status to be SUPERSEDED, got %s", rel1Status)
 	}
 
 	// 8. MarkReleaseHealthy with the superseded intent (generation 1)
@@ -689,7 +710,7 @@ func TestPostgresStore_ClaimNextServiceRelease_ReclaimsExpiredLease(t *testing.T
 	}
 
 	// Another worker attempts to claim next release
-	workload, err := st.ClaimNextServiceRelease(ctx, "restarted-worker", 10*time.Second)
+	workload, err := st.ClaimNextServiceRelease(ctx, "restarted-worker", 10*time.Second, wsID)
 	if err != nil {
 		t.Fatalf("ClaimNextServiceRelease failed: %v", err)
 	}

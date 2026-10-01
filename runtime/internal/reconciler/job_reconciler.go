@@ -51,7 +51,7 @@ func NewLocalProcessJobRunner(env string, artifactsDir string) (*LocalProcessJob
 
 func (r *LocalProcessJobRunner) RunJob(ctx context.Context, workload *store.ClaimedJobWorkload) (int, string, error) {
 	if len(workload.CommandArgs) == 0 {
-		return 0, "", nil
+		return 1, "empty command_args: local process runner requires an executable command", errors.New("empty command_args")
 	}
 
 	cmd := exec.CommandContext(ctx, workload.CommandArgs[0], workload.CommandArgs[1:]...)

@@ -114,6 +114,7 @@ func (r *ServiceReconciler) ReconcileOne(ctx context.Context, workload *store.Cl
 	if err != nil {
 		reason := fmt.Sprintf("workload deployment failed: %v", err)
 		r.logger.Error(reason, "release_id", workload.ReleaseID)
+		_ = r.runner.Teardown(ctx, workload)
 		if markErr := r.store.MarkReleaseFailed(ctx, workload.IntentID, workload.ReleaseID, reason, workload.LeaseEpoch); markErr != nil {
 			r.logger.Error("Failed to mark release failed", "error", markErr)
 		}
@@ -161,6 +162,16 @@ func (r *ServiceReconciler) ReconcileOne(ctx context.Context, workload *store.Cl
 			r.logger.Error("Failed to mark release healthy in database", "error", err)
 			return err
 		}
+
+		// Tear down all previous generations so older deployments, services, and ingresses do not leak
+		for gen := 1; gen < workload.TargetGeneration; gen++ {
+			prevWorkload := *workload
+			prevWorkload.TargetGeneration = gen
+			prevWorkload.DeterministicResourceName = fmt.Sprintf("hc-svc-%s-%d", workload.ApplicationSlug, gen)
+			if tdErr := r.runner.Teardown(ctx, &prevWorkload); tdErr != nil {
+				r.logger.Warn("Failed to teardown older generation workload", "generation", gen, "error", tdErr)
+			}
+		}
 		return nil
 	}
 
@@ -170,6 +181,7 @@ func (r *ServiceReconciler) ReconcileOne(ctx context.Context, workload *store.Cl
 		"reason", lastFailureReason,
 		"lease_epoch", workload.LeaseEpoch,
 	)
+	_ = r.runner.Teardown(ctx, workload)
 	if err := r.store.MarkReleaseFailed(ctx, workload.IntentID, workload.ReleaseID, lastFailureReason, workload.LeaseEpoch); err != nil {
 		r.logger.Error("Failed to mark release failed in database", "error", err)
 		return err

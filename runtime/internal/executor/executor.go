@@ -10,8 +10,8 @@ import (
 )
 
 type Store interface {
-	ClaimNextServiceRelease(ctx context.Context, workerID string, leaseDuration time.Duration) (*store.ClaimedWorkload, error)
-	ClaimNextJobAttempt(ctx context.Context, workerID string, leaseDuration time.Duration) (*store.ClaimedJobWorkload, error)
+	ClaimNextServiceRelease(ctx context.Context, workerID string, leaseDuration time.Duration, workspaceIDs ...string) (*store.ClaimedWorkload, error)
+	ClaimNextJobAttempt(ctx context.Context, workerID string, leaseDuration time.Duration, workspaceIDs ...string) (*store.ClaimedJobWorkload, error)
 	RenewLease(ctx context.Context, intentID string, currentEpoch int, extension time.Duration) error
 }
 

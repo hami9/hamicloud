@@ -231,7 +231,12 @@ func (k *KubeWorkloadRunner) Deploy(ctx context.Context, workload *store.Claimed
 
 	if k.ingressDomain != "" {
 		pathType := networkingv1.PathTypePrefix
-		host := fmt.Sprintf("%s.%s", appSlug, k.ingressDomain)
+		wsSlug := workload.WorkspaceSlug
+		if wsSlug == "" {
+			wsSlug = "default"
+		}
+		// Decision D15: Application ingress routing follows <app-slug>.<workspace-slug>.<domain>
+		host := fmt.Sprintf("%s.%s.%s", appSlug, wsSlug, k.ingressDomain)
 		desiredIng := &networkingv1.Ingress{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      name,
@@ -378,10 +383,6 @@ func NewKubeJobTaskRunner(client kubernetes.Interface, namespace string, artifac
 }
 
 func (r *KubeJobTaskRunner) RunJob(ctx context.Context, workload *store.ClaimedJobWorkload) (int, string, error) {
-	if len(workload.CommandArgs) == 0 {
-		return 0, "", nil
-	}
-
 	jobName := sanitizeResourceName(workload.DeterministicResourceName)
 	if jobName == "" {
 		jobName = sanitizeResourceName(fmt.Sprintf("hc-job-%s-%d", workload.JobID, workload.AttemptNumber))
@@ -408,6 +409,15 @@ func (r *KubeJobTaskRunner) RunJob(ctx context.Context, workload *store.ClaimedJ
 	}
 	sort.Slice(envVars, func(i, j int) bool { return envVars[i].Name < envVars[j].Name })
 
+	jobContainer := corev1.Container{
+		Name:  "job",
+		Image: workload.ImageDigest,
+		Env:   envVars,
+	}
+	if len(workload.CommandArgs) > 0 {
+		jobContainer.Command = workload.CommandArgs
+	}
+
 	backoffLimit := int32(0)
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
@@ -423,12 +433,7 @@ func (r *KubeJobTaskRunner) RunJob(ctx context.Context, workload *store.ClaimedJ
 				},
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyNever,
-					Containers: []corev1.Container{{
-						Name:    "job",
-						Image:   workload.ImageDigest,
-						Command: workload.CommandArgs,
-						Env:     envVars,
-					}},
+					Containers:    []corev1.Container{jobContainer},
 				},
 			},
 		},

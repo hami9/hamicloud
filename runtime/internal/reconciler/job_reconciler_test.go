@@ -312,3 +312,26 @@ func TestLocalProcessJobRunner_EnvironmentIsolation_DatabaseURLNotVisible(t *tes
 		t.Fatalf("SECURITY LEAK: output contains host environment variable HOST_LEAK_VAR!\n%s", output)
 	}
 }
+
+func TestLocalProcessJobRunner_EmptyCommandArgs_ReturnsError(t *testing.T) {
+	tmpDir := t.TempDir()
+	runner, err := NewLocalProcessJobRunner("development", tmpDir)
+	if err != nil {
+		t.Fatalf("failed to create runner: %v", err)
+	}
+
+	workload := &store.ClaimedJobWorkload{
+		WorkspaceID:   "ws-empty-test",
+		JobID:         "job-empty-test",
+		AttemptNumber: 1,
+		CommandArgs:   []string{},
+	}
+
+	exitCode, reason, err := runner.RunJob(context.Background(), workload)
+	if err == nil {
+		t.Fatalf("expected error on empty command_args, got nil")
+	}
+	if exitCode == 0 {
+		t.Fatalf("expected non-zero exit code on empty command_args, got %d (reason: %s)", exitCode, reason)
+	}
+}

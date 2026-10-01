@@ -47,8 +47,18 @@ func NewUUID() string {
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
 }
 
+// JobDeleter abstracts deletion or cleanup of dead Kubernetes Job resources during intent recovery.
+type JobDeleter interface {
+	DeleteJob(ctx context.Context, resourceName string) error
+}
+
 type PostgresStore struct {
-	pool *pgxpool.Pool
+	pool       *pgxpool.Pool
+	jobDeleter JobDeleter
+}
+
+func (s *PostgresStore) SetJobDeleter(d JobDeleter) {
+	s.jobDeleter = d
 }
 
 func NewPostgresStore(ctx context.Context, dbURL string) (*PostgresStore, error) {
@@ -82,6 +92,23 @@ func (s *PostgresStore) Close() {
 // For each application, only the latest release (highest release_number) is eligible,
 // skipping superseded releases per ADR-0003.
 func (s *PostgresStore) ScanUnadmittedReleases(ctx context.Context, limit int) ([]UnadmittedRelease, error) {
+	// Mark older pending releases as SUPERSEDED so they can never be admitted later per ADR-0003
+	supersedeQuery := `
+		UPDATE releases
+		SET status = 'SUPERSEDED',
+		    status_reason = 'Superseded by newer release',
+		    updated_at = NOW()
+		WHERE status IN ('IMAGE_READY', 'REQUESTED')
+		  AND release_number < (
+		      SELECT MAX(r2.release_number)
+		      FROM releases r2
+		      WHERE r2.application_id = releases.application_id
+		  );
+	`
+	if _, err := s.pool.Exec(ctx, supersedeQuery); err != nil {
+		return nil, fmt.Errorf("mark superseded releases: %w", err)
+	}
+
 	query := `
 		SELECT r.id, r.application_id, r.workspace_id, w.slug, a.slug, r.release_number, r.image_digest, r.config_json, a.desired_generation
 		FROM releases r
@@ -93,8 +120,6 @@ func (s *PostgresStore) ScanUnadmittedReleases(ctx context.Context, limit int) (
 		      SELECT MAX(r2.release_number)
 		      FROM releases r2
 		      WHERE r2.application_id = r.application_id
-		        AND r2.status IN ('IMAGE_READY', 'REQUESTED')
-		        AND r2.image_digest != 'pending'
 		  )
 		  AND NOT EXISTS (
 		      SELECT 1 FROM execution_intents ei
@@ -184,31 +209,52 @@ type releaseConfigPayload struct {
 }
 
 // ClaimNextServiceRelease atomically claims the next pending service release intent using FOR UPDATE SKIP LOCKED.
-func (s *PostgresStore) ClaimNextServiceRelease(ctx context.Context, workerID string, leaseDuration time.Duration) (*ClaimedWorkload, error) {
+func (s *PostgresStore) ClaimNextServiceRelease(ctx context.Context, workerID string, leaseDuration time.Duration, workspaceIDs ...string) (*ClaimedWorkload, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
-	selectQuery := `
-		SELECT ei.id, ei.workspace_id, w.slug, ei.release_id, r.application_id, a.slug,
-		       r.release_number, r.image_digest, r.config_json, ei.target_generation,
-		       ei.deterministic_resource_name, ei.lease_epoch
-		FROM execution_intents ei
-		JOIN releases r ON r.id = ei.release_id
-		JOIN applications a ON a.id = r.application_id
-		JOIN workspaces w ON w.id = ei.workspace_id
-		WHERE ei.resource_type = 'SERVICE_RELEASE'
-		  AND (ei.status = 'PENDING' OR (ei.status = 'CLAIMED' AND ei.lease_expires_at < NOW()))
-		ORDER BY ei.created_at ASC
-		LIMIT 1
-		FOR UPDATE OF ei SKIP LOCKED;
-	`
+	var selectQuery string
+	var queryArgs []any
+	if len(workspaceIDs) > 0 && workspaceIDs[0] != "" {
+		selectQuery = `
+			SELECT ei.id, ei.workspace_id, w.slug, ei.release_id, r.application_id, a.slug,
+			       r.release_number, r.image_digest, r.config_json, ei.target_generation,
+			       ei.deterministic_resource_name, ei.lease_epoch
+			FROM execution_intents ei
+			JOIN releases r ON r.id = ei.release_id
+			JOIN applications a ON a.id = r.application_id
+			JOIN workspaces w ON w.id = ei.workspace_id
+			WHERE ei.resource_type = 'SERVICE_RELEASE'
+			  AND (ei.status = 'PENDING' OR (ei.status = 'CLAIMED' AND ei.lease_expires_at < NOW()))
+			  AND ei.workspace_id = $1
+			ORDER BY ei.created_at ASC
+			LIMIT 1
+			FOR UPDATE OF ei SKIP LOCKED;
+		`
+		queryArgs = append(queryArgs, workspaceIDs[0])
+	} else {
+		selectQuery = `
+			SELECT ei.id, ei.workspace_id, w.slug, ei.release_id, r.application_id, a.slug,
+			       r.release_number, r.image_digest, r.config_json, ei.target_generation,
+			       ei.deterministic_resource_name, ei.lease_epoch
+			FROM execution_intents ei
+			JOIN releases r ON r.id = ei.release_id
+			JOIN applications a ON a.id = r.application_id
+			JOIN workspaces w ON w.id = ei.workspace_id
+			WHERE ei.resource_type = 'SERVICE_RELEASE'
+			  AND (ei.status = 'PENDING' OR (ei.status = 'CLAIMED' AND ei.lease_expires_at < NOW()))
+			ORDER BY ei.created_at ASC
+			LIMIT 1
+			FOR UPDATE OF ei SKIP LOCKED;
+		`
+	}
 
 	var workload ClaimedWorkload
 	var rawConfig []byte
-	err = tx.QueryRow(ctx, selectQuery).Scan(
+	err = tx.QueryRow(ctx, selectQuery, queryArgs...).Scan(
 		&workload.IntentID,
 		&workload.WorkspaceID,
 		&workload.WorkspaceSlug,
@@ -605,6 +651,8 @@ func (s *PostgresStore) RequeueRetryWaitJobs(ctx context.Context, baseBackoff ti
 // RecoverExpiredJobIntents finds CLAIMED job attempt intents whose lease has expired,
 // marks the attempt FAILED with a lease expiration reason, and transitions the job to RETRY_WAIT or FAILED
 // (or CANCELLED if cancel requested).
+// Per ADR-0003, it transitions RUNNING -> RECOVERY_PENDING, confirms the old Job is gone, and then -> RETRY_WAIT.
+// Every UPDATE enforces RowsAffected == 1 checks to prevent race conditions.
 func (s *PostgresStore) RecoverExpiredJobIntents(ctx context.Context) (int, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -613,7 +661,7 @@ func (s *PostgresStore) RecoverExpiredJobIntents(ctx context.Context) (int, erro
 	defer tx.Rollback(ctx)
 
 	query := `
-		SELECT ei.id, ei.job_attempt_id, ja.job_id, ja.attempt_number, j.max_retries, ei.lease_epoch, j.state
+		SELECT ei.id, ei.job_attempt_id, ja.job_id, ja.attempt_number, j.max_retries, ei.lease_epoch, j.state, ei.deterministic_resource_name
 		FROM execution_intents ei
 		JOIN job_attempts ja ON ja.id = ei.job_attempt_id
 		JOIN jobs j ON j.id = ja.job_id
@@ -629,18 +677,19 @@ func (s *PostgresStore) RecoverExpiredJobIntents(ctx context.Context) (int, erro
 	defer rows.Close()
 
 	type expiredJob struct {
-		intentID      string
-		attemptID     string
-		jobID         string
-		attemptNumber int
-		maxRetries    int
-		leaseEpoch    int
-		jobState      string
+		intentID                  string
+		attemptID                 string
+		jobID                     string
+		attemptNumber             int
+		maxRetries                int
+		leaseEpoch                int
+		jobState                  string
+		deterministicResourceName string
 	}
 	var expired []expiredJob
 	for rows.Next() {
 		var item expiredJob
-		if err := rows.Scan(&item.intentID, &item.attemptID, &item.jobID, &item.attemptNumber, &item.maxRetries, &item.leaseEpoch, &item.jobState); err != nil {
+		if err := rows.Scan(&item.intentID, &item.attemptID, &item.jobID, &item.attemptNumber, &item.maxRetries, &item.leaseEpoch, &item.jobState, &item.deterministicResourceName); err != nil {
 			return 0, fmt.Errorf("scan expired job intent: %w", err)
 		}
 		expired = append(expired, item)
@@ -658,7 +707,29 @@ func (s *PostgresStore) RecoverExpiredJobIntents(ctx context.Context) (int, erro
 		isCancel := domain.JobState(item.jobState) == domain.StateCancelRequested
 		shouldRetry := !isCancel && item.attemptNumber <= item.maxRetries
 
-		// 1. Finalize attempt state
+		// Step 1: Follow ADR-0003: RUNNING -> RECOVERY_PENDING before retrying.
+		// If cancel requested, leave state in CANCEL_REQUESTED.
+		if !isCancel {
+			tag, err := tx.Exec(ctx, `
+				UPDATE jobs
+				SET state = 'RECOVERY_PENDING',
+				    updated_at = $1
+				WHERE id = $2 AND state IN ('STARTING', 'RUNNING');
+			`, now, item.jobID)
+			if err != nil {
+				return recoveredCount, fmt.Errorf("transition job %s to RECOVERY_PENDING: %w", item.jobID, err)
+			}
+			if tag.RowsAffected() != 1 {
+				return recoveredCount, fmt.Errorf("expected 1 row affected transitioning job %s to RECOVERY_PENDING, got %d", item.jobID, tag.RowsAffected())
+			}
+		}
+
+		// Step 2: Confirm old Kubernetes Job is gone / deleted per ADR-0003
+		if s.jobDeleter != nil && item.deterministicResourceName != "" {
+			_ = s.jobDeleter.DeleteJob(ctx, item.deterministicResourceName)
+		}
+
+		// Step 3: Finalize attempt state
 		attemptState := domain.StateFailed
 		failureReason := "Worker lease expired; executor lost"
 		exitCode := -1
@@ -668,7 +739,7 @@ func (s *PostgresStore) RecoverExpiredJobIntents(ctx context.Context) (int, erro
 			exitCode = 130
 		}
 
-		_, err := tx.Exec(ctx, `
+		tagAttempt, err := tx.Exec(ctx, `
 			UPDATE job_attempts
 			SET state = $1,
 			    failure_reason = $2,
@@ -680,11 +751,30 @@ func (s *PostgresStore) RecoverExpiredJobIntents(ctx context.Context) (int, erro
 		if err != nil {
 			return recoveredCount, fmt.Errorf("finalize expired attempt %s: %w", item.attemptID, err)
 		}
+		if tagAttempt.RowsAffected() != 1 {
+			return recoveredCount, fmt.Errorf("expected 1 row affected finalizing attempt %s, got %d", item.attemptID, tagAttempt.RowsAffected())
+		}
 
-		// 2. Transition job state
+		// Step 4: Mark intent TERMINATED with lease_epoch check
+		tagIntent, err := tx.Exec(ctx, `
+			UPDATE execution_intents
+			SET status = 'TERMINATED',
+			    updated_at = $1
+			WHERE id = $2 AND lease_epoch = $3;
+		`, now, item.intentID, item.leaseEpoch)
+		if err != nil {
+			return recoveredCount, fmt.Errorf("terminate expired intent %s: %w", item.intentID, err)
+		}
+		if tagIntent.RowsAffected() != 1 {
+			return recoveredCount, fmt.Errorf("expected 1 row affected terminating intent %s, got %d", item.intentID, tagIntent.RowsAffected())
+		}
+
+		// Step 5: Transition job state from RECOVERY_PENDING to RETRY_WAIT, FAILED, or CANCELLED
 		targetJobState := domain.StateRetryWait
+		legalSources := "'RECOVERY_PENDING'"
 		if isCancel {
 			targetJobState = domain.StateCancelled
+			legalSources = "'RECOVERY_PENDING', 'CANCEL_REQUESTED'"
 		} else if !shouldRetry {
 			targetJobState = domain.StateFailed
 		}
@@ -694,21 +784,13 @@ func (s *PostgresStore) RecoverExpiredJobIntents(ctx context.Context) (int, erro
 			SET state = $1,
 			    updated_at = $2
 			WHERE id = $3 AND state IN (%s);
-		`, legalSourcesSQL(targetJobState))
-		_, err = tx.Exec(ctx, jobQuery, string(targetJobState), now, item.jobID)
+		`, legalSources)
+		tagJob, err := tx.Exec(ctx, jobQuery, string(targetJobState), now, item.jobID)
 		if err != nil {
 			return recoveredCount, fmt.Errorf("update job %s to %s: %w", item.jobID, targetJobState, err)
 		}
-
-		// 3. Mark intent TERMINATED
-		_, err = tx.Exec(ctx, `
-			UPDATE execution_intents
-			SET status = 'TERMINATED',
-			    updated_at = $1
-			WHERE id = $2 AND lease_epoch = $3;
-		`, now, item.intentID, item.leaseEpoch)
-		if err != nil {
-			return recoveredCount, fmt.Errorf("terminate expired intent %s: %w", item.intentID, err)
+		if tagJob.RowsAffected() != 1 {
+			return recoveredCount, fmt.Errorf("expected 1 row affected updating job %s to %s, got %d", item.jobID, targetJobState, tagJob.RowsAffected())
 		}
 
 		recoveredCount++
@@ -722,31 +804,52 @@ func (s *PostgresStore) RecoverExpiredJobIntents(ctx context.Context) (int, erro
 }
 
 // ClaimNextJobAttempt atomically claims the next pending job attempt intent using FOR UPDATE SKIP LOCKED.
-func (s *PostgresStore) ClaimNextJobAttempt(ctx context.Context, workerID string, leaseDuration time.Duration) (*ClaimedJobWorkload, error) {
+func (s *PostgresStore) ClaimNextJobAttempt(ctx context.Context, workerID string, leaseDuration time.Duration, workspaceIDs ...string) (*ClaimedJobWorkload, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
-	selectQuery := `
-		SELECT ei.id, ei.job_attempt_id, ja.job_id, ja.workspace_id, w.slug, j.name, j.image_digest,
-		       j.command_args, j.env_vars, j.timeout_seconds, j.max_retries, ja.attempt_number,
-		       ei.deterministic_resource_name, ei.lease_epoch
-		FROM execution_intents ei
-		JOIN job_attempts ja ON ja.id = ei.job_attempt_id
-		JOIN jobs j ON j.id = ja.job_id
-		JOIN workspaces w ON w.id = ja.workspace_id
-		WHERE ei.resource_type = 'JOB_ATTEMPT'
-		  AND ei.status = 'PENDING'
-		ORDER BY ei.created_at ASC
-		LIMIT 1
-		FOR UPDATE OF ei SKIP LOCKED;
-	`
+	var selectQuery string
+	var queryArgs []any
+	if len(workspaceIDs) > 0 && workspaceIDs[0] != "" {
+		selectQuery = `
+			SELECT ei.id, ei.job_attempt_id, ja.job_id, ja.workspace_id, w.slug, j.name, j.image_digest,
+			       j.command_args, j.env_vars, j.timeout_seconds, j.max_retries, ja.attempt_number,
+			       ei.deterministic_resource_name, ei.lease_epoch
+			FROM execution_intents ei
+			JOIN job_attempts ja ON ja.id = ei.job_attempt_id
+			JOIN jobs j ON j.id = ja.job_id
+			JOIN workspaces w ON w.id = ja.workspace_id
+			WHERE ei.resource_type = 'JOB_ATTEMPT'
+			  AND ei.status = 'PENDING'
+			  AND ei.workspace_id = $1
+			ORDER BY ei.created_at ASC
+			LIMIT 1
+			FOR UPDATE OF ei SKIP LOCKED;
+		`
+		queryArgs = append(queryArgs, workspaceIDs[0])
+	} else {
+		selectQuery = `
+			SELECT ei.id, ei.job_attempt_id, ja.job_id, ja.workspace_id, w.slug, j.name, j.image_digest,
+			       j.command_args, j.env_vars, j.timeout_seconds, j.max_retries, ja.attempt_number,
+			       ei.deterministic_resource_name, ei.lease_epoch
+			FROM execution_intents ei
+			JOIN job_attempts ja ON ja.id = ei.job_attempt_id
+			JOIN jobs j ON j.id = ja.job_id
+			JOIN workspaces w ON w.id = ja.workspace_id
+			WHERE ei.resource_type = 'JOB_ATTEMPT'
+			  AND ei.status = 'PENDING'
+			ORDER BY ei.created_at ASC
+			LIMIT 1
+			FOR UPDATE OF ei SKIP LOCKED;
+		`
+	}
 
 	var workload ClaimedJobWorkload
 	var rawArgs, rawEnv []byte
-	err = tx.QueryRow(ctx, selectQuery).Scan(
+	err = tx.QueryRow(ctx, selectQuery, queryArgs...).Scan(
 		&workload.IntentID,
 		&workload.JobAttemptID,
 		&workload.JobID,

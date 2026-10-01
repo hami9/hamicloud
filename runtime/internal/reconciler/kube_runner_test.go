@@ -100,6 +100,7 @@ func TestKubeWorkloadRunner_WithIngress(t *testing.T) {
 
 	workload := &store.ClaimedWorkload{
 		WorkspaceID:               "ws-123",
+		WorkspaceSlug:             "prod-team",
 		ApplicationID:             "app-456",
 		ApplicationSlug:           "api-gateway",
 		ReleaseID:                 "rel-789",
@@ -114,7 +115,7 @@ func TestKubeWorkloadRunner_WithIngress(t *testing.T) {
 
 	ing, err := fakeClient.NetworkingV1().Ingresses(ns).Get(ctx, "hc-svc-api-gateway-1", metav1.GetOptions{})
 	require.NoError(t, err)
-	assert.Equal(t, "api-gateway.hamicloud.local", ing.Spec.Rules[0].Host)
+	assert.Equal(t, "api-gateway.prod-team.hamicloud.local", ing.Spec.Rules[0].Host)
 	assert.Equal(t, int32(3000), ing.Spec.Rules[0].HTTP.Paths[0].Backend.Service.Port.Number)
 
 	err = runner.Teardown(ctx, workload)

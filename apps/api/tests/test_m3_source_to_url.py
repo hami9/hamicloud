@@ -436,6 +436,58 @@ async def test_m3_repository_url_validation_and_allowlist():
         bad_host_data = bad_host.json()
         assert "REPOSITORY_POLICY_VIOLATION" in (bad_host_data.get("message") or bad_host_data.get("detail") or "")
 
+        # Allowlist bypass probes (must all be rejected with 422)
+        bypass_urls = [
+            "https://evil.example/github.com/x.git",
+            "https://github.com.evil.example/x.git",
+            "git@evil.example:bitbucket.org/x.git",
+            "ssh://git@evil.example/gitlab.com/x.git",
+        ]
+        for idx, bypass_url in enumerate(bypass_urls):
+            bp_resp = await client.post(
+                f"/v1/workspaces/{ws_id}/repositories",
+                json={
+                    "name": f"bypass-{idx}",
+                    "repo_url": bypass_url,
+                    "webhook_secret": SECRET_KEY,
+                },
+                headers={"X-Dev-Subject": "alice"},
+            )
+            assert bp_resp.status_code == 422, f"Failed to reject bypass url: {bypass_url}"
+            bp_data = bp_resp.json()
+            assert "REPOSITORY_POLICY_VIOLATION" in (bp_data.get("message") or bp_data.get("detail") or "")
+
+        # Valid approved host formats (must succeed)
+        valid_urls = [
+            ("ok-github-ssh", "git@github.com:my-org/my-repo.git"),
+            ("ok-gitlab-https", "https://gitlab.com/my-org/my-repo.git"),
+            ("ok-bitbucket-ssh", "git@bitbucket.org:my-team/my-repo.git"),
+        ]
+        for name, valid_url in valid_urls:
+            ok_resp = await client.post(
+                f"/v1/workspaces/{ws_id}/repositories",
+                json={
+                    "name": name,
+                    "repo_url": valid_url,
+                    "webhook_secret": SECRET_KEY,
+                },
+                headers={"X-Dev-Subject": "alice"},
+            )
+            assert ok_resp.status_code == 201, f"Failed to accept valid url {valid_url}: {ok_resp.text}"
+
+        # Authorize before validating: non-existent/unauthorized workspace must return 404, not 422
+        unauth_ws = uuid.uuid4()
+        unauth_resp = await client.post(
+            f"/v1/workspaces/{unauth_ws}/repositories",
+            json={
+                "name": "unauth-test",
+                "repo_url": "https://evil.example/bad.git",
+                "webhook_secret": SECRET_KEY,
+            },
+            headers={"X-Dev-Subject": "alice"},
+        )
+        assert unauth_resp.status_code == 404, f"Expected 404 on unauth workspace, got {unauth_resp.status_code}"
+
 
 @pytest.mark.anyio
 async def test_m3_trigger_build_no_invented_commit_sha():

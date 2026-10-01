@@ -1,3 +1,4 @@
+import urllib.parse
 import uuid
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -21,6 +22,26 @@ from app.schemas.repository import (
 router = APIRouter(tags=["Repositories"])
 
 
+def extract_repo_host(repo_url: str) -> str:
+    url = repo_url.strip()
+    # Handle scp-style git@host:path or user@host:path (no '://' scheme)
+    if "://" not in url and ":" in url:
+        after_user = url.split("@", 1)[1] if "@" in url else url
+        host_part = after_user.split(":", 1)[0]
+        host_part = host_part.split("/")[0]
+        return host_part.lower()
+
+    # Handle standard URLs with schemes (https://, ssh://, etc.)
+    parsed = urllib.parse.urlsplit(url)
+    hostname = parsed.hostname
+    if not hostname:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid repository URL: unable to extract hostname",
+        )
+    return hostname.lower()
+
+
 def validate_repo_url(repo_url: str) -> str:
     url = repo_url.strip()
     if not (url.startswith("https://") or url.startswith("git@") or url.startswith("ssh://")):
@@ -28,8 +49,9 @@ def validate_repo_url(repo_url: str) -> str:
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Invalid repository URL: must start with https://, git@, or ssh://",
         )
-    approved = any(host in url.lower() for host in settings.APPROVED_REPOSITORY_HOSTS)
-    if not approved:
+    host = extract_repo_host(url)
+    approved_hosts = {h.strip().lower() for h in settings.APPROVED_REPOSITORY_HOSTS}
+    if host not in approved_hosts:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="REPOSITORY_POLICY_VIOLATION: Repository host is not in the approved repository allowlist",
@@ -48,13 +70,13 @@ async def create_repository(
     caller: Caller = Depends(get_caller),
     db: AsyncSession = Depends(get_db),
 ) -> RepositoryResponse:
-    # Validate repository URL against allowlist policy (Roadmap requirement)
-    clean_repo_url = validate_repo_url(payload.repo_url)
-
-    # Authorize workspace access (DEVELOPER required to connect repositories)
+    # 1. Authorize workspace access FIRST (DEVELOPER required to connect repositories)
     await authorize_workspace_access(
         db, caller, workspace_id, min_role=WorkspaceRole.DEVELOPER, not_found_detail="Workspace not found"
     )
+
+    # 2. Validate repository URL against allowlist policy (Roadmap requirement)
+    clean_repo_url = validate_repo_url(payload.repo_url)
 
     # Check for name uniqueness within workspace
     stmt = select(Repository).where(

@@ -61,7 +61,7 @@ func (m *mockSchedulerStore) RequeueRetryWaitJobs(ctx context.Context, baseBacko
 	return m.requeuedCount, nil
 }
 
-func (m *mockSchedulerStore) RecoverExpiredJobIntents(ctx context.Context) (int, error) {
+func (m *mockSchedulerStore) RecoverExpiredJobIntents(ctx context.Context, optionalDeleter ...store.JobDeleter) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return 0, nil
@@ -69,7 +69,7 @@ func (m *mockSchedulerStore) RecoverExpiredJobIntents(ctx context.Context) (int,
 
 func TestScheduler_RunOnce_Empty(t *testing.T) {
 	st := &mockSchedulerStore{}
-	sched := NewScheduler(st, nil)
+	sched := NewScheduler(st, nil, nil)
 
 	count, err := sched.RunOnce(context.Background())
 	if err != nil {
@@ -91,7 +91,7 @@ func TestScheduler_RunOnce_AdmitsReleasesAndJobs(t *testing.T) {
 		},
 		requeuedCount: 1,
 	}
-	sched := NewScheduler(st, nil)
+	sched := NewScheduler(st, nil, nil)
 
 	count, err := sched.RunOnce(context.Background())
 	if err != nil {
@@ -108,7 +108,7 @@ func TestScheduler_RunOnce_AdmitsReleasesAndJobs(t *testing.T) {
 
 func TestScheduler_Wake(t *testing.T) {
 	st := &mockSchedulerStore{}
-	sched := NewScheduler(st, nil)
+	sched := NewScheduler(st, nil, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

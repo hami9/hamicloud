@@ -10,6 +10,7 @@ import (
 
 	"github.com/hami9/hamicloud/runtime/internal/bus"
 	"github.com/hami9/hamicloud/runtime/internal/config"
+	"github.com/hami9/hamicloud/runtime/internal/reconciler"
 	"github.com/hami9/hamicloud/runtime/internal/scheduler"
 	"github.com/hami9/hamicloud/runtime/internal/store"
 )
@@ -38,7 +39,21 @@ func main() {
 	}
 	defer pgStore.Close()
 
-	sched := scheduler.NewScheduler(pgStore, logger)
+	var jobDeleter store.JobDeleter
+	kubeClient, kubeErr := reconciler.BuildKubeClient(cfg.KubeconfigPath)
+	if kubeErr == nil {
+		logger.Info("Connected scheduler to Kubernetes cluster for job recovery", "namespace", cfg.KubeNamespace)
+		jobDeleter = reconciler.NewKubeJobDeleter(kubeClient, cfg.KubeNamespace)
+	} else {
+		if cfg.Environment != "development" {
+			logger.Error("Failed to initialize Kubernetes client for scheduler in non-development environment", "error", kubeErr)
+			os.Exit(1)
+		}
+		logger.Warn("Kubernetes cluster unavailable for scheduler; falling back to NoopJobDeleter in development", "warning", kubeErr)
+		jobDeleter = &reconciler.NoopJobDeleter{}
+	}
+
+	sched := scheduler.NewScheduler(pgStore, jobDeleter, logger)
 
 	logger.Info("Scheduler initialized with configuration",
 		"environment", cfg.Environment,

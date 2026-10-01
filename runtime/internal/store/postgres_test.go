@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -220,7 +221,7 @@ func TestPostgresStore_UnfencedIntentRejected(t *testing.T) {
 		if err := st.MarkJobAttemptCancelled(ctx, "i1", "a1", "j1", epoch); err == nil {
 			t.Fatalf("expected error for leaseEpoch == %d in MarkJobAttemptCancelled, got nil", epoch)
 		}
-		if err := st.MarkReleaseHealthy(ctx, "i1", "r1", "app1", "res1", epoch); err == nil {
+		if _, err := st.MarkReleaseHealthy(ctx, "i1", "r1", "app1", "res1", epoch); err == nil {
 			t.Fatalf("expected error for leaseEpoch == %d in MarkReleaseHealthy, got nil", epoch)
 		}
 		if err := st.MarkReleaseFailed(ctx, "i1", "r1", "err", epoch); err == nil {
@@ -510,6 +511,22 @@ func TestPostgresStore_CreateJobAttemptIntent_RetryBudgetExhausted(t *testing.T)
 	}
 }
 
+func createTestApp(t *testing.T, ctx context.Context, st *PostgresStore, wsID, name string) string {
+	t.Helper()
+	appID := NewUUID()
+	now := time.Now().UTC()
+	slug := fmt.Sprintf("%s-%s", strings.ToLower(name), appID[:8])
+	_, err := st.pool.Exec(ctx, `
+		INSERT INTO applications (
+			id, workspace_id, name, slug, workload_type, desired_generation, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, 'HTTP_SERVICE', 1, $5, $5);
+	`, appID, wsID, name, slug, now)
+	if err != nil {
+		t.Fatalf("create test application: %v", err)
+	}
+	return appID
+}
+
 // TestPostgresStore_ScanUnadmittedReleases_SupersededReleaseSkipped asserts that when multiple
 // releases are pending for an application, only the latest release (highest release_number)
 // receives an ExecutionIntent, and an older superseded release can never become current_release_id.
@@ -630,9 +647,12 @@ func TestPostgresStore_ScanUnadmittedReleases_SupersededReleaseSkipped(t *testin
 	}
 
 	// 8. MarkReleaseHealthy with the superseded intent (generation 1)
-	err = st.MarkReleaseHealthy(ctx, intent2.ID, relID2, appID, "uid-res-2", workload.LeaseEpoch)
+	becameCurrent, err := st.MarkReleaseHealthy(ctx, intent2.ID, relID2, appID, "uid-res-2", workload.LeaseEpoch)
 	if err != nil {
 		t.Fatalf("MarkReleaseHealthy failed: %v", err)
+	}
+	if becameCurrent {
+		t.Fatalf("expected becameCurrent=false for superseded generation 1 release")
 	}
 
 	// 9. Assert: applications.current_release_id MUST NOT be updated to relID2 because generation is stale!
@@ -657,9 +677,12 @@ func TestPostgresStore_ScanUnadmittedReleases_SupersededReleaseSkipped(t *testin
 		t.Fatalf("insert gen2 claimed intent: %v", err)
 	}
 
-	err = st.MarkReleaseHealthy(ctx, intentForGen2ID, relID2, appID, "uid-res-gen2", 1)
+	becameCurrentGen2, err := st.MarkReleaseHealthy(ctx, intentForGen2ID, relID2, appID, "uid-res-gen2", 1)
 	if err != nil {
 		t.Fatalf("MarkReleaseHealthy for gen 2 failed: %v", err)
+	}
+	if !becameCurrentGen2 {
+		t.Fatalf("expected becameCurrent=true for current generation 2 release")
 	}
 
 	err = st.pool.QueryRow(ctx, `SELECT current_release_id::text FROM applications WHERE id = $1;`, appID).Scan(&currentRelID)
@@ -726,13 +749,13 @@ func TestPostgresStore_ClaimNextServiceRelease_ReclaimsExpiredLease(t *testing.T
 	}
 
 	// Crashed worker tries to mark healthy with old epoch 1 -> must fail with fencing error
-	errOld := st.MarkReleaseHealthy(ctx, intentID, relID, appID, "uid-res-old", 1)
+	_, errOld := st.MarkReleaseHealthy(ctx, intentID, relID, appID, "uid-res-old", 1)
 	if errOld == nil {
 		t.Fatalf("expected fencing error for old epoch 1, got nil")
 	}
 
 	// Restarted worker with epoch 2 succeeds
-	errNew := st.MarkReleaseHealthy(ctx, intentID, relID, appID, "uid-res-new", 2)
+	_, errNew := st.MarkReleaseHealthy(ctx, intentID, relID, appID, "uid-res-new", 2)
 	if errNew != nil {
 		t.Fatalf("expected successful MarkReleaseHealthy with epoch 2, got: %v", errNew)
 	}
@@ -816,5 +839,220 @@ func TestPostgresStore_RecoverExpiredJobIntents(t *testing.T) {
 	}
 	if intentStatus != "TERMINATED" {
 		t.Errorf("expected intent status TERMINATED, got %s", intentStatus)
+	}
+}
+
+type fakeFailingJobDeleter struct{}
+
+func (f *fakeFailingJobDeleter) DeleteJob(ctx context.Context, resourceName string) error {
+	return errors.New("kubernetes API unreachable: connection refused")
+}
+
+func TestPostgresStore_RecoverExpiredJobIntents_DeleterFailureHaltsRetryWait(t *testing.T) {
+	ctx := context.Background()
+	st := connectTestStore(t, ctx)
+
+	now := time.Now().UTC()
+	wsID := createTestWorkspace(t, ctx, st, "Deleter Failure WS")
+	jobID := NewUUID()
+	attemptID := NewUUID()
+	intentID := NewUUID()
+
+	_, err := st.pool.Exec(ctx, `
+		INSERT INTO jobs (id, workspace_id, name, image_digest, command_args, env_vars, timeout_seconds, max_retries, current_attempt_number, state, created_at, updated_at)
+		VALUES ($1, $2, 'failing-deleter-job', 'docker.io/library/alpine:latest', '["echo", "hi"]', '{}', 60, 2, 1, 'RUNNING', $3, $3);
+	`, jobID, wsID, now)
+	if err != nil {
+		t.Fatalf("insert test job: %v", err)
+	}
+
+	_, err = st.pool.Exec(ctx, `
+		INSERT INTO job_attempts (id, job_id, workspace_id, attempt_number, state, started_at, created_at, updated_at)
+		VALUES ($1, $2, $3, 1, 'RUNNING', $4, $4, $4);
+	`, attemptID, jobID, wsID, now)
+	if err != nil {
+		t.Fatalf("insert test job attempt: %v", err)
+	}
+
+	pastExpiresAt := now.Add(-10 * time.Second)
+	_, err = st.pool.Exec(ctx, `
+		INSERT INTO execution_intents (
+			id, workspace_id, resource_type, job_attempt_id,
+			deterministic_resource_name, claimed_by, status, lease_epoch, lease_expires_at, created_at, updated_at
+		) VALUES ($1, $2, 'JOB_ATTEMPT', $3, 'hc-job-test-failing-deleter', 'crashed-worker', 'CLAIMED', 1, $4, $5, $5);
+	`, intentID, wsID, attemptID, pastExpiresAt, now)
+	if err != nil {
+		t.Fatalf("insert expired job intent: %v", err)
+	}
+
+	// Recover with failing deleter: DeleteJob returns error!
+	count, err := st.RecoverExpiredJobIntents(ctx, &fakeFailingJobDeleter{})
+	if err != nil {
+		t.Fatalf("RecoverExpiredJobIntents returned error: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("expected 0 confirmed recovered jobs when deleter fails, got %d", count)
+	}
+
+	// Job state must be RECOVERY_PENDING, not RETRY_WAIT, because delete was not confirmed
+	var jobState string
+	err = st.pool.QueryRow(ctx, `SELECT state FROM jobs WHERE id = $1;`, jobID).Scan(&jobState)
+	if err != nil {
+		t.Fatalf("query job: %v", err)
+	}
+	if jobState != "RECOVERY_PENDING" {
+		t.Errorf("expected job state RECOVERY_PENDING when deleter fails, got %s", jobState)
+	}
+
+	// Attempt must still be marked FAILED
+	var attState string
+	err = st.pool.QueryRow(ctx, `SELECT state FROM job_attempts WHERE id = $1;`, attemptID).Scan(&attState)
+	if err != nil {
+		t.Fatalf("query attempt: %v", err)
+	}
+	if attState != "FAILED" {
+		t.Errorf("expected attempt state FAILED, got %s", attState)
+	}
+}
+
+func TestPostgresStore_ClaimNextServiceRelease_SkipsSupersededReleaseWithPendingIntent(t *testing.T) {
+	ctx := context.Background()
+	st := connectTestStore(t, ctx)
+
+	now := time.Now().UTC()
+	wsID := createTestWorkspace(t, ctx, st, "Superseded Claim WS")
+	appID := createTestApp(t, ctx, st, wsID, "skip-superseded-app")
+
+	rel1ID := NewUUID()
+	rel2ID := NewUUID()
+	intent1ID := NewUUID()
+
+	// 1. Release 1 (generation 1)
+	_, err := st.pool.Exec(ctx, `
+		INSERT INTO releases (id, application_id, workspace_id, release_number, image_digest, status, config_json, created_at, updated_at)
+		VALUES ($1, $2, $3, 1, 'docker.io/library/nginx:1.27-alpine', 'IMAGE_READY', '{}', $4, $4);
+	`, rel1ID, appID, wsID, now)
+	if err != nil {
+		t.Fatalf("insert release 1: %v", err)
+	}
+
+	// 2. Release 1 has a PENDING execution intent
+	_, err = st.pool.Exec(ctx, `
+		INSERT INTO execution_intents (
+			id, workspace_id, resource_type, release_id, target_generation,
+			deterministic_resource_name, status, lease_epoch, created_at, updated_at
+		) VALUES ($1, $2, 'SERVICE_RELEASE', $3, 1, 'hc-svc-gen1', 'PENDING', 0, $4, $4);
+	`, intent1ID, wsID, rel1ID, now)
+	if err != nil {
+		t.Fatalf("insert release 1 intent: %v", err)
+	}
+
+	// 3. Release 2 (generation 2) arrives with deployable image
+	now2 := now.Add(2 * time.Second)
+	_, err = st.pool.Exec(ctx, `
+		INSERT INTO releases (id, application_id, workspace_id, release_number, image_digest, status, config_json, created_at, updated_at)
+		VALUES ($1, $2, $3, 2, 'docker.io/library/nginx:1.28-alpine', 'IMAGE_READY', '{}', $4, $4);
+	`, rel2ID, appID, wsID, now2)
+	if err != nil {
+		t.Fatalf("insert release 2: %v", err)
+	}
+
+	// 4. Update application desired_generation to 2
+	_, err = st.pool.Exec(ctx, `UPDATE applications SET desired_generation = 2 WHERE id = $1;`, appID)
+	if err != nil {
+		t.Fatalf("update app desired_generation: %v", err)
+	}
+
+	// 5. ScanUnadmittedReleases runs: marks release 1 SUPERSEDED and terminates release 1's pending intent
+	unadmitted, err := st.ScanUnadmittedReleases(ctx, 10)
+	if err != nil {
+		t.Fatalf("ScanUnadmittedReleases failed: %v", err)
+	}
+	if len(unadmitted) != 1 || unadmitted[0].ReleaseID != rel2ID {
+		t.Fatalf("expected ScanUnadmittedReleases to return only release 2, got %v", unadmitted)
+	}
+
+	// Assert release 1 was marked SUPERSEDED
+	var rel1Status string
+	err = st.pool.QueryRow(ctx, `SELECT status FROM releases WHERE id = $1;`, rel1ID).Scan(&rel1Status)
+	if err != nil {
+		t.Fatalf("query release 1 status: %v", err)
+	}
+	if rel1Status != "SUPERSEDED" {
+		t.Fatalf("expected release 1 status to be SUPERSEDED, got %s", rel1Status)
+	}
+
+	// Assert release 1's intent was terminated
+	var intent1Status string
+	err = st.pool.QueryRow(ctx, `SELECT status FROM execution_intents WHERE id = $1;`, intent1ID).Scan(&intent1Status)
+	if err != nil {
+		t.Fatalf("query intent 1 status: %v", err)
+	}
+	if intent1Status != "TERMINATED" {
+		t.Fatalf("expected release 1 intent to be TERMINATED, got %s", intent1Status)
+	}
+
+	// 6. ClaimNextServiceRelease must NOT claim release 1
+	claimed, err := st.ClaimNextServiceRelease(ctx, "worker-1", 60*time.Second, wsID)
+	if err != nil {
+		t.Fatalf("ClaimNextServiceRelease failed: %v", err)
+	}
+	if claimed != nil && claimed.ReleaseID == rel1ID {
+		t.Fatalf("ClaimNextServiceRelease unexpectedly claimed superseded release 1!")
+	}
+
+	// Assert release 1 status remains SUPERSEDED (never overwritten to DEPLOYING)
+	err = st.pool.QueryRow(ctx, `SELECT status FROM releases WHERE id = $1;`, rel1ID).Scan(&rel1Status)
+	if err != nil {
+		t.Fatalf("query release 1 status: %v", err)
+	}
+	if rel1Status != "SUPERSEDED" {
+		t.Fatalf("expected release 1 status to remain SUPERSEDED, got %s", rel1Status)
+	}
+}
+
+func TestPostgresStore_ScanUnadmittedReleases_PendingDigestDoesNotSupersede(t *testing.T) {
+	ctx := context.Background()
+	st := connectTestStore(t, ctx)
+
+	now := time.Now().UTC()
+	wsID := createTestWorkspace(t, ctx, st, "Pending Digest WS")
+	appID := createTestApp(t, ctx, st, wsID, "pending-digest-app")
+
+	rel1ID := NewUUID()
+	rel2ID := NewUUID()
+
+	// Release 1: deployable image
+	_, err := st.pool.Exec(ctx, `
+		INSERT INTO releases (id, application_id, workspace_id, release_number, image_digest, status, config_json, created_at, updated_at)
+		VALUES ($1, $2, $3, 1, 'docker.io/library/nginx:1.27-alpine', 'IMAGE_READY', '{}', $4, $4);
+	`, rel1ID, appID, wsID, now)
+	if err != nil {
+		t.Fatalf("insert release 1: %v", err)
+	}
+
+	// Release 2: awaiting build (image_digest = 'pending')
+	now2 := now.Add(2 * time.Second)
+	_, err = st.pool.Exec(ctx, `
+		INSERT INTO releases (id, application_id, workspace_id, release_number, image_digest, status, config_json, created_at, updated_at)
+		VALUES ($1, $2, $3, 2, 'pending', 'REQUESTED', '{}', $4, $4);
+	`, rel2ID, appID, wsID, now2)
+	if err != nil {
+		t.Fatalf("insert release 2: %v", err)
+	}
+
+	// ScanUnadmittedReleases runs: release 2 has pending digest, so release 1 MUST NOT be superseded!
+	_, err = st.ScanUnadmittedReleases(ctx, 10)
+	if err != nil {
+		t.Fatalf("ScanUnadmittedReleases failed: %v", err)
+	}
+
+	var rel1Status string
+	err = st.pool.QueryRow(ctx, `SELECT status FROM releases WHERE id = $1;`, rel1ID).Scan(&rel1Status)
+	if err != nil {
+		t.Fatalf("query release 1 status: %v", err)
+	}
+	if rel1Status != "IMAGE_READY" {
+		t.Fatalf("expected release 1 to remain IMAGE_READY (not superseded by pending build), got %s", rel1Status)
 	}
 }

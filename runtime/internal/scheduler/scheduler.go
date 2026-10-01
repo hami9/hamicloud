@@ -15,23 +15,25 @@ type Store interface {
 	ScanUnadmittedJobs(ctx context.Context, limit int) ([]store.UnadmittedJob, error)
 	CreateJobAttemptIntent(ctx context.Context, job store.UnadmittedJob) (*store.ExecutionIntent, error)
 	RequeueRetryWaitJobs(ctx context.Context, baseBackoff time.Duration, limit int) (int, error)
-	RecoverExpiredJobIntents(ctx context.Context) (int, error)
+	RecoverExpiredJobIntents(ctx context.Context, optionalDeleter ...store.JobDeleter) (int, error)
 }
 
 type Scheduler struct {
-	store  Store
-	logger *slog.Logger
-	wakeCh chan struct{}
+	store      Store
+	jobDeleter store.JobDeleter
+	logger     *slog.Logger
+	wakeCh     chan struct{}
 }
 
-func NewScheduler(st Store, logger *slog.Logger) *Scheduler {
+func NewScheduler(st Store, jobDeleter store.JobDeleter, logger *slog.Logger) *Scheduler {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &Scheduler{
-		store:  st,
-		logger: logger,
-		wakeCh: make(chan struct{}, 1),
+		store:      st,
+		jobDeleter: jobDeleter,
+		logger:     logger,
+		wakeCh:     make(chan struct{}, 1),
 	}
 }
 
@@ -46,7 +48,7 @@ func (s *Scheduler) Wake() {
 // RunOnce scans for releases and jobs awaiting execution intents and admits them.
 func (s *Scheduler) RunOnce(ctx context.Context) (int, error) {
 	// 0. Recover any expired job attempt intents from crashed executors
-	recovered, err := s.store.RecoverExpiredJobIntents(ctx)
+	recovered, err := s.store.RecoverExpiredJobIntents(ctx, s.jobDeleter)
 	if err != nil {
 		s.logger.Warn("Failed to recover expired job intents", "error", err)
 	} else if recovered > 0 {

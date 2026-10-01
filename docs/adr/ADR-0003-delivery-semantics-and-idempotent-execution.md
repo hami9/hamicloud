@@ -126,6 +126,12 @@ When an executor prepares to create a Kubernetes resource:
   - Base: 5 seconds, Cap: 60 seconds.
 - Kubernetes Jobs are configured with `restartPolicy: Never` and `backoffLimit: 0`. HamiCloud's scheduler exclusively manages attempt creation and timing.
 
+### 6. Release Supersession, In-Flight Builds, and Generational Teardown
+- **In-Flight Build Non-Supersession:** A release still awaiting an image build (`image_digest = 'pending'`) must **never** supersede an older deployable release (`image_digest != 'pending'`). If the in-flight build subsequently fails, the application must maintain its deployable image and service availability. An older release is marked `SUPERSEDED` only when a newer release has a valid, deployable image artifact.
+- **Atomic Intent Termination:** When an older release transitions to `SUPERSEDED`, all unclaimed execution intents (`status = 'PENDING'`) associated with that release are atomically transitioned to `TERMINATED` in the exact same database transaction.
+- **Superseded Release Claim Exclusion:** Release claim queries strictly enforce `r.status != 'SUPERSEDED'` and conditionally guard the transition to `DEPLOYING` with `WHERE id = :release_id AND status != 'SUPERSEDED'`. A superseded release can never be claimed, deployed, or marked healthy.
+- **Generational Teardown by Label:** Older generation resources in Kubernetes (`Deployment`, `Service`, `Ingress`) are deleted by label selector (`hamicloud.io/application-id = :app_id, hamicloud.io/generation != :current_gen`) strictly after the new release is confirmed `HEALTHY` and has actually become the application's `current_release_id`.
+
 ---
 
 ## Consequences

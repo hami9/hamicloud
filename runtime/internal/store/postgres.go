@@ -92,7 +92,14 @@ func (s *PostgresStore) Close() {
 // For each application, only the latest release (highest release_number) is eligible,
 // skipping superseded releases per ADR-0003.
 func (s *PostgresStore) ScanUnadmittedReleases(ctx context.Context, limit int) ([]UnadmittedRelease, error) {
-	// Mark older pending releases as SUPERSEDED so they can never be admitted later per ADR-0003
+	// In an atomic transaction, mark older releases as SUPERSEDED and terminate their unclaimed PENDING intents
+	txSupersede, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin supersede tx: %w", err)
+	}
+	defer txSupersede.Rollback(ctx)
+
+	// Older releases are only superseded if a newer release is deployable (image_digest != 'pending') per ADR-0003
 	supersedeQuery := `
 		UPDATE releases
 		SET status = 'SUPERSEDED',
@@ -103,10 +110,29 @@ func (s *PostgresStore) ScanUnadmittedReleases(ctx context.Context, limit int) (
 		      SELECT MAX(r2.release_number)
 		      FROM releases r2
 		      WHERE r2.application_id = releases.application_id
+		        AND r2.image_digest != 'pending'
 		  );
 	`
-	if _, err := s.pool.Exec(ctx, supersedeQuery); err != nil {
+	if _, err := txSupersede.Exec(ctx, supersedeQuery); err != nil {
 		return nil, fmt.Errorf("mark superseded releases: %w", err)
+	}
+
+	// Terminate any unclaimed PENDING execution intents for superseded releases in the same transaction
+	terminateIntentsQuery := `
+		UPDATE execution_intents
+		SET status = 'TERMINATED',
+		    updated_at = NOW()
+		WHERE status = 'PENDING'
+		  AND release_id IN (
+		      SELECT id FROM releases WHERE status = 'SUPERSEDED'
+		  );
+	`
+	if _, err := txSupersede.Exec(ctx, terminateIntentsQuery); err != nil {
+		return nil, fmt.Errorf("terminate superseded release intents: %w", err)
+	}
+
+	if err := txSupersede.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit supersede tx: %w", err)
 	}
 
 	query := `
@@ -229,6 +255,7 @@ func (s *PostgresStore) ClaimNextServiceRelease(ctx context.Context, workerID st
 			JOIN workspaces w ON w.id = ei.workspace_id
 			WHERE ei.resource_type = 'SERVICE_RELEASE'
 			  AND (ei.status = 'PENDING' OR (ei.status = 'CLAIMED' AND ei.lease_expires_at < NOW()))
+			  AND r.status != 'SUPERSEDED'
 			  AND ei.workspace_id = $1
 			ORDER BY ei.created_at ASC
 			LIMIT 1
@@ -246,6 +273,7 @@ func (s *PostgresStore) ClaimNextServiceRelease(ctx context.Context, workerID st
 			JOIN workspaces w ON w.id = ei.workspace_id
 			WHERE ei.resource_type = 'SERVICE_RELEASE'
 			  AND (ei.status = 'PENDING' OR (ei.status = 'CLAIMED' AND ei.lease_expires_at < NOW()))
+			  AND r.status != 'SUPERSEDED'
 			ORDER BY ei.created_at ASC
 			LIMIT 1
 			FOR UPDATE OF ei SKIP LOCKED;
@@ -313,10 +341,15 @@ func (s *PostgresStore) ClaimNextServiceRelease(ctx context.Context, workerID st
 		UPDATE releases
 		SET status = 'DEPLOYING',
 		    updated_at = $1
-		WHERE id = $2;
+		WHERE id = $2 AND status != 'SUPERSEDED';
 	`
-	if _, err := tx.Exec(ctx, updateReleaseQuery, now, workload.ReleaseID); err != nil {
+	cmdRelease, err := tx.Exec(ctx, updateReleaseQuery, now, workload.ReleaseID)
+	if err != nil {
 		return nil, fmt.Errorf("update release status to deploying: %w", err)
+	}
+	if cmdRelease.RowsAffected() == 0 {
+		// Release was marked SUPERSEDED concurrently; do not deploy it
+		return nil, nil
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -329,14 +362,15 @@ func (s *PostgresStore) ClaimNextServiceRelease(ctx context.Context, workerID st
 
 // MarkReleaseHealthy marks the execution intent APPLIED, release HEALTHY, and updates application current_release_id.
 // It enforces monotonic lease epoch fencing to prevent split-brain updates.
-func (s *PostgresStore) MarkReleaseHealthy(ctx context.Context, intentID, releaseID, appID, resourceUID string, leaseEpoch int) error {
+// Returns true if this release actually became the application's current_release_id.
+func (s *PostgresStore) MarkReleaseHealthy(ctx context.Context, intentID, releaseID, appID, resourceUID string, leaseEpoch int) (bool, error) {
 	if leaseEpoch <= 0 {
-		return fmt.Errorf("lease epoch must be greater than zero, got %d", leaseEpoch)
+		return false, fmt.Errorf("lease epoch must be greater than zero, got %d", leaseEpoch)
 	}
 
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
+		return false, fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
@@ -352,10 +386,10 @@ func (s *PostgresStore) MarkReleaseHealthy(ctx context.Context, intentID, releas
 	`
 	cmd, err := tx.Exec(ctx, intentQuery, resourceUID, now, intentID, leaseEpoch)
 	if err != nil {
-		return fmt.Errorf("update intent applied: %w", err)
+		return false, fmt.Errorf("update intent applied: %w", err)
 	}
 	if cmd.RowsAffected() == 0 {
-		return fmt.Errorf("fencing error: intent %s epoch %d is stale or no longer claimed", intentID, leaseEpoch)
+		return false, fmt.Errorf("fencing error: intent %s epoch %d is stale or no longer claimed", intentID, leaseEpoch)
 	}
 
 	// 2. Mark release healthy
@@ -367,11 +401,11 @@ func (s *PostgresStore) MarkReleaseHealthy(ctx context.Context, intentID, releas
 		WHERE id = $2;
 	`, now, releaseID)
 	if err != nil {
-		return fmt.Errorf("update release healthy: %w", err)
+		return false, fmt.Errorf("update release healthy: %w", err)
 	}
 
 	// 3. Update application current_release_id ONLY IF intent's target_generation still equals applications.desired_generation
-	_, err = tx.Exec(ctx, `
+	cmdApp, err := tx.Exec(ctx, `
 		UPDATE applications
 		SET current_release_id = $1,
 		    updated_at = $2
@@ -381,10 +415,15 @@ func (s *PostgresStore) MarkReleaseHealthy(ctx context.Context, intentID, releas
 		  );
 	`, releaseID, now, appID, intentID)
 	if err != nil {
-		return fmt.Errorf("update app current_release_id: %w", err)
+		return false, fmt.Errorf("update app current_release_id: %w", err)
 	}
 
-	return tx.Commit(ctx)
+	becameCurrent := cmdApp.RowsAffected() > 0
+	if err := tx.Commit(ctx); err != nil {
+		return false, fmt.Errorf("commit tx: %w", err)
+	}
+
+	return becameCurrent, nil
 }
 
 // MarkReleaseFailed records deploy/readiness failure on the intent and release.
@@ -648,18 +687,20 @@ func (s *PostgresStore) RequeueRetryWaitJobs(ctx context.Context, baseBackoff ti
 	return requeuedCount, nil
 }
 
-// RecoverExpiredJobIntents finds CLAIMED job attempt intents whose lease has expired,
-// marks the attempt FAILED with a lease expiration reason, and transitions the job to RETRY_WAIT or FAILED
-// (or CANCELLED if cancel requested).
-// Per ADR-0003, it transitions RUNNING -> RECOVERY_PENDING, confirms the old Job is gone, and then -> RETRY_WAIT.
-// Every UPDATE enforces RowsAffected == 1 checks to prevent race conditions.
-func (s *PostgresStore) RecoverExpiredJobIntents(ctx context.Context) (int, error) {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return 0, fmt.Errorf("begin tx: %w", err)
-	}
-	defer tx.Rollback(ctx)
+// ExpiredJobRecoveryInfo contains information required to recover a job attempt whose worker lease expired.
+type ExpiredJobRecoveryInfo struct {
+	IntentID                  string
+	AttemptID                 string
+	JobID                     string
+	AttemptNumber             int
+	MaxRetries                int
+	LeaseEpoch                int
+	JobState                  string
+	DeterministicResourceName string
+}
 
+// FindExpiredJobIntents queries CLAIMED job attempt intents whose worker lease has expired.
+func (s *PostgresStore) FindExpiredJobIntents(ctx context.Context) ([]ExpiredJobRecoveryInfo, error) {
 	query := `
 		SELECT ei.id, ei.job_attempt_id, ja.job_id, ja.attempt_number, j.max_retries, ei.lease_epoch, j.state, ei.deterministic_resource_name
 		FROM execution_intents ei
@@ -668,136 +709,174 @@ func (s *PostgresStore) RecoverExpiredJobIntents(ctx context.Context) (int, erro
 		WHERE ei.resource_type = 'JOB_ATTEMPT'
 		  AND ei.status = 'CLAIMED'
 		  AND ei.lease_expires_at < NOW()
-		FOR UPDATE OF ei SKIP LOCKED;
+		ORDER BY ei.created_at ASC;
 	`
-	rows, err := tx.Query(ctx, query)
+	rows, err := s.pool.Query(ctx, query)
 	if err != nil {
-		return 0, fmt.Errorf("query expired job intents: %w", err)
+		return nil, fmt.Errorf("query expired job intents: %w", err)
 	}
 	defer rows.Close()
 
-	type expiredJob struct {
-		intentID                  string
-		attemptID                 string
-		jobID                     string
-		attemptNumber             int
-		maxRetries                int
-		leaseEpoch                int
-		jobState                  string
-		deterministicResourceName string
-	}
-	var expired []expiredJob
+	var expired []ExpiredJobRecoveryInfo
 	for rows.Next() {
-		var item expiredJob
-		if err := rows.Scan(&item.intentID, &item.attemptID, &item.jobID, &item.attemptNumber, &item.maxRetries, &item.leaseEpoch, &item.jobState, &item.deterministicResourceName); err != nil {
-			return 0, fmt.Errorf("scan expired job intent: %w", err)
+		var item ExpiredJobRecoveryInfo
+		if err := rows.Scan(&item.IntentID, &item.AttemptID, &item.JobID, &item.AttemptNumber, &item.MaxRetries, &item.LeaseEpoch, &item.JobState, &item.DeterministicResourceName); err != nil {
+			return nil, fmt.Errorf("scan expired job intent: %w", err)
 		}
 		expired = append(expired, item)
 	}
-	rows.Close()
+	return expired, nil
+}
 
-	if len(expired) == 0 {
-		return 0, nil
+// BeginJobRecovery begins recovery of an expired job intent in its own database transaction.
+// It moves RUNNING jobs to RECOVERY_PENDING, marks the attempt FAILED/CANCELLED, and terminates the intent.
+func (s *PostgresStore) BeginJobRecovery(ctx context.Context, item ExpiredJobRecoveryInfo) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin recovery tx: %w", err)
 	}
+	defer tx.Rollback(ctx)
 
 	now := time.Now().UTC()
-	recoveredCount := 0
+	isCancel := domain.JobState(item.JobState) == domain.StateCancelRequested
 
-	for _, item := range expired {
-		isCancel := domain.JobState(item.jobState) == domain.StateCancelRequested
-		shouldRetry := !isCancel && item.attemptNumber <= item.maxRetries
-
-		// Step 1: Follow ADR-0003: RUNNING -> RECOVERY_PENDING before retrying.
-		// If cancel requested, leave state in CANCEL_REQUESTED.
-		if !isCancel {
-			tag, err := tx.Exec(ctx, `
-				UPDATE jobs
-				SET state = 'RECOVERY_PENDING',
-				    updated_at = $1
-				WHERE id = $2 AND state IN ('STARTING', 'RUNNING');
-			`, now, item.jobID)
-			if err != nil {
-				return recoveredCount, fmt.Errorf("transition job %s to RECOVERY_PENDING: %w", item.jobID, err)
-			}
-			if tag.RowsAffected() != 1 {
-				return recoveredCount, fmt.Errorf("expected 1 row affected transitioning job %s to RECOVERY_PENDING, got %d", item.jobID, tag.RowsAffected())
-			}
-		}
-
-		// Step 2: Confirm old Kubernetes Job is gone / deleted per ADR-0003
-		if s.jobDeleter != nil && item.deterministicResourceName != "" {
-			_ = s.jobDeleter.DeleteJob(ctx, item.deterministicResourceName)
-		}
-
-		// Step 3: Finalize attempt state
-		attemptState := domain.StateFailed
-		failureReason := "Worker lease expired; executor lost"
-		exitCode := -1
-		if isCancel {
-			attemptState = domain.StateCancelled
-			failureReason = "Job cancellation confirmed during recovery"
-			exitCode = 130
-		}
-
-		tagAttempt, err := tx.Exec(ctx, `
-			UPDATE job_attempts
-			SET state = $1,
-			    failure_reason = $2,
-			    exit_code = $3,
-			    finished_at = $4,
-			    updated_at = $4
-			WHERE id = $5 AND state IN ('STARTING', 'RUNNING');
-		`, string(attemptState), failureReason, exitCode, now, item.attemptID)
-		if err != nil {
-			return recoveredCount, fmt.Errorf("finalize expired attempt %s: %w", item.attemptID, err)
-		}
-		if tagAttempt.RowsAffected() != 1 {
-			return recoveredCount, fmt.Errorf("expected 1 row affected finalizing attempt %s, got %d", item.attemptID, tagAttempt.RowsAffected())
-		}
-
-		// Step 4: Mark intent TERMINATED with lease_epoch check
-		tagIntent, err := tx.Exec(ctx, `
-			UPDATE execution_intents
-			SET status = 'TERMINATED',
-			    updated_at = $1
-			WHERE id = $2 AND lease_epoch = $3;
-		`, now, item.intentID, item.leaseEpoch)
-		if err != nil {
-			return recoveredCount, fmt.Errorf("terminate expired intent %s: %w", item.intentID, err)
-		}
-		if tagIntent.RowsAffected() != 1 {
-			return recoveredCount, fmt.Errorf("expected 1 row affected terminating intent %s, got %d", item.intentID, tagIntent.RowsAffected())
-		}
-
-		// Step 5: Transition job state from RECOVERY_PENDING to RETRY_WAIT, FAILED, or CANCELLED
-		targetJobState := domain.StateRetryWait
-		legalSources := "'RECOVERY_PENDING'"
-		if isCancel {
-			targetJobState = domain.StateCancelled
-			legalSources = "'RECOVERY_PENDING', 'CANCEL_REQUESTED'"
-		} else if !shouldRetry {
-			targetJobState = domain.StateFailed
-		}
-
-		jobQuery := fmt.Sprintf(`
+	// Step 1: Follow ADR-0003 and job.v1.json:
+	// Only RUNNING transitions to RECOVERY_PENDING.
+	// If cancel requested, leave state in CANCEL_REQUESTED.
+	// If job was in STARTING, leave state in STARTING (it will transition directly to RETRY_WAIT or FAILED in confirm).
+	if !isCancel && domain.JobState(item.JobState) == domain.StateRunning {
+		guard := legalSourcesSQL(domain.StateRecoveryPending)
+		tag, err := tx.Exec(ctx, fmt.Sprintf(`
 			UPDATE jobs
-			SET state = $1,
-			    updated_at = $2
-			WHERE id = $3 AND state IN (%s);
-		`, legalSources)
-		tagJob, err := tx.Exec(ctx, jobQuery, string(targetJobState), now, item.jobID)
+			SET state = 'RECOVERY_PENDING',
+			    updated_at = $1
+			WHERE id = $2 AND state IN (%s);
+		`, guard), now, item.JobID)
 		if err != nil {
-			return recoveredCount, fmt.Errorf("update job %s to %s: %w", item.jobID, targetJobState, err)
+			return fmt.Errorf("transition job %s to RECOVERY_PENDING: %w", item.JobID, err)
 		}
-		if tagJob.RowsAffected() != 1 {
-			return recoveredCount, fmt.Errorf("expected 1 row affected updating job %s to %s, got %d", item.jobID, targetJobState, tagJob.RowsAffected())
+		if tag.RowsAffected() != 1 {
+			return fmt.Errorf("expected 1 row affected transitioning job %s to RECOVERY_PENDING, got %d", item.JobID, tag.RowsAffected())
+		}
+	}
+
+	// Step 2: Finalize attempt state
+	attemptState := domain.StateFailed
+	failureReason := "Worker lease expired; executor lost"
+	exitCode := -1
+	if isCancel {
+		attemptState = domain.StateCancelled
+		failureReason = "Job cancellation confirmed during recovery"
+		exitCode = 130
+	}
+
+	tagAttempt, err := tx.Exec(ctx, `
+		UPDATE job_attempts
+		SET state = $1,
+		    failure_reason = $2,
+		    exit_code = $3,
+		    finished_at = $4,
+		    updated_at = $4
+		WHERE id = $5 AND state IN ('STARTING', 'RUNNING');
+	`, string(attemptState), failureReason, exitCode, now, item.AttemptID)
+	if err != nil {
+		return fmt.Errorf("finalize expired attempt %s: %w", item.AttemptID, err)
+	}
+	if tagAttempt.RowsAffected() != 1 {
+		return fmt.Errorf("expected 1 row affected finalizing attempt %s, got %d", item.AttemptID, tagAttempt.RowsAffected())
+	}
+
+	// Step 3: Mark intent TERMINATED with lease_epoch check
+	tagIntent, err := tx.Exec(ctx, `
+		UPDATE execution_intents
+		SET status = 'TERMINATED',
+		    updated_at = $1
+		WHERE id = $2 AND lease_epoch = $3;
+	`, now, item.IntentID, item.LeaseEpoch)
+	if err != nil {
+		return fmt.Errorf("terminate expired intent %s: %w", item.IntentID, err)
+	}
+	if tagIntent.RowsAffected() != 1 {
+		return fmt.Errorf("expected 1 row affected terminating intent %s, got %d", item.IntentID, tagIntent.RowsAffected())
+	}
+
+	return tx.Commit(ctx)
+}
+
+// ConfirmJobRecovery completes job recovery in its own transaction after the old Kubernetes Job is confirmed deleted.
+// It transitions the job state to RETRY_WAIT, FAILED, or CANCELLED using guards derived from legalSourcesSQL.
+func (s *PostgresStore) ConfirmJobRecovery(ctx context.Context, jobID string, shouldRetry bool, isCancel bool) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin confirm recovery tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	now := time.Now().UTC()
+	targetJobState := domain.StateRetryWait
+	if isCancel {
+		targetJobState = domain.StateCancelled
+	} else if !shouldRetry {
+		targetJobState = domain.StateFailed
+	}
+
+	guard := legalSourcesSQL(targetJobState)
+	jobQuery := fmt.Sprintf(`
+		UPDATE jobs
+		SET state = $1,
+		    updated_at = $2
+		WHERE id = $3 AND state IN (%s);
+	`, guard)
+	tagJob, err := tx.Exec(ctx, jobQuery, string(targetJobState), now, jobID)
+	if err != nil {
+		return fmt.Errorf("update job %s to %s: %w", jobID, targetJobState, err)
+	}
+	if tagJob.RowsAffected() != 1 {
+		return fmt.Errorf("expected 1 row affected updating job %s to %s, got %d", jobID, targetJobState, tagJob.RowsAffected())
+	}
+
+	return tx.Commit(ctx)
+}
+
+// RecoverExpiredJobIntents finds CLAIMED job attempt intents whose lease has expired,
+// runs recovery for each intent in an isolated transaction, confirms deletion with JobDeleter,
+// and moves the job to RETRY_WAIT/FAILED/CANCELLED.
+func (s *PostgresStore) RecoverExpiredJobIntents(ctx context.Context, optionalDeleter ...JobDeleter) (int, error) {
+	var deleter JobDeleter = s.jobDeleter
+	if len(optionalDeleter) > 0 && optionalDeleter[0] != nil {
+		deleter = optionalDeleter[0]
+	}
+
+	expired, err := s.FindExpiredJobIntents(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("find expired job intents: %w", err)
+	}
+
+	recoveredCount := 0
+	for _, item := range expired {
+		isCancel := domain.JobState(item.JobState) == domain.StateCancelRequested
+		shouldRetry := !isCancel && item.AttemptNumber <= item.MaxRetries
+
+		// Step 1: Begin recovery in isolated transaction (moves RUNNING -> RECOVERY_PENDING, finalizes attempt & intent)
+		if err := s.BeginJobRecovery(ctx, item); err != nil {
+			// One row failing does not roll back the whole batch and does not block recovery of other intents
+			continue
+		}
+
+		// Step 2: Delete old Kubernetes Job outside DB transaction and confirm deletion before moving to RETRY_WAIT per ADR-0003
+		if deleter != nil && item.DeterministicResourceName != "" {
+			if delErr := deleter.DeleteJob(ctx, item.DeterministicResourceName); delErr != nil {
+				// Do not discard the error; do not move to RETRY_WAIT if delete failed
+				continue
+			}
+		}
+
+		// Step 3: Now that deletion is confirmed, transition to RETRY_WAIT, FAILED, or CANCELLED
+		if err := s.ConfirmJobRecovery(ctx, item.JobID, shouldRetry, isCancel); err != nil {
+			continue
 		}
 
 		recoveredCount++
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return 0, fmt.Errorf("commit recover expired job intents: %w", err)
 	}
 
 	return recoveredCount, nil

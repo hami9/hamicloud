@@ -1803,5 +1803,39 @@ Following project review of `18a3a4e..816cc4a`, all required fixes were implemen
      - Advanced current position to `HamiCloud M4 — open`.
 
 
+### [2026-10-01T16:30:00Z] Review Remediation of 445805e..8015767 & Hardening
 
+- **Status:** COMPLETED & VERIFIED (Milestone M1 remains open as current position; M2 and M3 remain reopened and unclosed)
+- **Milestone:** P1 / M1 (Current position: HamiCloud M1 — open)
+- **Review Remediations & Deliverables:**
+  1. **Old Generations Teardown by Label (`runtime/internal/reconciler/` & `runtime/internal/store/`):**
+     - Updated `KubeWorkloadRunner` fallback naming to use `ApplicationID`.
+     - Implemented `TeardownSupersededGenerations` deleting Kubernetes resources by label (`hamicloud.io/application-id=<app_id>, hamicloud.io/generation!=<current_gen>`).
+     - Updated `MarkReleaseHealthy` in `runtime/internal/store/postgres.go` to return `(becameCurrent bool, err error)` based on `cmdApp.RowsAffected() > 0`.
+     - Updated `ReconcileOne` to trigger generational teardown *only when* `becameCurrent == true`.
+     - Added unit tests: `TestKubeWorkloadRunner_TeardownSupersededGenerations` and `TestServiceReconciler_TeardownOnlyWhenBecameCurrent`.
+  2. **JobDeleter & Recovery Isolation (`runtime/`):**
+     - Implemented `KubeJobDeleter` and `NoopJobDeleter` in `kube_runner.go`.
+     - Wired deleter through `Scheduler` which owns the Kubernetes client.
+     - Refactored `RecoverExpiredJobIntents` in `postgres.go`: each intent is isolated in its own database transaction (`BeginJobRecovery` and `ConfirmJobRecovery`).
+     - Executed Kubernetes job deletion outside the database transaction, propagating deletion errors to halt transition to `RETRY_WAIT`.
+     - Rebuilt transition guards with `legalSourcesSQL` compliant with `job.v1.json`, eliminating invalid transitions (`STARTING -> RECOVERY_PENDING`, `RECOVERY_PENDING -> CANCELLED`).
+     - Added test: `TestPostgresStore_RecoverExpiredJobIntents_DeleterFailureHaltsRetryWait`.
+  3. **Repository Allowlist Exact Host Parsing (`apps/api/`):**
+     - Implemented `extract_repo_host` in `apps/api/app/api/v1/repositories.py` with strict parsing supporting HTTPS, SSH, and SCP-style (`git@host:path`).
+     - Reordered `create_repository` to authorize workspace access before validating the repository URL.
+     - Added 7 unit tests in `apps/api/tests/test_m3_source_to_url.py` verifying bypass prevention and authorization order.
+  4. **Superseded Release Isolation & In-Flight Build Policy (`runtime/internal/store/` & `ADR-0003`):**
+     - In `ScanUnadmittedReleases`, older releases are only superseded if the newer release has a published digest (`image_digest != 'pending'`). Unclaimed `PENDING` intents for superseded releases are atomically terminated in the same transaction.
+     - Hardened `ClaimNextServiceRelease` to skip `SUPERSEDED` releases.
+     - Documented in `docs/adr/ADR-0003-delivery-semantics-and-idempotent-execution.md` Section 6.
+     - Added tests: `TestPostgresStore_ScanUnadmittedReleases_PendingDigestDoesNotSupersede` and `TestPostgresStore_ClaimNextServiceRelease_SkipsSupersededReleaseWithPendingIntent`.
+  5. **Worker Restart Demo Re-recorded (`docs/evidence/demos/worker-restart.md`):**
+     - Re-recorded real worker crash on Windows 10 x64 (Build 19045) against PostgreSQL.
+     - Demonstrated active attempt 1 execution, abrupt process termination (`Stop-Process -Force`), real lease expiry wait (> 5s), scheduler discovery and recovery to `RETRY_WAIT`, real retry backoff wait (> 5s), requeue to `QUEUED`, and attempt 2 completion to `SUCCEEDED`.
+     - Documented all manual steps, exact timestamps, and API outputs.
+  6. **Evidence and Plan Alignment:**
+     - Updated `docs/evidence/M3.md`: unticked unverified criteria, removed deleted simulator references, and updated test suite table.
+     - Updated `docs/evidence/M1.md`: explicitly noted that nothing in the current runtime writes `config_json.ingress_url`.
+     - Verified all milestones (M1, M2, M3) remain open; current position remains `HamiCloud M1 — open`.
 

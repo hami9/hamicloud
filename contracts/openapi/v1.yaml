@@ -809,61 +809,6 @@ paths:
         '405':
           $ref: '#/components/responses/405MethodNotAllowed'
 
-  /v1/releases/{release_id}/process-build:
-    post:
-      summary: Process BuildKit build result
-      description: Internal/worker callback to report build success or failure; requires DEVELOPER role or higher.
-      operationId: processReleaseBuild
-      parameters:
-        - name: release_id
-          in: path
-          required: true
-          schema:
-            type: string
-            format: uuid
-            example: "123e4567-e89b-12d3-a456-426614174000"
-        - name: succeed
-          in: query
-          required: false
-          schema:
-            type: boolean
-            default: true
-        - name: failure_reason
-          in: query
-          required: false
-          schema:
-            type: string
-      responses:
-        '200':
-          description: Build processed and release updated
-          headers:
-            X-Correlation-ID:
-              $ref: '#/components/headers/X-Correlation-ID'
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ReleaseResponse'
-              example:
-                id: "309bbd1e-07f4-4bdf-b9b7-e81d48381601"
-                application_id: "7ff5bafe-b321-4ab6-a9f9-9d3eb15feda3"
-                workspace_id: "550e8400-e29b-41d4-a716-446655440000"
-                release_number: 1
-                image_digest: "registry.hamicloud.local/payment-service:sha-7a8b9c0@sha256:d57c292233604f3d2f2d93e25b16952d7e10c73e04eb9df69335ef076228383a"
-                config_json:
-                  port: 8080
-                  health_path: "/healthz"
-                status: "IMAGE_READY"
-                created_at: "2026-09-19T12:00:00Z"
-        '401':
-          $ref: '#/components/responses/401Unauthorized'
-        '403':
-          $ref: '#/components/responses/403Forbidden'
-        '404':
-          $ref: '#/components/responses/404NotFound'
-        '500':
-          $ref: '#/components/responses/500InternalServerError'
-        '405':
-          $ref: '#/components/responses/405MethodNotAllowed'
 
   /v1/repositories/{repository_id}:
     get:
@@ -1806,7 +1751,7 @@ components:
           example: "RELEASE"
         status:
           type: string
-          enum: [ACCEPTED, QUEUED, ADMITTED, STARTING, RUNNING, SUCCEEDED, RETRY_WAIT, RECOVERY_PENDING, FAILED, CANCEL_REQUESTED, CANCELLED, REQUESTED, BUILDING, IMAGE_READY, DEPLOYING, HEALTHY, BUILD_FAILED, DEPLOY_FAILED]
+          enum: [ACCEPTED, QUEUED, ADMITTED, STARTING, RUNNING, SUCCEEDED, RETRY_WAIT, RECOVERY_PENDING, FAILED, CANCEL_REQUESTED, CANCELLED, REQUESTED, BUILDING, IMAGE_READY, DEPLOYING, HEALTHY, BUILD_FAILED, DEPLOY_FAILED, SUPERSEDED]
           example: "IMAGE_READY"
         status_url:
           type: string
@@ -2024,7 +1969,7 @@ components:
             health_path: "/healthz"
         status:
           type: string
-          enum: [REQUESTED, BUILDING, IMAGE_READY, DEPLOYING, HEALTHY, BUILD_FAILED, DEPLOY_FAILED]
+          enum: [REQUESTED, BUILDING, IMAGE_READY, DEPLOYING, HEALTHY, BUILD_FAILED, DEPLOY_FAILED, SUPERSEDED]
           example: "IMAGE_READY"
         status_reason:
           type: [string, 'null']

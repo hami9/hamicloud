@@ -28,6 +28,7 @@ const (
 	ReleaseStatusHealthy      ReleaseStatus = "HEALTHY"
 	ReleaseStatusBuildFailed  ReleaseStatus = "BUILD_FAILED"
 	ReleaseStatusDeployFailed ReleaseStatus = "DEPLOY_FAILED"
+	ReleaseStatusSuperseded   ReleaseStatus = "SUPERSEDED"
 )
 
 type UnadmittedRelease struct {

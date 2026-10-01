@@ -19,6 +19,7 @@ class ReleaseStatus(str, enum.Enum):
     HEALTHY = "HEALTHY"
     BUILD_FAILED = "BUILD_FAILED"
     DEPLOY_FAILED = "DEPLOY_FAILED"
+    SUPERSEDED = "SUPERSEDED"
 
 
 class Release(Base, UUIDPrimaryKeyMixin, TimestampMixin):

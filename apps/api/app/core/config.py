@@ -69,6 +69,15 @@ class Settings(BaseSettings):
         ]
     )
 
+    # Approved Repository Allowlist Policy (Roadmap: Source builds allowlist)
+    APPROVED_REPOSITORY_HOSTS: List[str] = Field(
+        default_factory=lambda: [
+            "github.com",
+            "gitlab.com",
+            "bitbucket.org",
+        ]
+    )
+
     # OIDC Authentication (Keycloak / standard OIDC)
     OIDC_ENABLED: bool = Field(default=True)
     OIDC_ISSUER_URL: str = Field(

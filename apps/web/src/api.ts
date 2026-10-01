@@ -40,7 +40,7 @@ export interface Release {
     health_path?: string
     [key: string]: unknown
   }
-  status: 'REQUESTED' | 'BUILDING' | 'IMAGE_READY' | 'DEPLOYING' | 'HEALTHY' | 'BUILD_FAILED' | 'DEPLOY_FAILED'
+  status: 'REQUESTED' | 'BUILDING' | 'IMAGE_READY' | 'DEPLOYING' | 'HEALTHY' | 'BUILD_FAILED' | 'DEPLOY_FAILED' | 'SUPERSEDED'
   status_reason?: string | null
   commit_sha?: string | null
   git_ref?: string | null
@@ -277,27 +277,6 @@ export async function triggerBuild(
   return res.json()
 }
 
-export async function processBuild(
-  token: string,
-  releaseId: string,
-  succeed: boolean = true,
-  failureReason?: string
-): Promise<Release> {
-  const params = new URLSearchParams()
-  params.set('succeed', String(succeed))
-  if (failureReason) {
-    params.set('failure_reason', failureReason)
-  }
-  const res = await fetch(`/v1/releases/${releaseId}/process-build?${params.toString()}`, {
-    method: 'POST',
-    headers: getHeaders(token),
-  })
-  if (!res.ok) {
-    const msg = await extractErrorMessage(res, 'Failed to process build')
-    throw new Error(msg)
-  }
-  return res.json()
-}
 
 export type JobState =
   | 'QUEUED'

@@ -11,7 +11,6 @@ import {
   connectRepository,
   listRepositories,
   triggerBuild,
-  processBuild,
   listWorkspaceJobs,
   submitJob,
   cancelJob,
@@ -21,12 +20,7 @@ import './App.css'
 
 export default function App() {
   const [token, setToken] = useState('dev:test_user_alice')
-  const [activeWorkspace, setActiveWorkspace] = useState<Workspace | null>(() => ({
-    id: 'ws-demo-001',
-    name: 'Production Workspace',
-    slug: 'prod-workspace',
-    created_at: new Date().toISOString(),
-  }))
+  const [activeWorkspace, setActiveWorkspace] = useState<Workspace | null>(null)
   const [wsName, setWsName] = useState('')
   const [wsSlug, setWsSlug] = useState('')
   const [showNewWsForm, setShowNewWsForm] = useState(false)
@@ -334,27 +328,6 @@ export default function App() {
     }
   }
 
-  const handleProcessBuild = async (releaseId: string, succeed: boolean) => {
-    setErrorMsg(null)
-    try {
-      const rel = await processBuild(
-        token,
-        releaseId,
-        succeed,
-        succeed ? undefined : 'Docker build failed: exit status 1 during npm run build'
-      )
-      setNoticeMsg(`Build processed for release #${rel.release_number}: status is now ${rel.status}`)
-      await manualRefreshReleases()
-      if (activeWorkspace) {
-        const freshApps = await listApplications(token, activeWorkspace.id)
-        setApps(freshApps)
-        const updatedSelected = freshApps.find((a) => a.id === selectedApp?.id)
-        if (updatedSelected) setSelectedApp(updatedSelected)
-      }
-    } catch (err: unknown) {
-      setErrorMsg((err as Error).message)
-    }
-  }
 
   const handleSubmitJob = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -523,10 +496,6 @@ export default function App() {
           <div className="stat-metric">
             <span className="stat-label">Batch Jobs</span>
             <span className="stat-value">{jobs.length}</span>
-          </div>
-          <div className="stat-metric">
-            <span className="stat-label">Reconciler Cluster</span>
-            <span className="stat-value healthy-green">Operational</span>
           </div>
           <button
             className="btn-action-secondary"
@@ -817,13 +786,11 @@ export default function App() {
                   {/* Live Ingress URL or Readiness Failure Section */}
                   {releases.length > 0 && (() => {
                     const latest = releases[0]
-                    const port = latest.config_json?.port || 8080
-                    const path = latest.config_json?.health_path || '/'
-                    const serviceUrl = `http://localhost:${port}${path}`
+                    const runtimeUrl = (latest.config_json as Record<string, unknown>)?.ingress_url as string | undefined
                     const isHealthy = latest.status === 'HEALTHY'
                     const isFailed = latest.status === 'DEPLOY_FAILED' || latest.status === 'BUILD_FAILED'
 
-                    if (isHealthy) {
+                    if (isHealthy && runtimeUrl) {
                       return (
                         <div className="live-ingress-box">
                           <div className="ingress-meta-block">
@@ -831,17 +798,17 @@ export default function App() {
                               <span className="ingress-dot-pulse" /> Live HTTP Ingress (Active)
                             </span>
                             <a
-                              href={serviceUrl}
+                              href={runtimeUrl}
                               target="_blank"
                               rel="noreferrer"
                               className="ingress-url-link"
                             >
-                              {serviceUrl} ↗
+                              {runtimeUrl} ↗
                             </a>
                           </div>
                           <div>
                             <a
-                              href={serviceUrl}
+                              href={runtimeUrl}
                               target="_blank"
                               rel="noreferrer"
                               className="btn-action-primary"
@@ -860,7 +827,7 @@ export default function App() {
                             <span>⚠️ Readiness Probe Failure (Milestone M1 Validation)</span>
                           </div>
                           <p className="failure-description-text">
-                            The reconciler probe against <code>{serviceUrl}</code> failed to satisfy readiness requirements.
+                            The reconciler probe for release #{latest.release_number} failed to satisfy readiness requirements.
                             The incident has been logged and the previous serving generation remains protected.
                           </p>
                           <div className="failure-diagnostics-pre">
@@ -1120,7 +1087,6 @@ export default function App() {
                       <tbody>
                         {releases.map((rel) => {
                           const isCurrent = selectedApp.current_release_id === rel.id
-                          const isBuilding = rel.status === 'REQUESTED' || rel.status === 'BUILDING'
                           const isFailed = rel.status === 'BUILD_FAILED' || rel.status === 'DEPLOY_FAILED'
                           return (
                             <tr key={rel.id}>
@@ -1201,26 +1167,6 @@ export default function App() {
                               </td>
                               <td>
                                 <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
-                                  {isBuilding && (
-                                    <>
-                                      <button
-                                        className="btn-action-emerald"
-                                        style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
-                                        onClick={() => handleProcessBuild(rel.id, true)}
-                                        title="Simulate BuildKit completion"
-                                      >
-                                        ✓ Pass Build
-                                      </button>
-                                      <button
-                                        className="btn-action-danger"
-                                        style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
-                                        onClick={() => handleProcessBuild(rel.id, false)}
-                                        title="Simulate build error"
-                                      >
-                                        ✕ Fail Build
-                                      </button>
-                                    </>
-                                  )}
                                   {!isCurrent && rel.status === 'HEALTHY' && (
                                     <button
                                       className="btn-action-brown"

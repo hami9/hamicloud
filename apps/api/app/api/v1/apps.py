@@ -32,9 +32,9 @@ from app.schemas.application import (
     RollbackRequest,
     UpdateApplicationRequest,
 )
+import re
 from app.schemas.common import AcceptedOperationResponse
 from app.schemas.repository import TriggerBuildRequest
-from app.services.build_service import BuildService
 
 router = APIRouter(tags=["Applications"])
 
@@ -629,7 +629,14 @@ async def trigger_build(
     release_max = (await db.execute(rel_max_stmt)).scalar() or 0
     next_release_number = release_max + 1
 
-    commit_sha = payload.commit_sha or uuid.uuid4().hex[:40]
+    commit_sha = payload.commit_sha
+    if commit_sha:
+        commit_sha = commit_sha.strip()
+        if not re.match(r"^[0-9a-fA-F]{7,40}$", commit_sha):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Invalid commit_sha format; expected 7-40 hex characters",
+            )
     git_ref = payload.git_ref or app.git_branch or "main"
 
     latest_rel_stmt = (
@@ -692,47 +699,3 @@ async def trigger_build(
     )
 
 
-@router.post(
-    "/releases/{release_id}/process-build",
-    response_model=ReleaseResponse,
-    status_code=status.HTTP_200_OK,
-)
-async def process_release_build(
-    release_id: uuid.UUID,
-    succeed: bool = Query(True),
-    failure_reason: Optional[str] = Query(None),
-    caller: Caller = Depends(get_caller),
-    db: AsyncSession = Depends(get_db),
-) -> ReleaseResponse:
-    release = (
-        await db.execute(select(Release).where(Release.id == release_id))
-    ).scalar_one_or_none()
-    if not release:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Release not found",
-        )
-
-    await authorize_workspace_access(
-        db, caller, release.workspace_id, min_role=WorkspaceRole.DEVELOPER, not_found_detail="Release not found"
-    )
-
-    updated_release = await BuildService.process_build(
-        db, release_id, succeed=succeed, failure_reason=failure_reason
-    )
-    return ReleaseResponse(
-        id=updated_release.id,
-        application_id=updated_release.application_id,
-        workspace_id=updated_release.workspace_id,
-        release_number=updated_release.release_number,
-        image_digest=updated_release.image_digest,
-        config_json=updated_release.config_json or {},
-        status=updated_release.status,
-        status_reason=updated_release.status_reason,
-        commit_sha=updated_release.commit_sha,
-        git_ref=updated_release.git_ref,
-        commit_message=updated_release.commit_message,
-        build_duration_ms=updated_release.build_duration_ms,
-        build_logs=updated_release.build_logs,
-        created_at=updated_release.created_at,
-    )

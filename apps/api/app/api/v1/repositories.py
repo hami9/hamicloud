@@ -6,6 +6,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import Caller, authorize_workspace_access, get_caller
+from app.core.config import settings
 from app.core.db_errors import unexpected_integrity_error, violated_constraint
 from app.core.pagination import decode_cursor, encode_cursor
 from app.db.session import get_db
@@ -20,6 +21,22 @@ from app.schemas.repository import (
 router = APIRouter(tags=["Repositories"])
 
 
+def validate_repo_url(repo_url: str) -> str:
+    url = repo_url.strip()
+    if not (url.startswith("https://") or url.startswith("git@") or url.startswith("ssh://")):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid repository URL: must start with https://, git@, or ssh://",
+        )
+    approved = any(host in url.lower() for host in settings.APPROVED_REPOSITORY_HOSTS)
+    if not approved:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="REPOSITORY_POLICY_VIOLATION: Repository host is not in the approved repository allowlist",
+        )
+    return url
+
+
 @router.post(
     "/workspaces/{workspace_id}/repositories",
     response_model=RepositoryResponse,
@@ -31,6 +48,9 @@ async def create_repository(
     caller: Caller = Depends(get_caller),
     db: AsyncSession = Depends(get_db),
 ) -> RepositoryResponse:
+    # Validate repository URL against allowlist policy (Roadmap requirement)
+    clean_repo_url = validate_repo_url(payload.repo_url)
+
     # Authorize workspace access (DEVELOPER required to connect repositories)
     await authorize_workspace_access(
         db, caller, workspace_id, min_role=WorkspaceRole.DEVELOPER, not_found_detail="Workspace not found"
@@ -52,7 +72,7 @@ async def create_repository(
         id=uuid.uuid4(),
         workspace_id=workspace_id,
         name=payload.name,
-        repo_url=payload.repo_url,
+        repo_url=clean_repo_url,
         webhook_secret=payload.webhook_secret,
         default_branch=payload.default_branch,
     )

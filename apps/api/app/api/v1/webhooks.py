@@ -108,6 +108,27 @@ async def handle_github_webhook(
             processed_at=delivery.created_at,
         )
 
+    # Only X-GitHub-Event "push" triggers build workflows; ignore all other events cleanly
+    if x_github_event != "push":
+        delivery = WebhookDelivery(
+            id=uuid.uuid4(),
+            workspace_id=repo.workspace_id,
+            repository_id=repo.id,
+            delivery_id=x_github_delivery,
+            event_type=x_github_event or "unknown",
+            payload_hash=payload_hash,
+            status="IGNORED_NON_PUSH_EVENT",
+        )
+        db.add(delivery)
+        await db.commit()
+        response.status_code = status.HTTP_200_OK
+        return WebhookDeliveryResponse(
+            delivery_id=x_github_delivery,
+            status="IGNORED_NON_PUSH_EVENT",
+            event_type=x_github_event or "unknown",
+            processed_at=delivery.created_at,
+        )
+
     # 6. Parse push event
     try:
         payload: Dict[str, Any] = json.loads(raw_body.decode("utf-8"))

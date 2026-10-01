@@ -4,7 +4,7 @@ Single tracking file for both projects. It links the two roadmaps, fixes the exe
 
 **Status legend:** `[ ]` not started · `[~]` in progress · `[x]` closed with a committed evidence record
 
-**Current position:** HamiCloud M4 — open.
+**Current position:** HamiCloud M1 — open.
 
 ---
 
@@ -70,22 +70,25 @@ A closed milestone that later turns out to be wrong does not get its old checkli
 - **Closed Date:** 2026-09-26
 - **Evidence Record:** [`docs/evidence/M0.md`](docs/evidence/M0.md)
 
-## A.2 M1 — First live application `[x]`
+## A.2 M1 — First live application `[ ]`
 
-- **Status:** Closed
-- **Closed Date:** 2026-09-30
+- **Status:** Reopened
+- **Reopened Date:** 2026-10-01
+- **Reason:** Closure rejected in engineering review. Workload runners only tested against fake clientset; real cluster deployment evidence required; dashboard hard-coded links and static labels must be removed.
 - **Evidence Record:** [`docs/evidence/M1.md`](docs/evidence/M1.md)
 
-## A.3 M2 — Usable MVP `[x]`
+## A.3 M2 — Usable MVP `[ ]`
 
-- **Status:** Closed
-- **Closed Date:** 2026-09-30
+- **Status:** Reopened
+- **Reopened Date:** 2026-10-01
+- **Reason:** Closure rejected in engineering review. Demos were not real recordings (UUIDs, resource names, log lines contradicted code); HTTPS URL and DLQ UI not met; superseded release race in ScanUnadmittedReleases and recovery defect (skipping RECOVERY_PENDING) must be resolved.
 - **Evidence Record:** [`docs/evidence/M2.md`](docs/evidence/M2.md)
 
-## A.4 M3 — Source-to-URL `[x]`
+## A.4 M3 — Source-to-URL `[ ]`
 
-- **Status:** Closed
-- **Closed Date:** 2026-09-30
+- **Status:** Reopened
+- **Reopened Date:** 2026-10-01
+- **Reason:** Closure rejected in engineering review. BuildService was a simulator inventing digests/logs and writing HEALTHY and current_release_id via API; remove simulator, enforce repo allowlist, real BuildKit task, and registry push.
 - **Evidence Record:** [`docs/evidence/M3.md`](docs/evidence/M3.md)
 
 ## A.5 M4 — Multi-user readiness `[ ]`

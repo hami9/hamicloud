@@ -125,3 +125,91 @@ func TestHTTPProbeRunner_RefusesNonDevelopmentEnvironment(t *testing.T) {
 		t.Fatal("expected non-nil runner in development")
 	}
 }
+
+type mockReconcilerStore struct {
+	becameCurrent bool
+	healthyCalled bool
+	failedCalled  bool
+}
+
+func (m *mockReconcilerStore) MarkReleaseHealthy(ctx context.Context, intentID, releaseID, appID, resourceUID string, leaseEpoch int) (bool, error) {
+	m.healthyCalled = true
+	return m.becameCurrent, nil
+}
+
+func (m *mockReconcilerStore) MarkReleaseFailed(ctx context.Context, intentID, releaseID, reason string, leaseEpoch int) error {
+	m.failedCalled = true
+	return nil
+}
+
+type mockReconcilerRunner struct {
+	teardownSupersededAppID string
+	teardownSupersededGen   int
+	teardownSupersededCount int
+}
+
+func (m *mockReconcilerRunner) Deploy(ctx context.Context, workload *store.ClaimedWorkload) (string, error) {
+	return "uid-123", nil
+}
+
+func (m *mockReconcilerRunner) CheckReadiness(ctx context.Context, workload *store.ClaimedWorkload) (bool, string, error) {
+	return true, "", nil
+}
+
+func (m *mockReconcilerRunner) Teardown(ctx context.Context, workload *store.ClaimedWorkload) error {
+	return nil
+}
+
+func (m *mockReconcilerRunner) TeardownSupersededGenerations(ctx context.Context, applicationID string, currentGeneration int) error {
+	m.teardownSupersededAppID = applicationID
+	m.teardownSupersededGen = currentGeneration
+	m.teardownSupersededCount++
+	return nil
+}
+
+func TestServiceReconciler_TeardownOnlyWhenBecameCurrent(t *testing.T) {
+	ctx := context.Background()
+
+	workload := &store.ClaimedWorkload{
+		IntentID:                  "intent-2",
+		ReleaseID:                 "rel-2",
+		ApplicationID:             "app-123",
+		ApplicationSlug:           "my-svc",
+		Port:                      8080,
+		TargetGeneration:          2,
+		DeterministicResourceName: "hc-svc-app-123-2",
+		LeaseEpoch:                1,
+	}
+
+	// Case 1: becameCurrent is true -> TeardownSupersededGenerations MUST be called
+	storeCurrent := &mockReconcilerStore{becameCurrent: true}
+	runnerCurrent := &mockReconcilerRunner{}
+	recCurrent := NewServiceReconciler(storeCurrent, runnerCurrent, nil)
+
+	err := recCurrent.ReconcileOne(ctx, workload)
+	if err != nil {
+		t.Fatalf("unexpected reconcile error: %v", err)
+	}
+	if !storeCurrent.healthyCalled {
+		t.Errorf("expected MarkReleaseHealthy to be called")
+	}
+	if runnerCurrent.teardownSupersededCount != 1 {
+		t.Errorf("expected TeardownSupersededGenerations to be called once when becameCurrent=true, got %d", runnerCurrent.teardownSupersededCount)
+	}
+	if runnerCurrent.teardownSupersededAppID != "app-123" || runnerCurrent.teardownSupersededGen != 2 {
+		t.Errorf("expected teardown for app-123 gen 2, got app=%s gen=%d", runnerCurrent.teardownSupersededAppID, runnerCurrent.teardownSupersededGen)
+	}
+
+	// Case 2: becameCurrent is false -> TeardownSupersededGenerations MUST NOT be called
+	storeNotCurrent := &mockReconcilerStore{becameCurrent: false}
+	runnerNotCurrent := &mockReconcilerRunner{}
+	recNotCurrent := NewServiceReconciler(storeNotCurrent, runnerNotCurrent, nil)
+
+	err = recNotCurrent.ReconcileOne(ctx, workload)
+	if err != nil {
+		t.Fatalf("unexpected reconcile error: %v", err)
+	}
+	if runnerNotCurrent.teardownSupersededCount != 0 {
+		t.Errorf("expected TeardownSupersededGenerations NOT to be called when becameCurrent=false, got %d", runnerNotCurrent.teardownSupersededCount)
+	}
+}

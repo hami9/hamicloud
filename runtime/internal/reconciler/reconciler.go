@@ -17,6 +17,7 @@ type WorkloadRunner interface {
 	Deploy(ctx context.Context, workload *store.ClaimedWorkload) (string, error)
 	CheckReadiness(ctx context.Context, workload *store.ClaimedWorkload) (bool, string, error)
 	Teardown(ctx context.Context, workload *store.ClaimedWorkload) error
+	TeardownSupersededGenerations(ctx context.Context, applicationID string, currentGeneration int) error
 }
 
 // HTTPProbeRunner is a development-only runner that probes service readiness directly against localhost.
@@ -78,15 +79,25 @@ func (h *HTTPProbeRunner) Teardown(ctx context.Context, workload *store.ClaimedW
 	return nil
 }
 
+func (h *HTTPProbeRunner) TeardownSupersededGenerations(ctx context.Context, applicationID string, currentGeneration int) error {
+	return nil
+}
+
+// ServiceStore abstracts persistence operations needed during service release reconciliation.
+type ServiceStore interface {
+	MarkReleaseHealthy(ctx context.Context, intentID, releaseID, appID, resourceUID string, leaseEpoch int) (bool, error)
+	MarkReleaseFailed(ctx context.Context, intentID, releaseID, reason string, leaseEpoch int) error
+}
+
 type ServiceReconciler struct {
-	store         *store.PostgresStore
+	store         ServiceStore
 	runner        WorkloadRunner
 	logger        *slog.Logger
 	maxRetries    int
 	retryInterval time.Duration
 }
 
-func NewServiceReconciler(st *store.PostgresStore, runner WorkloadRunner, logger *slog.Logger) *ServiceReconciler {
+func NewServiceReconciler(st ServiceStore, runner WorkloadRunner, logger *slog.Logger) *ServiceReconciler {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -158,18 +169,16 @@ func (r *ServiceReconciler) ReconcileOne(ctx context.Context, workload *store.Cl
 			"app_id", workload.ApplicationID,
 			"lease_epoch", workload.LeaseEpoch,
 		)
-		if err := r.store.MarkReleaseHealthy(ctx, workload.IntentID, workload.ReleaseID, workload.ApplicationID, resUID, workload.LeaseEpoch); err != nil {
+		becameCurrent, err := r.store.MarkReleaseHealthy(ctx, workload.IntentID, workload.ReleaseID, workload.ApplicationID, resUID, workload.LeaseEpoch)
+		if err != nil {
 			r.logger.Error("Failed to mark release healthy in database", "error", err)
 			return err
 		}
 
-		// Tear down all previous generations so older deployments, services, and ingresses do not leak
-		for gen := 1; gen < workload.TargetGeneration; gen++ {
-			prevWorkload := *workload
-			prevWorkload.TargetGeneration = gen
-			prevWorkload.DeterministicResourceName = fmt.Sprintf("hc-svc-%s-%d", workload.ApplicationSlug, gen)
-			if tdErr := r.runner.Teardown(ctx, &prevWorkload); tdErr != nil {
-				r.logger.Warn("Failed to teardown older generation workload", "generation", gen, "error", tdErr)
+		// Tear down older generations only when this release actually became the application's current release
+		if becameCurrent {
+			if tdErr := r.runner.TeardownSupersededGenerations(ctx, workload.ApplicationID, workload.TargetGeneration); tdErr != nil {
+				r.logger.Warn("Failed to teardown older generation workload", "app_id", workload.ApplicationID, "generation", workload.TargetGeneration, "error", tdErr)
 			}
 		}
 		return nil

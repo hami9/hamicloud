@@ -256,3 +256,70 @@ func TestKubeJobTaskRunner_Timeout(t *testing.T) {
 	assert.Equal(t, -1, exitCode)
 	assert.Contains(t, reason, "timed out")
 }
+
+func TestKubeWorkloadRunner_TeardownSupersededGenerations(t *testing.T) {
+	ctx := context.Background()
+	fakeClient := fake.NewSimpleClientset()
+	ns := "test-ns"
+
+	runner := NewKubeWorkloadRunner(fakeClient, ns, "hamicloud.local")
+
+	appID := "app-uuid-1234"
+	appSlug := "my-service"
+
+	workloadGen1 := &store.ClaimedWorkload{
+		WorkspaceID:               "ws-1",
+		WorkspaceSlug:             "team",
+		ApplicationID:             appID,
+		ApplicationSlug:           appSlug,
+		ReleaseID:                 "rel-1",
+		ReleaseNumber:             1,
+		ImageDigest:               "registry.example.com/app:v1",
+		Port:                      8080,
+		TargetGeneration:          1,
+		DeterministicResourceName: "hc-svc-" + appID + "-1",
+	}
+
+	workloadGen2 := &store.ClaimedWorkload{
+		WorkspaceID:               "ws-1",
+		WorkspaceSlug:             "team",
+		ApplicationID:             appID,
+		ApplicationSlug:           appSlug,
+		ReleaseID:                 "rel-2",
+		ReleaseNumber:             2,
+		ImageDigest:               "registry.example.com/app:v2",
+		Port:                      8080,
+		TargetGeneration:          2,
+		DeterministicResourceName: "hc-svc-" + appID + "-2",
+	}
+
+	// Deploy generation 1
+	_, err := runner.Deploy(ctx, workloadGen1)
+	require.NoError(t, err)
+
+	// Deploy generation 2
+	_, err = runner.Deploy(ctx, workloadGen2)
+	require.NoError(t, err)
+
+	// Both deployments exist in cluster
+	d1, err := fakeClient.AppsV1().Deployments(ns).Get(ctx, "hc-svc-"+appID+"-1", metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "hc-svc-"+appID+"-1", d1.Name)
+
+	d2, err := fakeClient.AppsV1().Deployments(ns).Get(ctx, "hc-svc-"+appID+"-2", metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "hc-svc-"+appID+"-2", d2.Name)
+
+	// Call TeardownSupersededGenerations for generation 2
+	err = runner.TeardownSupersededGenerations(ctx, appID, 2)
+	require.NoError(t, err)
+
+	// Generation 1 must be deleted
+	_, err = fakeClient.AppsV1().Deployments(ns).Get(ctx, "hc-svc-"+appID+"-1", metav1.GetOptions{})
+	assert.Error(t, err, "older generation 1 must be deleted")
+
+	// Generation 2 must still exist
+	d2After, err := fakeClient.AppsV1().Deployments(ns).Get(ctx, "hc-svc-"+appID+"-2", metav1.GetOptions{})
+	require.NoError(t, err, "current generation 2 must survive teardown")
+	assert.Equal(t, "hc-svc-"+appID+"-2", d2After.Name)
+}

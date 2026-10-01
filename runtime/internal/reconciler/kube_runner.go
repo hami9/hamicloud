@@ -103,7 +103,7 @@ func NewKubeWorkloadRunner(client kubernetes.Interface, namespace string, ingres
 func (k *KubeWorkloadRunner) Deploy(ctx context.Context, workload *store.ClaimedWorkload) (string, error) {
 	name := sanitizeResourceName(workload.DeterministicResourceName)
 	if name == "" {
-		name = sanitizeResourceName(fmt.Sprintf("hc-svc-%s-%d", workload.ApplicationSlug, workload.TargetGeneration))
+		name = sanitizeResourceName(fmt.Sprintf("hc-svc-%s-%d", workload.ApplicationID, workload.TargetGeneration))
 	}
 
 	appSlug := sanitizeResourceName(workload.ApplicationSlug)
@@ -289,7 +289,7 @@ func (k *KubeWorkloadRunner) Deploy(ctx context.Context, workload *store.Claimed
 func (k *KubeWorkloadRunner) CheckReadiness(ctx context.Context, workload *store.ClaimedWorkload) (bool, string, error) {
 	name := sanitizeResourceName(workload.DeterministicResourceName)
 	if name == "" {
-		name = sanitizeResourceName(fmt.Sprintf("hc-svc-%s-%d", workload.ApplicationSlug, workload.TargetGeneration))
+		name = sanitizeResourceName(fmt.Sprintf("hc-svc-%s-%d", workload.ApplicationID, workload.TargetGeneration))
 	}
 
 	deploy, err := k.client.AppsV1().Deployments(k.namespace).Get(ctx, name, metav1.GetOptions{})
@@ -338,7 +338,7 @@ func (k *KubeWorkloadRunner) CheckReadiness(ctx context.Context, workload *store
 func (k *KubeWorkloadRunner) Teardown(ctx context.Context, workload *store.ClaimedWorkload) error {
 	name := sanitizeResourceName(workload.DeterministicResourceName)
 	if name == "" {
-		name = sanitizeResourceName(fmt.Sprintf("hc-svc-%s-%d", workload.ApplicationSlug, workload.TargetGeneration))
+		name = sanitizeResourceName(fmt.Sprintf("hc-svc-%s-%d", workload.ApplicationID, workload.TargetGeneration))
 	}
 
 	bg := metav1.DeletePropagationBackground
@@ -349,6 +349,84 @@ func (k *KubeWorkloadRunner) Teardown(ctx context.Context, workload *store.Claim
 	if k.ingressDomain != "" {
 		_ = k.client.NetworkingV1().Ingresses(k.namespace).Delete(ctx, name, delOpts)
 	}
+	return nil
+}
+
+// TeardownSupersededGenerations deletes deployments, services, and ingresses belonging to the application
+// whose generation does not match currentGeneration.
+func (k *KubeWorkloadRunner) TeardownSupersededGenerations(ctx context.Context, applicationID string, currentGeneration int) error {
+	bg := metav1.DeletePropagationBackground
+	delOpts := metav1.DeleteOptions{PropagationPolicy: &bg}
+
+	selector := fmt.Sprintf("hamicloud.io/application-id=%s,hamicloud.io/generation!=%d", applicationID, currentGeneration)
+	listOpts := metav1.ListOptions{LabelSelector: selector}
+
+	// Delete older deployments
+	deploys, err := k.client.AppsV1().Deployments(k.namespace).List(ctx, listOpts)
+	if err == nil {
+		for _, d := range deploys.Items {
+			if d.Labels["hamicloud.io/generation"] != strconv.Itoa(currentGeneration) {
+				_ = k.client.AppsV1().Deployments(k.namespace).Delete(ctx, d.Name, delOpts)
+			}
+		}
+	}
+
+	// Delete older services
+	services, err := k.client.CoreV1().Services(k.namespace).List(ctx, listOpts)
+	if err == nil {
+		for _, s := range services.Items {
+			if s.Labels["hamicloud.io/generation"] != strconv.Itoa(currentGeneration) {
+				_ = k.client.CoreV1().Services(k.namespace).Delete(ctx, s.Name, delOpts)
+			}
+		}
+	}
+
+	// Delete older ingresses
+	if k.ingressDomain != "" {
+		ingresses, err := k.client.NetworkingV1().Ingresses(k.namespace).List(ctx, listOpts)
+		if err == nil {
+			for _, ing := range ingresses.Items {
+				if ing.Labels["hamicloud.io/generation"] != strconv.Itoa(currentGeneration) {
+					_ = k.client.NetworkingV1().Ingresses(k.namespace).Delete(ctx, ing.Name, delOpts)
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+// KubeJobDeleter implements store.JobDeleter by deleting Kubernetes batch/v1 Jobs.
+type KubeJobDeleter struct {
+	client    kubernetes.Interface
+	namespace string
+}
+
+func NewKubeJobDeleter(client kubernetes.Interface, namespace string) *KubeJobDeleter {
+	if namespace == "" {
+		namespace = "default"
+	}
+	return &KubeJobDeleter{
+		client:    client,
+		namespace: namespace,
+	}
+}
+
+func (d *KubeJobDeleter) DeleteJob(ctx context.Context, resourceName string) error {
+	name := sanitizeResourceName(resourceName)
+	bg := metav1.DeletePropagationBackground
+	delOpts := metav1.DeleteOptions{PropagationPolicy: &bg}
+	err := d.client.BatchV1().Jobs(d.namespace).Delete(ctx, name, delOpts)
+	if err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete kubernetes job %s: %w", name, err)
+	}
+	return nil
+}
+
+// NoopJobDeleter provides a no-op implementation of store.JobDeleter for development environments.
+type NoopJobDeleter struct{}
+
+func (d *NoopJobDeleter) DeleteJob(ctx context.Context, resourceName string) error {
 	return nil
 }
 

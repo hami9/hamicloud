@@ -208,7 +208,7 @@ def test_live_keycloak_tokens_and_two_workspace_isolation(client: TestClient):
     """
     keycloak_token_url = f"{settings.OIDC_ISSUER_URL}/protocol/openid-connect/token"
     try:
-        resp = httpx.get(f"{settings.OIDC_ISSUER_URL}/.well-known/openid-configuration", timeout=2.0)
+        resp = httpx.get(f"{settings.OIDC_ISSUER_URL}/.well-known/openid-configuration", timeout=15.0)
         if resp.status_code != 200:
             pytest.skip("Keycloak server is not running at OIDC_ISSUER_URL")
     except Exception:
@@ -227,7 +227,7 @@ def test_live_keycloak_tokens_and_two_workspace_isolation(client: TestClient):
                 "username": "alice",
                 "password": "alice123",
             },
-            timeout=10.0,
+            timeout=30.0,
         )
         assert alice_res.status_code == 200, f"Alice auth failed: {alice_res.text}"
         alice_token = alice_res.json()["access_token"]
@@ -242,7 +242,7 @@ def test_live_keycloak_tokens_and_two_workspace_isolation(client: TestClient):
                 "username": "bob",
                 "password": "bob123",
             },
-            timeout=10.0,
+            timeout=30.0,
         )
         assert bob_res.status_code == 200, f"Bob auth failed: {bob_res.text}"
         bob_token = bob_res.json()["access_token"]

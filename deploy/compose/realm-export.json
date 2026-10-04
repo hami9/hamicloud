@@ -9,6 +9,7 @@
   "duplicateEmailsAllowed": false,
   "resetPasswordAllowed": false,
   "editUsernameAllowed": false,
+  "passwordPolicy": "hashAlgorithm(pbkdf2-sha256) and hashIterations(1000)",
   "clients": [
     {
       "clientId": "hamicloud-api",

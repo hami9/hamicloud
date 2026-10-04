@@ -43,12 +43,31 @@ def extract_repo_host(repo_url: str) -> str:
 
 
 def validate_repo_url(repo_url: str) -> str:
+    if "\\" in repo_url:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid repository URL: backslash is not allowed",
+        )
+    if any(c.isspace() for c in repo_url):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid repository URL: whitespace is not allowed",
+        )
     url = repo_url.strip()
     if not (url.startswith("https://") or url.startswith("git@") or url.startswith("ssh://")):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Invalid repository URL: must start with https://, git@, or ssh://",
         )
+    if url.startswith("https://"):
+        parsed = urllib.parse.urlsplit(url)
+        # Check for userinfo (e.g. user:pass@host or evil.example@github.com)
+        authority = url[8:].split("/", 1)[0]
+        if parsed.username or parsed.password or ("@" in parsed.netloc) or ("@" in authority):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Invalid repository URL: userinfo is not allowed on https",
+            )
     host = extract_repo_host(url)
     approved_hosts = {h.strip().lower() for h in settings.APPROVED_REPOSITORY_HOSTS}
     if host not in approved_hosts:

@@ -457,6 +457,27 @@ async def test_m3_repository_url_validation_and_allowlist():
             bp_data = bp_resp.json()
             assert "REPOSITORY_POLICY_VIOLATION" in (bp_data.get("message") or bp_data.get("detail") or "")
 
+        # Strict validation cases: backslash, whitespace, and userinfo on https
+        strict_invalid_urls = [
+            ("https://evil.example\\@github.com/x.git", "backslash"),
+            ("https://user:pass@github.com/x.git", "userinfo"),
+            ("https://github.com/my org/repo.git", "whitespace"),
+            ("https://github.com/repo\t/x.git", "whitespace"),
+            ("git@github.com:my org/repo.git", "whitespace"),
+            ("https://github.com/x\\y.git", "backslash"),
+        ]
+        for idx, (inv_url, reason) in enumerate(strict_invalid_urls):
+            inv_resp = await client.post(
+                f"/v1/workspaces/{ws_id}/repositories",
+                json={
+                    "name": f"strict-inv-{idx}",
+                    "repo_url": inv_url,
+                    "webhook_secret": SECRET_KEY,
+                },
+                headers={"X-Dev-Subject": "alice"},
+            )
+            assert inv_resp.status_code == 422, f"Expected 422 for {reason} in {inv_url}, got {inv_resp.status_code}"
+
         # Valid approved host formats (must succeed)
         valid_urls = [
             ("ok-github-ssh", "git@github.com:my-org/my-repo.git"),

@@ -18,7 +18,7 @@ New-Item -ItemType Directory -Force -Path $RawDir | Out-Null
 $ApiUrl = "http://127.0.0.1:$Port"
 $env:ENVIRONMENT = "development"
 $env:RUNTIME_DATABASE_URL = $DatabaseUrl
-$env:DATABASE_URL = $DatabaseUrl.Replace("postgres://", "postgresql+asyncpg://")
+$env:DATABASE_URL = $DatabaseUrl.Replace("postgres://", "postgresql+asyncpg://").Split("?")[0]
 
 function Run-Psql([string]$query) {
     if (Get-Command psql -ErrorAction SilentlyContinue) {
@@ -28,16 +28,14 @@ function Run-Psql([string]$query) {
     }
 }
 
-# 0. Ensure binaries exist
+# 0. Always rebuild runtime binaries to ensure running latest code
 $schedulerExe = Join-Path $RootDir "bin/hamicloud-scheduler.exe"
 $executorExe = Join-Path $RootDir "bin/hamicloud-executor.exe"
-if (-not (Test-Path $schedulerExe) -or -not (Test-Path $executorExe)) {
-    Write-Host "Building Go runtime binaries..."
-    Push-Location (Join-Path $RootDir "runtime")
-    go build -o ../bin/hamicloud-scheduler.exe ./cmd/hamicloud-scheduler
-    go build -o ../bin/hamicloud-executor.exe ./cmd/hamicloud-executor
-    Pop-Location
-}
+Write-Host "Building Go runtime binaries..."
+Push-Location (Join-Path $RootDir "runtime")
+go build -o ../bin/hamicloud-scheduler.exe ./cmd/hamicloud-scheduler
+go build -o ../bin/hamicloud-executor.exe ./cmd/hamicloud-executor
+Pop-Location
 
 # 1. Ensure API server is running
 $apiProcess = $null
@@ -48,15 +46,7 @@ try {
 } catch {
     Write-Host "Starting API server on port $Port..."
     $pythonExe = Join-Path $RootDir ".venv/Scripts/python.exe"
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = $pythonExe
-    $psi.Arguments = "-m uvicorn app.main:app --port $Port --host 127.0.0.1"
-    $psi.WorkingDirectory = (Join-Path $RootDir "apps/api")
-    $psi.UseShellExecute = $false
-    $psi.EnvironmentVariables["ENVIRONMENT"] = "development"
-    $psi.EnvironmentVariables["DATABASE_URL"] = $env:DATABASE_URL
-    $psi.EnvironmentVariables["RUNTIME_DATABASE_URL"] = $env:RUNTIME_DATABASE_URL
-    $apiProcess = [System.Diagnostics.Process]::Start($psi)
+    $apiProcess = Start-Process -FilePath $pythonExe -ArgumentList "-m", "uvicorn", "app.main:app", "--port", "$Port", "--host", "127.0.0.1" -WorkingDirectory (Join-Path $RootDir "apps/api") -PassThru
     $startedApi = $true
     
     $ready = $false
@@ -113,8 +103,9 @@ try {
     $schedAdmit1 = & $schedulerExe --run-once 2>&1 | Out-String
     Set-Content -Path (Join-Path $RawDir "02-scheduler-admit-1.log") -Value $schedAdmit1 -Encoding utf8
 
-    # 5. Run executor for attempt 1
+    # 5. Run executor for attempt 1 with workspace scoping
     Write-Host "Executing attempt 1 with executor (exits with status 42)..."
+    $env:WORKLOAD_WORKSPACE_ID = $workspaceId
     $execAttempt1 = & $executorExe --run-once 2>&1 | Out-String
     Set-Content -Path (Join-Path $RawDir "03-executor-attempt-1.log") -Value $execAttempt1 -Encoding utf8
 
@@ -129,6 +120,7 @@ try {
 
     # 8. Run executor for attempt 2 (exits 42, budget exhausted -> terminal FAILED)
     Write-Host "Executing attempt 2 with executor (budget exhausted)..."
+    $env:WORKLOAD_WORKSPACE_ID = $workspaceId
     $execAttempt2 = & $executorExe --run-once 2>&1 | Out-String
     Set-Content -Path (Join-Path $RawDir "05-executor-attempt-2.log") -Value $execAttempt2 -Encoding utf8
 
@@ -136,12 +128,35 @@ try {
     Write-Host "Fetching final job status via API..."
     $finalJobRaw = Invoke-WebRequest -Uri "$ApiUrl/v1/jobs/$jobId" -Method GET -UseBasicParsing -Headers @{"X-Dev-Subject"="alice"}
     Set-Content -Path (Join-Path $RawDir "06-get-job-final.json") -Value $finalJobRaw.Content -Encoding utf8
+    $finalJob = $finalJobRaw.Content | ConvertFrom-Json
 
     # 10. Query database attempts table
     $finalDbAttempts = Run-Psql "SELECT attempt_number, state, exit_code, failure_reason, started_at IS NOT NULL as has_started, finished_at IS NOT NULL as has_finished FROM job_attempts WHERE job_id = '$jobId' ORDER BY attempt_number;" | Out-String
     Set-Content -Path (Join-Path $RawDir "07-db-attempts.txt") -Value $finalDbAttempts -Encoding utf8
 
-    Write-Host "Failed job demo completed successfully. Raw output written to $RawDir"
+    # 11. Strict assertions: job and attempt state validation
+    Write-Host "Verifying strict assertions for failed job demo..."
+    if ($finalJob.id -ne $jobId) {
+        throw "Assertion failed: final job id ($($finalJob.id)) does not match submitted job id ($jobId)!"
+    }
+    if ($finalJob.state -ne "FAILED") {
+        throw "Assertion failed: final job state is '$($finalJob.state)', expected 'FAILED'!"
+    }
+    if ($finalJob.current_attempt_number -ne 2) {
+        throw "Assertion failed: final job current_attempt_number is $($finalJob.current_attempt_number), expected 2!"
+    }
+
+    $att1Check = Run-Psql "SELECT state || '|' || COALESCE(exit_code::text, '') FROM job_attempts WHERE job_id = '$jobId' AND attempt_number = 1;" | Out-String
+    if ($att1Check -notmatch "FAILED\|42") {
+        throw "Assertion failed: Attempt 1 is not FAILED with exit code 42. Actual: $att1Check"
+    }
+
+    $att2Check = Run-Psql "SELECT state || '|' || COALESCE(exit_code::text, '') FROM job_attempts WHERE job_id = '$jobId' AND attempt_number = 2;" | Out-String
+    if ($att2Check -notmatch "FAILED\|42") {
+        throw "Assertion failed: Attempt 2 is not FAILED with exit code 42. Actual: $att2Check"
+    }
+
+    Write-Host "Failed job demo completed successfully with all assertions passing. Raw output written to $RawDir"
 } finally {
     if ($startedApi -and $apiProcess) {
         Write-Host "Stopping demo API server..."

@@ -16,7 +16,7 @@ New-Item -ItemType Directory -Force -Path $RawDir | Out-Null
 $ApiUrl = "http://127.0.0.1:$Port"
 $env:ENVIRONMENT = "development"
 $env:RUNTIME_DATABASE_URL = $DatabaseUrl
-$env:DATABASE_URL = $DatabaseUrl.Replace("postgres://", "postgresql+asyncpg://")
+$env:DATABASE_URL = $DatabaseUrl.Replace("postgres://", "postgresql+asyncpg://").Split("?")[0]
 
 function Run-Psql([string]$query) {
     if (Get-Command psql -ErrorAction SilentlyContinue) {
@@ -26,16 +26,14 @@ function Run-Psql([string]$query) {
     }
 }
 
-# 0. Ensure binaries exist
+# 0. Always rebuild runtime binaries to ensure running latest code
 $schedulerExe = Join-Path $RootDir "bin/hamicloud-scheduler.exe"
 $executorExe = Join-Path $RootDir "bin/hamicloud-executor.exe"
-if (-not (Test-Path $schedulerExe) -or -not (Test-Path $executorExe)) {
-    Write-Host "Building Go runtime binaries..."
-    Push-Location (Join-Path $RootDir "runtime")
-    go build -o ../bin/hamicloud-scheduler.exe ./cmd/hamicloud-scheduler
-    go build -o ../bin/hamicloud-executor.exe ./cmd/hamicloud-executor
-    Pop-Location
-}
+Write-Host "Building Go runtime binaries..."
+Push-Location (Join-Path $RootDir "runtime")
+go build -o ../bin/hamicloud-scheduler.exe ./cmd/hamicloud-scheduler
+go build -o ../bin/hamicloud-executor.exe ./cmd/hamicloud-executor
+Pop-Location
 
 # 1. Ensure API server is running
 $apiProcess = $null
@@ -46,15 +44,7 @@ try {
 } catch {
     Write-Host "Starting API server on port $Port..."
     $pythonExe = Join-Path $RootDir ".venv/Scripts/python.exe"
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = $pythonExe
-    $psi.Arguments = "-m uvicorn app.main:app --port $Port --host 127.0.0.1"
-    $psi.WorkingDirectory = (Join-Path $RootDir "apps/api")
-    $psi.UseShellExecute = $false
-    $psi.EnvironmentVariables["ENVIRONMENT"] = "development"
-    $psi.EnvironmentVariables["DATABASE_URL"] = $env:DATABASE_URL
-    $psi.EnvironmentVariables["RUNTIME_DATABASE_URL"] = $env:RUNTIME_DATABASE_URL
-    $apiProcess = [System.Diagnostics.Process]::Start($psi)
+    $apiProcess = Start-Process -FilePath $pythonExe -ArgumentList "-m", "uvicorn", "app.main:app", "--port", "$Port", "--host", "127.0.0.1" -WorkingDirectory (Join-Path $RootDir "apps/api") -PassThru
     $startedApi = $true
     
     $ready = $false
@@ -111,7 +101,7 @@ try {
     $schedAdmit1 = & $schedulerExe --run-once 2>&1 | Out-String
     Set-Content -Path (Join-Path $RawDir "02-scheduler-admit-1.log") -Value $schedAdmit1 -Encoding utf8
 
-    # 5. Start executor in background with LEASE_DURATION_SECONDS=5 using ProcessStartInfo
+    # 5. Start executor in background with LEASE_DURATION_SECONDS=5 and WORKLOAD_WORKSPACE_ID
     Write-Host "Starting executor worker to claim attempt 1..."
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $executorExe
@@ -121,22 +111,25 @@ try {
     $psi.EnvironmentVariables["RUNTIME_DATABASE_URL"] = $DatabaseUrl
     $psi.EnvironmentVariables["LEASE_DURATION_SECONDS"] = "5"
     $psi.EnvironmentVariables["WORKER_ID"] = "executor-worker-crash-test"
+    $psi.EnvironmentVariables["WORKLOAD_WORKSPACE_ID"] = $workspaceId
     $workerProc = [System.Diagnostics.Process]::Start($psi)
     Write-Host "Worker started with PID $($workerProc.Id). Polling for CLAIMED status..."
 
     $claimed = $false
-    for ($i = 0; $i -lt 30; $i++) {
-        $intentCheck = Run-Psql "SELECT id, status, claimed_by, lease_epoch FROM execution_intents WHERE job_attempt_id IN (SELECT id FROM job_attempts WHERE job_id = '$jobId');" | Out-String
-        if ($intentCheck -match "CLAIMED") {
+    for ($i = 0; $i -lt 40; $i++) {
+        $statusRaw = (Run-Psql "SELECT status FROM execution_intents WHERE job_attempt_id IN (SELECT id FROM job_attempts WHERE job_id = '$jobId');" | Out-String)
+        # Match exact status value CLAIMED line (does not match 'claimed_by' column header)
+        if ($statusRaw -match '(?m)^\s*CLAIMED\s*$') {
             $claimed = $true
+            $intentCheck = Run-Psql "SELECT id, status, claimed_by, lease_epoch FROM execution_intents WHERE job_attempt_id IN (SELECT id FROM job_attempts WHERE job_id = '$jobId');" | Out-String
             Set-Content -Path (Join-Path $RawDir "03-claimed-attempt-1-db.txt") -Value $intentCheck -Encoding utf8
-            Write-Host "Worker successfully claimed attempt 1 intent!"
+            Write-Host "Worker successfully claimed attempt 1 intent (status: CLAIMED)!"
             break
         }
         Start-Sleep -Milliseconds 250
     }
     if (-not $claimed) {
-        throw "Worker failed to claim intent within timeout!"
+        throw "Worker failed to claim intent within timeout! Last status check output: $statusRaw"
     }
 
     # 6. Kill worker process abruptly while running 15s sleep
@@ -145,7 +138,7 @@ try {
     $killMsg = "Terminated worker process PID $($workerProc.Id) with Stop-Process -Force while executing 15s sleep"
     Set-Content -Path (Join-Path $RawDir "04-kill-worker.txt") -Value $killMsg -Encoding utf8
 
-    # 7. Wait 6.0 seconds for lease expiry (> 5.0s lease)
+    # 7. Wait 6.0 seconds for worker lease expiry (> 5.0s lease)
     Write-Host "Waiting 6.0s for worker lease to expire..."
     Start-Sleep -Seconds 6
 
@@ -169,8 +162,9 @@ try {
     $schedRequeue = & $schedulerExe --run-once 2>&1 | Out-String
     Set-Content -Path (Join-Path $RawDir "08-scheduler-requeue.log") -Value $schedRequeue -Encoding utf8
 
-    # 11. Run executor for attempt 2 (full 15 seconds run to completion)
+    # 11. Run executor for attempt 2 with workspace scoping (full 15 seconds run to completion)
     Write-Host "Running executor on attempt 2 (will execute 15s command)..."
+    $env:WORKLOAD_WORKSPACE_ID = $workspaceId
     $execAttempt2 = & $executorExe --run-once 2>&1 | Out-String
     Set-Content -Path (Join-Path $RawDir "09-executor-attempt-2.log") -Value $execAttempt2 -Encoding utf8
 
@@ -178,11 +172,34 @@ try {
     Write-Host "Fetching final job status via API..."
     $finalJobRaw = Invoke-WebRequest -Uri "$ApiUrl/v1/jobs/$jobId" -Method GET -UseBasicParsing -Headers @{"X-Dev-Subject"="alice"}
     Set-Content -Path (Join-Path $RawDir "10-get-job-final.json") -Value $finalJobRaw.Content -Encoding utf8
+    $finalJob = $finalJobRaw.Content | ConvertFrom-Json
 
     $finalDbAttempts = Run-Psql "SELECT attempt_number, state, exit_code, failure_reason, started_at, finished_at FROM job_attempts WHERE job_id = '$jobId' ORDER BY attempt_number;" | Out-String
     Set-Content -Path (Join-Path $RawDir "11-db-final-attempts.txt") -Value $finalDbAttempts -Encoding utf8
 
-    Write-Host "Worker restart demo completed successfully. Raw output written to $RawDir"
+    # 13. Strict assertions: job and attempt state validation
+    Write-Host "Verifying strict assertions for worker restart demo..."
+    if ($finalJob.id -ne $jobId) {
+        throw "Assertion failed: final job id ($($finalJob.id)) does not match submitted job id ($jobId)!"
+    }
+    if ($finalJob.state -ne "SUCCEEDED") {
+        throw "Assertion failed: final job state is '$($finalJob.state)', expected 'SUCCEEDED'!"
+    }
+    if ($finalJob.current_attempt_number -ne 2) {
+        throw "Assertion failed: final job current_attempt_number is $($finalJob.current_attempt_number), expected 2!"
+    }
+
+    $att1Check = Run-Psql "SELECT state || '|' || COALESCE(failure_reason, '') FROM job_attempts WHERE job_id = '$jobId' AND attempt_number = 1;" | Out-String
+    if ($att1Check -notmatch "FAILED\|Worker lease expired; executor lost") {
+        throw "Assertion failed: Attempt 1 is not FAILED with 'Worker lease expired; executor lost'. Actual: $att1Check"
+    }
+
+    $att2Check = Run-Psql "SELECT state || '|' || COALESCE(exit_code::text, '') FROM job_attempts WHERE job_id = '$jobId' AND attempt_number = 2;" | Out-String
+    if ($att2Check -notmatch "SUCCEEDED\|0") {
+        throw "Assertion failed: Attempt 2 is not SUCCEEDED with exit code 0. Actual: $att2Check"
+    }
+
+    Write-Host "Worker restart demo completed successfully with all assertions passing. Raw output written to $RawDir"
 } finally {
     if ($startedApi -and $apiProcess) {
         Write-Host "Stopping demo API server..."

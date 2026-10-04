@@ -19,7 +19,7 @@ New-Item -ItemType Directory -Force -Path $RawDir | Out-Null
 $ApiUrl = "http://127.0.0.1:$Port"
 $env:ENVIRONMENT = "development"
 $env:RUNTIME_DATABASE_URL = $DatabaseUrl
-$env:DATABASE_URL = $DatabaseUrl.Replace("postgres://", "postgresql+asyncpg://")
+$env:DATABASE_URL = $DatabaseUrl.Replace("postgres://", "postgresql+asyncpg://").Split("?")[0]
 
 function Run-Psql([string]$query) {
     if (Get-Command psql -ErrorAction SilentlyContinue) {
@@ -38,15 +38,7 @@ try {
 } catch {
     Write-Host "Starting API server on port $Port..."
     $pythonExe = Join-Path $RootDir ".venv/Scripts/python.exe"
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = $pythonExe
-    $psi.Arguments = "-m uvicorn app.main:app --port $Port --host 127.0.0.1"
-    $psi.WorkingDirectory = (Join-Path $RootDir "apps/api")
-    $psi.UseShellExecute = $false
-    $psi.EnvironmentVariables["ENVIRONMENT"] = "development"
-    $psi.EnvironmentVariables["DATABASE_URL"] = $env:DATABASE_URL
-    $psi.EnvironmentVariables["RUNTIME_DATABASE_URL"] = $env:RUNTIME_DATABASE_URL
-    $apiProcess = [System.Diagnostics.Process]::Start($psi)
+    $apiProcess = Start-Process -FilePath $pythonExe -ArgumentList "-m", "uvicorn", "app.main:app", "--port", "$Port", "--host", "127.0.0.1" -WorkingDirectory (Join-Path $RootDir "apps/api") -PassThru
     $startedApi = $true
     
     $ready = $false
@@ -99,7 +91,8 @@ try {
         -Body $jobPayload
     Set-Content -Path (Join-Path $RawDir "02-first-submission.json") -Value $firstSubRaw.Content -Encoding utf8
     $firstSub = $firstSubRaw.Content | ConvertFrom-Json
-    Write-Host "First submission accepted with operation_id $($firstSub.operation_id)"
+    $jobId = $firstSub.operation_id
+    Write-Host "First submission accepted with operation_id $jobId"
 
     # 4. Duplicate submission with identical key and body
     Write-Host "Sending duplicate submission with same key $idempKey..."
@@ -110,16 +103,37 @@ try {
     $dupSub = $dupSubRaw.Content | ConvertFrom-Json
     Write-Host "Duplicate submission returned operation_id $($dupSub.operation_id)"
 
-    if ($firstSub.operation_id -ne $dupSub.operation_id) {
-        throw "Idempotency violated: operation_ids do not match! ($($firstSub.operation_id) vs $($dupSub.operation_id))"
-    }
-
     # 5. Database check: exactly 1 job created
     Write-Host "Verifying database job count for workspace..."
     $dbCount = Run-Psql "SELECT count(*) AS job_count FROM jobs WHERE workspace_id = '$workspaceId';" | Out-String
     Set-Content -Path (Join-Path $RawDir "04-db-job-count.txt") -Value $dbCount -Encoding utf8
 
-    Write-Host "Duplicate submission demo completed successfully. Raw output written to $RawDir"
+    # 6. Strict assertions
+    Write-Host "Verifying strict assertions for duplicate submission demo..."
+    if ([string]::IsNullOrWhiteSpace($jobId)) {
+        throw "Assertion failed: first submission did not return a valid operation_id!"
+    }
+    if ($firstSub.operation_id -ne $dupSub.operation_id) {
+        throw "Assertion failed: Idempotency violated! operation_ids do not match: $($firstSub.operation_id) vs $($dupSub.operation_id)"
+    }
+    if ($firstSub.status -ne "ACCEPTED" -or $dupSub.status -ne "ACCEPTED") {
+        throw "Assertion failed: status is not ACCEPTED ($($firstSub.status) / $($dupSub.status))"
+    }
+
+    $dbCountVal = (Run-Psql "SELECT count(*) FROM jobs WHERE workspace_id = '$workspaceId';" | Out-String).Trim()
+    if ($dbCountVal -notmatch "(?m)^\s*1\s*$") {
+        throw "Assertion failed: expected exactly 1 job in database for workspace $workspaceId, got: $dbCountVal"
+    }
+
+    $jobRecordId = (Run-Psql "SELECT id FROM jobs WHERE workspace_id = '$workspaceId';" | Out-String).Trim()
+    if ($jobRecordId -notmatch $jobId) {
+        throw "Assertion failed: database job record id does not match returned operation_id: $jobRecordId vs $jobId"
+    }
+
+    # Cancel the demo job to avoid leaving orphaned queued jobs in the database
+    Run-Psql "UPDATE jobs SET state = 'CANCELLED' WHERE id = '$jobId' AND state = 'QUEUED';" | Out-Null
+
+    Write-Host "Duplicate submission demo completed successfully with all assertions passing. Raw output written to $RawDir"
 } finally {
     if ($startedApi -and $apiProcess) {
         Write-Host "Stopping demo API server..."

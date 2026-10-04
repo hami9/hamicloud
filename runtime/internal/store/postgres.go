@@ -722,7 +722,7 @@ func (s *PostgresStore) FindExpiredJobIntents(ctx context.Context) ([]ExpiredJob
 		    OR
 		    (j.state = 'RECOVERY_PENDING')
 		    OR
-		    (j.state IN ('STARTING', 'RUNNING') AND ei.status = 'TERMINATED')
+		    (j.state IN ('STARTING', 'RUNNING', 'CANCEL_REQUESTED') AND ei.status = 'TERMINATED')
 		  )
 		ORDER BY ei.created_at ASC;
 	`

@@ -945,6 +945,123 @@ func TestPostgresStore_RecoverExpiredJobIntents_DeleterFailureHaltsRetryWait(t *
 	}
 }
 
+func TestPostgresStore_RecoverExpiredJobIntents_CancelRequestedDeleterFailureRetriesToCancelled(t *testing.T) {
+	ctx := context.Background()
+	st := connectTestStore(t, ctx)
+
+	now := time.Now().UTC()
+	wsID := createTestWorkspace(t, ctx, st, "Cancel Deleter WS")
+	jobID := NewUUID()
+	attemptID := NewUUID()
+	intentID := NewUUID()
+
+	_, err := st.pool.Exec(ctx, `
+		INSERT INTO jobs (id, workspace_id, name, image_digest, command_args, env_vars, timeout_seconds, max_retries, current_attempt_number, state, created_at, updated_at)
+		VALUES ($1, $2, 'cancel-deleter-job', 'docker.io/library/alpine:latest', '["echo", "hi"]', '{}', 60, 2, 1, 'CANCEL_REQUESTED', $3, $3);
+	`, jobID, wsID, now)
+	if err != nil {
+		t.Fatalf("insert test job: %v", err)
+	}
+
+	_, err = st.pool.Exec(ctx, `
+		INSERT INTO job_attempts (id, job_id, workspace_id, attempt_number, state, started_at, created_at, updated_at)
+		VALUES ($1, $2, $3, 1, 'RUNNING', $4, $4, $4);
+	`, attemptID, jobID, wsID, now)
+	if err != nil {
+		t.Fatalf("insert test job attempt: %v", err)
+	}
+
+	pastExpiresAt := now.Add(-10 * time.Second)
+	_, err = st.pool.Exec(ctx, `
+		INSERT INTO execution_intents (
+			id, workspace_id, resource_type, job_attempt_id,
+			deterministic_resource_name, claimed_by, status, lease_epoch, lease_expires_at, created_at, updated_at
+		) VALUES ($1, $2, 'JOB_ATTEMPT', $3, 'hc-job-test-cancel-deleter', 'crashed-worker', 'CLAIMED', 1, $4, $5, $5);
+	`, intentID, wsID, attemptID, pastExpiresAt, now)
+	if err != nil {
+		t.Fatalf("insert expired job intent: %v", err)
+	}
+
+	// Pass 1: Recover with failing deleter: DeleteJob returns error!
+	count, err := st.RecoverExpiredJobIntents(ctx, &fakeFailingJobDeleter{})
+	if err != nil {
+		t.Fatalf("RecoverExpiredJobIntents returned error: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("expected 0 confirmed recovered jobs when deleter fails, got %d", count)
+	}
+
+	// Job state must remain CANCEL_REQUESTED because delete was not confirmed
+	var jobState string
+	err = st.pool.QueryRow(ctx, `SELECT state FROM jobs WHERE id = $1;`, jobID).Scan(&jobState)
+	if err != nil {
+		t.Fatalf("query job: %v", err)
+	}
+	if jobState != "CANCEL_REQUESTED" {
+		t.Errorf("expected job state CANCEL_REQUESTED when deleter fails on pass 1, got %s", jobState)
+	}
+
+	// Attempt must be marked CANCELLED
+	var attState string
+	err = st.pool.QueryRow(ctx, `SELECT state FROM job_attempts WHERE id = $1;`, attemptID).Scan(&attState)
+	if err != nil {
+		t.Fatalf("query attempt: %v", err)
+	}
+	if attState != "CANCELLED" {
+		t.Errorf("expected attempt state CANCELLED, got %s", attState)
+	}
+
+	// Intent must be marked TERMINATED
+	var intentState string
+	err = st.pool.QueryRow(ctx, `SELECT status FROM execution_intents WHERE id = $1;`, intentID).Scan(&intentState)
+	if err != nil {
+		t.Fatalf("query intent: %v", err)
+	}
+	if intentState != "TERMINATED" {
+		t.Errorf("expected intent status TERMINATED, got %s", intentState)
+	}
+
+	// Verify that the job is STILL picked up by FindExpiredJobIntents for pass 2!
+	expired, err := st.FindExpiredJobIntents(ctx)
+	if err != nil {
+		t.Fatalf("FindExpiredJobIntents returned error: %v", err)
+	}
+	found := false
+	for _, it := range expired {
+		if it.JobID == jobID {
+			found = true
+			if it.NeedsBegin {
+				t.Errorf("expected NeedsBegin to be false on pass 2, got true")
+			}
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected job %s to remain visible to recovery scan after pass 1", jobID)
+	}
+
+	// Pass 2: Later pass with a working deleter: moves job from CANCEL_REQUESTED to CANCELLED!
+	workingDeleter := &fakeSucceedingJobDeleter{}
+	countPass2, err := st.RecoverExpiredJobIntents(ctx, workingDeleter)
+	if err != nil {
+		t.Fatalf("RecoverExpiredJobIntents pass 2 returned error: %v", err)
+	}
+	if countPass2 != 1 {
+		t.Errorf("expected 1 confirmed recovered job on pass 2 when deleter succeeds, got %d", countPass2)
+	}
+	if workingDeleter.deletedName != "hc-job-test-cancel-deleter" {
+		t.Errorf("expected deleter to delete hc-job-test-cancel-deleter, got %s", workingDeleter.deletedName)
+	}
+
+	err = st.pool.QueryRow(ctx, `SELECT state FROM jobs WHERE id = $1;`, jobID).Scan(&jobState)
+	if err != nil {
+		t.Fatalf("query job after pass 2: %v", err)
+	}
+	if jobState != "CANCELLED" {
+		t.Errorf("expected job state CANCELLED on pass 2, got %s", jobState)
+	}
+}
+
 func TestPostgresStore_ClaimNextServiceRelease_SkipsSupersededReleaseWithPendingIntent(t *testing.T) {
 	ctx := context.Background()
 	st := connectTestStore(t, ctx)

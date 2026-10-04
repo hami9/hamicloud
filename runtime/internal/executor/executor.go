@@ -29,6 +29,7 @@ type Executor struct {
 	jobReconciler JobReconciler
 	workerID      string
 	leaseDuration time.Duration
+	workspaceIDs  []string
 	logger        *slog.Logger
 	wakeCh        chan struct{}
 }
@@ -51,6 +52,11 @@ func NewExecutor(
 		logger:        logger,
 		wakeCh:        make(chan struct{}, 1),
 	}
+}
+
+// SetWorkspaceFilter configures optional workspace ID filtering for intent claims.
+func (e *Executor) SetWorkspaceFilter(workspaceIDs ...string) {
+	e.workspaceIDs = workspaceIDs
 }
 
 // Wake non-blockingly signals the executor to immediately perform a work check.
@@ -112,7 +118,7 @@ func (e *Executor) startLeaseHeartbeat(parentCtx context.Context, intentID strin
 func (e *Executor) RunOnce(ctx context.Context) (bool, error) {
 	// 1. Try to claim and reconcile pending job attempt
 	if e.jobReconciler != nil {
-		jobWorkload, err := e.store.ClaimNextJobAttempt(ctx, e.workerID, e.leaseDuration)
+		jobWorkload, err := e.store.ClaimNextJobAttempt(ctx, e.workerID, e.leaseDuration, e.workspaceIDs...)
 		if err != nil {
 			return false, fmt.Errorf("claim next job attempt: %w", err)
 		}
@@ -142,7 +148,7 @@ func (e *Executor) RunOnce(ctx context.Context) (bool, error) {
 	}
 
 	// 2. Try to claim and reconcile pending service release
-	workload, err := e.store.ClaimNextServiceRelease(ctx, e.workerID, e.leaseDuration)
+	workload, err := e.store.ClaimNextServiceRelease(ctx, e.workerID, e.leaseDuration, e.workspaceIDs...)
 	if err != nil {
 		return false, fmt.Errorf("claim next service release: %w", err)
 	}

@@ -22,6 +22,7 @@ type Config struct {
 	LeaseDuration        time.Duration
 	ReconciliationPeriod time.Duration
 	RunOnce              bool
+	WorkspaceIDs         []string
 }
 
 // LoadFromEnv loads runtime configuration from environment variables with safe defaults.
@@ -78,6 +79,15 @@ func LoadFromEnv() (*Config, error) {
 		}
 	}
 
+	var workspaceIDs []string
+	if ws := getEnv("WORKLOAD_WORKSPACE_ID", ""); ws != "" {
+		for _, w := range strings.Split(ws, ",") {
+			if trimmed := strings.TrimSpace(w); trimmed != "" {
+				workspaceIDs = append(workspaceIDs, trimmed)
+			}
+		}
+	}
+
 	return &Config{
 		Environment:          env,
 		DatabaseURL:          dbURL,
@@ -90,6 +100,7 @@ func LoadFromEnv() (*Config, error) {
 		LeaseDuration:        time.Duration(leaseSec) * time.Second,
 		ReconciliationPeriod: time.Duration(reconSec) * time.Second,
 		RunOnce:              runOnce,
+		WorkspaceIDs:         workspaceIDs,
 	}, nil
 }
 

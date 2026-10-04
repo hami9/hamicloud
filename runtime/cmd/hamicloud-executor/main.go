@@ -74,6 +74,9 @@ func main() {
 	jobRec := reconciler.NewJobReconciler(pgStore, jobRunner, logger)
 
 	exec := executor.NewExecutor(pgStore, rec, cfg.WorkerID, cfg.LeaseDuration, logger)
+	if len(cfg.WorkspaceIDs) > 0 {
+		exec.SetWorkspaceFilter(cfg.WorkspaceIDs...)
+	}
 	exec.SetJobReconciler(jobRec)
 
 	logger.Info("Executor initialized with configuration",
@@ -81,6 +84,7 @@ func main() {
 		"lease_duration", cfg.LeaseDuration,
 		"worker_id", cfg.WorkerID,
 		"run_once", cfg.RunOnce,
+		"workspace_ids", cfg.WorkspaceIDs,
 	)
 
 	if cfg.RunOnce {

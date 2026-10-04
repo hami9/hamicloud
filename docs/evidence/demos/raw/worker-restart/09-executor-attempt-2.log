@@ -1,0 +1,9 @@
+﻿{"time":"2026-10-01T21:22:27.6104615+03:30","level":"INFO","msg":"Starting HamiCloud Execution Worker process","version":"0.1.0"}
+{"time":"2026-10-01T21:22:28.0236671+03:30","level":"WARN","msg":"Kubernetes cluster unavailable; falling back to development-only HTTPProbeRunner and LocalProcessJobRunner","warning":"in-cluster kubernetes configuration not available: unable to load in-cluster configuration, KUBERNETES_SERVICE_HOST and KUBERNETES_SERVICE_PORT must be defined"}
+{"time":"2026-10-01T21:22:28.0236671+03:30","level":"INFO","msg":"Executor initialized with configuration","environment":"development","lease_duration":60000000000,"worker_id":"local-worker-1","run_once":true}
+{"time":"2026-10-01T21:22:28.0236671+03:30","level":"INFO","msg":"Executing single executor reconciliation pass (RUN_ONCE)"}
+{"time":"2026-10-01T21:22:28.5180185+03:30","level":"INFO","msg":"Claimed job attempt intent","intent_id":"1c3a6b49-c80e-4d44-af98-8fc3f78ab73a","job_id":"d98b1cc1-ab83-450f-ac32-f9ccb4ae4719","job_name":"crash-recovery-job","attempt_number":2,"worker_id":"local-worker-1","lease_epoch":1}
+{"time":"2026-10-01T21:22:28.5180185+03:30","level":"INFO","msg":"Starting reconciliation for job attempt","intent_id":"1c3a6b49-c80e-4d44-af98-8fc3f78ab73a","job_id":"d98b1cc1-ab83-450f-ac32-f9ccb4ae4719","job_name":"crash-recovery-job","attempt_number":2,"lease_epoch":1}
+{"time":"2026-10-01T21:22:43.7672865+03:30","level":"INFO","msg":"Job attempt SUCCEEDED with exit code 0","job_id":"d98b1cc1-ab83-450f-ac32-f9ccb4ae4719","attempt_number":2,"resource_uid":"res-job-d98b1cc1-2"}
+{"time":"2026-10-01T21:22:43.9855735+03:30","level":"INFO","msg":"Executor RunOnce completed successfully","workload_processed":true}
+

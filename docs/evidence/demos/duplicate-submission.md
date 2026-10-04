@@ -3,119 +3,61 @@
 This demonstration verifies Milestone M2 exit criterion 6:
 > Repeating the same submission returns the same operation.
 
-Recorded from live API and runtime execution against PostgreSQL.
+Recorded via automated script `scripts/demos/duplicate_submission.ps1` from live API and runtime execution against PostgreSQL.
+All raw JSON and SQL outputs are captured in `docs/evidence/demos/raw/duplicate-submission/`.
+**Reproduction command:**
+```powershell
+powershell -ExecutionPolicy Bypass -File ./scripts/demos/duplicate_submission.ps1
+```
 
 ---
 
 ## 1. Environment & Setup
 
-- **API Target:** `http://localhost:8000` (FastAPI)
-- **Database:** PostgreSQL 16 Alpine (`hamicloud_test`)
+- **API Target:** `http://127.0.0.1:8088` (FastAPI)
+- **Database:** PostgreSQL 16 Alpine (`hamicloud`)
 - **Caller Identity:** `X-Dev-Subject: alice`
 
 ---
 
-## 2. Step-by-Step Live Execution
+## 2. Step-by-Step Live Execution Quoting Raw Evidence
 
 ### Step 1: Create Workspace
 
-```http
-POST /v1/workspaces HTTP/1.1
-Host: localhost:8000
-Content-Type: application/json
-X-Dev-Subject: alice
+Submitted via `POST /v1/workspaces`.
 
-{
-  "name": "Duplicate Submission Demo",
-  "slug": "demo-dup-a87557a3"
-}
+**Raw Response (`01-create-workspace.json`):**
+```json
+{"id":"6ab9c9a7-fcbe-4b1a-974a-08d6d649597c","name":"Duplicate Submission Demo bafbfb21","slug":"demo-dup-bafbfb21","role":"OWNER","created_at":"2026-10-04T08:42:20.198305Z"}
 ```
 
-**Response:**
-```http
-HTTP/1.1 201 Created
-Content-Type: application/json
-
-{
-  "id": "67ba6f66-c19b-45b1-acd0-d4eeb5504770",
-  "name": "Duplicate Submission Demo",
-  "slug": "demo-dup-a87557a3",
-  "role": "OWNER",
-  "created_at": "2026-10-01T14:14:41.883556Z"
-}
-```
+---
 
 ### Step 2: First Job Submission with Idempotency-Key
 
-```http
-POST /v1/workspaces/67ba6f66-c19b-45b1-acd0-d4eeb5504770/jobs HTTP/1.1
-Host: localhost:8000
-Content-Type: application/json
-X-Dev-Subject: alice
-Idempotency-Key: idemp-demo-dup-fbc288e8ec2c
+Submitted via `POST /v1/workspaces/6ab9c9a7-fcbe-4b1a-974a-08d6d649597c/jobs` with `Idempotency-Key: idemp-demo-dup-bafbfb21`.
 
-{
-  "name": "data-aggregation",
-  "image_digest": "docker.io/library/python:3.12-alpine",
-  "command_args": ["python", "-c", "print('Processed records')"],
-  "timeout_seconds": 60,
-  "max_retries": 2
-}
+**Raw Response (`02-first-submission.json`):**
+```json
+{"operation_id":"ac08b01b-aa81-460f-9246-ef4486ca2444","status":"ACCEPTED","status_url":"/v1/operations/ac08b01b-aa81-460f-9246-ef4486ca2444"}
 ```
 
-**Response:**
-```http
-HTTP/1.1 202 Accepted
-Content-Type: application/json
-
-{
-  "operation_id": "849e4a35-637c-41ee-b867-a64bac5d1160",
-  "status": "ACCEPTED",
-  "status_url": "/v1/operations/849e4a35-637c-41ee-b867-a64bac5d1160"
-}
-```
+---
 
 ### Step 3: Duplicate Submission with Identical Key
 
-```http
-POST /v1/workspaces/67ba6f66-c19b-45b1-acd0-d4eeb5504770/jobs HTTP/1.1
-Host: localhost:8000
-Content-Type: application/json
-X-Dev-Subject: alice
-Idempotency-Key: idemp-demo-dup-fbc288e8ec2c
+Resubmitted identical payload to `POST /v1/workspaces/6ab9c9a7-fcbe-4b1a-974a-08d6d649597c/jobs` with the same `Idempotency-Key: idemp-demo-dup-bafbfb21`.
 
-{
-  "name": "data-aggregation",
-  "image_digest": "docker.io/library/python:3.12-alpine",
-  "command_args": ["python", "-c", "print('Processed records')"],
-  "timeout_seconds": 60,
-  "max_retries": 2
-}
-```
-
-**Response:**
-```http
-HTTP/1.1 202 Accepted
-Content-Type: application/json
-
-{
-  "operation_id": "849e4a35-637c-41ee-b867-a64bac5d1160",
-  "status": "ACCEPTED",
-  "status_url": "/v1/operations/849e4a35-637c-41ee-b867-a64bac5d1160"
-}
+**Raw Response (`03-duplicate-submission.json`):**
+```json
+{"operation_id":"ac08b01b-aa81-460f-9246-ef4486ca2444","status":"ACCEPTED","status_url":"/v1/operations/ac08b01b-aa81-460f-9246-ef4486ca2444"}
 ```
 
 ---
 
 ## 3. Database Integrity Verification
 
-```sql
-SELECT count(*) AS job_count
-FROM jobs
-WHERE workspace_id = '67ba6f66-c19b-45b1-acd0-d4eeb5504770';
-```
-
-**Result:**
+**Raw Database Query (`04-db-job-count.txt`):**
 ```text
  job_count 
 -----------
@@ -123,4 +65,4 @@ WHERE workspace_id = '67ba6f66-c19b-45b1-acd0-d4eeb5504770';
 (1 row)
 ```
 
-The duplicate submission returned the exact same `operation_id` (`849e4a35-637c-41ee-b867-a64bac5d1160`) without inserting redundant job or execution intent records.
+The duplicate submission returned the exact same `operation_id` (`ac08b01b-aa81-460f-9246-ef4486ca2444`) without inserting duplicate jobs or execution intents in the database.

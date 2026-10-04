@@ -1,0 +1,239 @@
+﻿?   	github.com/hami9/hamicloud/runtime/cmd/hamicloud-executor	[no test files]
+?   	github.com/hami9/hamicloud/runtime/cmd/hamicloud-scheduler	[no test files]
+=== RUN   TestEventListener_NotifyTargets
+--- PASS: TestEventListener_NotifyTargets (0.00s)
+=== RUN   TestEventListener_GracefulDegradationWhenNATSUnavailable
+2026/10/04 12:27:08 WARN NATS broker unavailable at startup; runtime proceeding in periodic polling mode (retrying) nats_url=nats://127.0.0.1:59998 error="dial tcp 127.0.0.1:59998: connectex: No connection could be made because the target machine actively refused it."
+--- PASS: TestEventListener_GracefulDegradationWhenNATSUnavailable (0.06s)
+PASS
+ok  	github.com/hami9/hamicloud/runtime/internal/bus	1.414s
+=== RUN   TestLoadFromEnv_TableDriven
+=== RUN   TestLoadFromEnv_TableDriven/missing_values_in_development_fall_back_to_safe_dev_defaults
+=== RUN   TestLoadFromEnv_TableDriven/missing_RUNTIME_DATABASE_URL_in_production_returns_error
+=== RUN   TestLoadFromEnv_TableDriven/missing_RUNTIME_DATABASE_URL_when_ENVIRONMENT_is_omitted_defaults_to_production_and_returns_error
+=== RUN   TestLoadFromEnv_TableDriven/missing_ARTIFACTS_DIR_in_production_returns_error
+=== RUN   TestLoadFromEnv_TableDriven/valid_custom_values_are_loaded
+=== RUN   TestLoadFromEnv_TableDriven/rejected_SQLAlchemy_postgresql+asyncpg_format
+=== RUN   TestLoadFromEnv_TableDriven/rejected_SQLAlchemy_postgresql+psycopg2_format
+=== RUN   TestLoadFromEnv_TableDriven/invalid_integer_for_LEASE_DURATION_SECONDS
+=== RUN   TestLoadFromEnv_TableDriven/invalid_integer_for_RECONCILIATION_PERIOD_SECONDS
+--- PASS: TestLoadFromEnv_TableDriven (0.00s)
+    --- PASS: TestLoadFromEnv_TableDriven/missing_values_in_development_fall_back_to_safe_dev_defaults (0.00s)
+    --- PASS: TestLoadFromEnv_TableDriven/missing_RUNTIME_DATABASE_URL_in_production_returns_error (0.00s)
+    --- PASS: TestLoadFromEnv_TableDriven/missing_RUNTIME_DATABASE_URL_when_ENVIRONMENT_is_omitted_defaults_to_production_and_returns_error (0.00s)
+    --- PASS: TestLoadFromEnv_TableDriven/missing_ARTIFACTS_DIR_in_production_returns_error (0.00s)
+    --- PASS: TestLoadFromEnv_TableDriven/valid_custom_values_are_loaded (0.00s)
+    --- PASS: TestLoadFromEnv_TableDriven/rejected_SQLAlchemy_postgresql+asyncpg_format (0.00s)
+    --- PASS: TestLoadFromEnv_TableDriven/rejected_SQLAlchemy_postgresql+psycopg2_format (0.00s)
+    --- PASS: TestLoadFromEnv_TableDriven/invalid_integer_for_LEASE_DURATION_SECONDS (0.00s)
+    --- PASS: TestLoadFromEnv_TableDriven/invalid_integer_for_RECONCILIATION_PERIOD_SECONDS (0.00s)
+=== RUN   TestLoadFromEnv_PasswordNotLeakedInError
+--- PASS: TestLoadFromEnv_PasswordNotLeakedInError (0.00s)
+PASS
+ok  	github.com/hami9/hamicloud/runtime/internal/config	0.538s
+=== RUN   TestJobStateMachineContractEquality
+--- PASS: TestJobStateMachineContractEquality (0.00s)
+=== RUN   TestValidateTransition
+=== RUN   TestValidateTransition/QUEUED_to_ADMITTED
+=== RUN   TestValidateTransition/QUEUED_to_CANCEL_REQUESTED
+=== RUN   TestValidateTransition/ADMITTED_to_STARTING
+=== RUN   TestValidateTransition/ADMITTED_to_CANCEL_REQUESTED
+=== RUN   TestValidateTransition/STARTING_to_RUNNING
+=== RUN   TestValidateTransition/STARTING_to_RETRY_WAIT
+=== RUN   TestValidateTransition/STARTING_to_FAILED
+=== RUN   TestValidateTransition/STARTING_to_CANCEL_REQUESTED
+=== RUN   TestValidateTransition/RUNNING_to_SUCCEEDED
+=== RUN   TestValidateTransition/RUNNING_to_RETRY_WAIT
+=== RUN   TestValidateTransition/RUNNING_to_FAILED
+=== RUN   TestValidateTransition/RUNNING_to_CANCEL_REQUESTED
+=== RUN   TestValidateTransition/RUNNING_to_RECOVERY_PENDING
+=== RUN   TestValidateTransition/RETRY_WAIT_to_QUEUED
+=== RUN   TestValidateTransition/RETRY_WAIT_to_CANCEL_REQUESTED
+=== RUN   TestValidateTransition/RECOVERY_PENDING_to_RETRY_WAIT
+=== RUN   TestValidateTransition/RECOVERY_PENDING_to_FAILED
+=== RUN   TestValidateTransition/RECOVERY_PENDING_to_CANCEL_REQUESTED
+=== RUN   TestValidateTransition/CANCEL_REQUESTED_to_CANCELLED
+=== RUN   TestValidateTransition/CANCEL_REQUESTED_to_SUCCEEDED_(rejected_by_D4)
+=== RUN   TestValidateTransition/CANCEL_REQUESTED_to_FAILED_(rejected_by_D5)
+=== RUN   TestValidateTransition/QUEUED_directly_to_CANCELLED_(rejected_by_D5)
+=== RUN   TestValidateTransition/ADMITTED_directly_to_CANCELLED_(rejected_by_D5)
+=== RUN   TestValidateTransition/ADMITTED_directly_to_FAILED_(rejected_by_D5)
+=== RUN   TestValidateTransition/RETRY_WAIT_directly_to_CANCELLED_(rejected_by_D5)
+=== RUN   TestValidateTransition/QUEUED_directly_to_RUNNING_(skipping_admission)
+=== RUN   TestValidateTransition/SUCCEEDED_to_RUNNING_(transitioning_from_terminal)
+=== RUN   TestValidateTransition/FAILED_to_QUEUED_(cannot_transition_out_of_terminal_failure)
+=== RUN   TestValidateTransition/CANCELLED_to_STARTING_(cannot_transition_out_of_cancelled)
+--- PASS: TestValidateTransition (0.00s)
+    --- PASS: TestValidateTransition/QUEUED_to_ADMITTED (0.00s)
+    --- PASS: TestValidateTransition/QUEUED_to_CANCEL_REQUESTED (0.00s)
+    --- PASS: TestValidateTransition/ADMITTED_to_STARTING (0.00s)
+    --- PASS: TestValidateTransition/ADMITTED_to_CANCEL_REQUESTED (0.00s)
+    --- PASS: TestValidateTransition/STARTING_to_RUNNING (0.00s)
+    --- PASS: TestValidateTransition/STARTING_to_RETRY_WAIT (0.00s)
+    --- PASS: TestValidateTransition/STARTING_to_FAILED (0.00s)
+    --- PASS: TestValidateTransition/STARTING_to_CANCEL_REQUESTED (0.00s)
+    --- PASS: TestValidateTransition/RUNNING_to_SUCCEEDED (0.00s)
+    --- PASS: TestValidateTransition/RUNNING_to_RETRY_WAIT (0.00s)
+    --- PASS: TestValidateTransition/RUNNING_to_FAILED (0.00s)
+    --- PASS: TestValidateTransition/RUNNING_to_CANCEL_REQUESTED (0.00s)
+    --- PASS: TestValidateTransition/RUNNING_to_RECOVERY_PENDING (0.00s)
+    --- PASS: TestValidateTransition/RETRY_WAIT_to_QUEUED (0.00s)
+    --- PASS: TestValidateTransition/RETRY_WAIT_to_CANCEL_REQUESTED (0.00s)
+    --- PASS: TestValidateTransition/RECOVERY_PENDING_to_RETRY_WAIT (0.00s)
+    --- PASS: TestValidateTransition/RECOVERY_PENDING_to_FAILED (0.00s)
+    --- PASS: TestValidateTransition/RECOVERY_PENDING_to_CANCEL_REQUESTED (0.00s)
+    --- PASS: TestValidateTransition/CANCEL_REQUESTED_to_CANCELLED (0.00s)
+    --- PASS: TestValidateTransition/CANCEL_REQUESTED_to_SUCCEEDED_(rejected_by_D4) (0.00s)
+    --- PASS: TestValidateTransition/CANCEL_REQUESTED_to_FAILED_(rejected_by_D5) (0.00s)
+    --- PASS: TestValidateTransition/QUEUED_directly_to_CANCELLED_(rejected_by_D5) (0.00s)
+    --- PASS: TestValidateTransition/ADMITTED_directly_to_CANCELLED_(rejected_by_D5) (0.00s)
+    --- PASS: TestValidateTransition/ADMITTED_directly_to_FAILED_(rejected_by_D5) (0.00s)
+    --- PASS: TestValidateTransition/RETRY_WAIT_directly_to_CANCELLED_(rejected_by_D5) (0.00s)
+    --- PASS: TestValidateTransition/QUEUED_directly_to_RUNNING_(skipping_admission) (0.00s)
+    --- PASS: TestValidateTransition/SUCCEEDED_to_RUNNING_(transitioning_from_terminal) (0.00s)
+    --- PASS: TestValidateTransition/FAILED_to_QUEUED_(cannot_transition_out_of_terminal_failure) (0.00s)
+    --- PASS: TestValidateTransition/CANCELLED_to_STARTING_(cannot_transition_out_of_cancelled) (0.00s)
+=== RUN   TestIsTerminal
+--- PASS: TestIsTerminal (0.00s)
+=== RUN   TestLegalSourcesFor
+--- PASS: TestLegalSourcesFor (0.00s)
+PASS
+ok  	github.com/hami9/hamicloud/runtime/internal/domain	0.651s
+=== RUN   TestExecutor_RunOnce_NoPendingIntents
+--- PASS: TestExecutor_RunOnce_NoPendingIntents (0.00s)
+=== RUN   TestExecutor_RunOnce_ClaimAndReconcileSuccess
+2026/10/04 12:27:07 INFO Claimed service release intent intent_id=intent-123 release_id=rel-456 app_slug=web-svc worker_id=worker-1 lease_epoch=1
+--- PASS: TestExecutor_RunOnce_ClaimAndReconcileSuccess (0.00s)
+=== RUN   TestExecutor_RunOnce_HeartbeatLeaseRenewal
+2026/10/04 12:27:07 INFO Claimed service release intent intent_id=intent-heartbeat release_id=rel-hb app_slug=hb-app worker_id=worker-hb lease_epoch=1
+--- PASS: TestExecutor_RunOnce_HeartbeatLeaseRenewal (0.05s)
+=== RUN   TestExecutor_RunOnce_LeaseRenewalFailureCancelsWorkloadCtx
+2026/10/04 12:27:07 INFO Claimed service release intent intent_id=intent-lost release_id=rel-lost app_slug=lost-app worker_id=worker-fenced lease_epoch=1
+2026/10/04 12:27:07 WARN Failed to renew lease for claimed intent, cancelling workload context intent_id=intent-lost lease_epoch=1 error="lease renewal rejected: epoch is stale"
+--- PASS: TestExecutor_RunOnce_LeaseRenewalFailureCancelsWorkloadCtx (0.01s)
+=== RUN   TestExecutor_Start_StopsOnContextCancellation
+2026/10/04 12:27:07 INFO Starting Executor control loop worker_id=worker-1 lease_duration=10s poll_interval=10ms
+2026/10/04 12:27:07 INFO Executor control loop stopping
+--- PASS: TestExecutor_Start_StopsOnContextCancellation (0.02s)
+=== RUN   TestExecutor_RunOnce_ClaimAndReconcileJobSuccess
+2026/10/04 12:27:07 INFO Claimed job attempt intent intent_id=intent-job-1 job_id=job-1 job_name=test-task attempt_number=1 worker_id=worker-job lease_epoch=1
+--- PASS: TestExecutor_RunOnce_ClaimAndReconcileJobSuccess (0.00s)
+=== RUN   TestExecutor_Wake
+2026/10/04 12:27:07 INFO Starting Executor control loop worker_id=worker-wake lease_duration=10s poll_interval=10s
+--- PASS: TestExecutor_Wake (0.09s)
+PASS
+ok  	github.com/hami9/hamicloud/runtime/internal/executor	1.181s
+=== RUN   TestJobReconciler_Success
+2026/10/04 12:27:25 INFO Starting reconciliation for job attempt intent_id=intent-1 job_id=job-1 job_name="" attempt_number=1 lease_epoch=0
+2026/10/04 12:27:25 INFO Job attempt SUCCEEDED with exit code 0 job_id=job-1 attempt_number=1 resource_uid=res-job-job-1-1
+--- PASS: TestJobReconciler_Success (0.00s)
+=== RUN   TestJobReconciler_TransientFailure_Retries
+2026/10/04 12:27:25 INFO Starting reconciliation for job attempt intent_id=intent-1 job_id=job-1 job_name="" attempt_number=1 lease_epoch=0
+2026/10/04 12:27:25 WARN Job attempt failed job_id=job-1 attempt_number=1 exit_code=1 should_retry=true reason="temporary network outage"
+--- PASS: TestJobReconciler_TransientFailure_Retries (0.00s)
+=== RUN   TestJobReconciler_BudgetExhausted_NoRetry
+2026/10/04 12:27:25 INFO Starting reconciliation for job attempt intent_id=intent-1 job_id=job-1 job_name="" attempt_number=4 lease_epoch=0
+2026/10/04 12:27:25 WARN Job attempt failed job_id=job-1 attempt_number=4 exit_code=2 should_retry=false reason="fatal bad argument"
+--- PASS: TestJobReconciler_BudgetExhausted_NoRetry (0.00s)
+=== RUN   TestJobReconciler_Cancellation_BeforeExecution
+2026/10/04 12:27:25 INFO Starting reconciliation for job attempt intent_id=intent-1 job_id=job-1 job_name="" attempt_number=1 lease_epoch=0
+2026/10/04 12:27:25 INFO Job cancellation requested before execution started. Marking CANCELLED. job_id=job-1 attempt_number=1
+--- PASS: TestJobReconciler_Cancellation_BeforeExecution (0.00s)
+=== RUN   TestJobReconciler_Cancellation_DuringExecution
+2026/10/04 12:27:25 INFO Starting reconciliation for job attempt intent_id=intent-1 job_id=job-1 job_name="" attempt_number=1 lease_epoch=0
+2026/10/04 12:27:25 INFO Job confirmed cancelled during execution. Marking CANCELLED. job_id=job-1 attempt_number=1
+--- PASS: TestJobReconciler_Cancellation_DuringExecution (0.05s)
+=== RUN   TestHelperProcess
+--- PASS: TestHelperProcess (0.00s)
+=== RUN   TestLocalProcessJobRunner_RefusesNonDevelopmentEnvironment
+--- PASS: TestLocalProcessJobRunner_RefusesNonDevelopmentEnvironment (0.57s)
+=== RUN   TestLocalProcessJobRunner_EnvironmentIsolation_DatabaseURLNotVisible
+--- PASS: TestLocalProcessJobRunner_EnvironmentIsolation_DatabaseURLNotVisible (0.42s)
+=== RUN   TestLocalProcessJobRunner_EmptyCommandArgs_ReturnsError
+--- PASS: TestLocalProcessJobRunner_EmptyCommandArgs_ReturnsError (0.00s)
+=== RUN   TestSanitizeResourceName_Variants
+--- PASS: TestSanitizeResourceName_Variants (0.00s)
+=== RUN   TestKubeWorkloadRunner_DeployAndReadiness
+--- PASS: TestKubeWorkloadRunner_DeployAndReadiness (0.00s)
+=== RUN   TestKubeWorkloadRunner_WithIngress
+--- PASS: TestKubeWorkloadRunner_WithIngress (0.00s)
+=== RUN   TestKubeJobTaskRunner_Success
+--- PASS: TestKubeJobTaskRunner_Success (0.07s)
+=== RUN   TestKubeJobTaskRunner_Failure
+--- PASS: TestKubeJobTaskRunner_Failure (0.06s)
+=== RUN   TestKubeJobTaskRunner_Timeout
+--- PASS: TestKubeJobTaskRunner_Timeout (1.00s)
+=== RUN   TestKubeWorkloadRunner_TeardownSupersededGenerations
+--- PASS: TestKubeWorkloadRunner_TeardownSupersededGenerations (0.00s)
+=== RUN   TestHTTPProbeRunner_HealthyEndpoint
+--- PASS: TestHTTPProbeRunner_HealthyEndpoint (0.00s)
+=== RUN   TestHTTPProbeRunner_UnhealthyHTTPStatus
+--- PASS: TestHTTPProbeRunner_UnhealthyHTTPStatus (0.00s)
+=== RUN   TestHTTPProbeRunner_ConnectionRefused
+--- PASS: TestHTTPProbeRunner_ConnectionRefused (0.00s)
+=== RUN   TestHTTPProbeRunner_RefusesNonDevelopmentEnvironment
+--- PASS: TestHTTPProbeRunner_RefusesNonDevelopmentEnvironment (0.00s)
+=== RUN   TestServiceReconciler_TeardownOnlyWhenBecameCurrent
+2026/10/04 12:27:27 INFO Starting reconciliation for service release intent_id=intent-2 release_id=rel-2 app_slug=my-svc port=8080 health_path="" lease_epoch=1
+2026/10/04 12:27:27 INFO Service release passed readiness probe. Marking HEALTHY. release_id=rel-2 app_id=app-123 lease_epoch=1
+2026/10/04 12:27:27 INFO Starting reconciliation for service release intent_id=intent-2 release_id=rel-2 app_slug=my-svc port=8080 health_path="" lease_epoch=1
+2026/10/04 12:27:27 INFO Service release passed readiness probe. Marking HEALTHY. release_id=rel-2 app_id=app-123 lease_epoch=1
+--- PASS: TestServiceReconciler_TeardownOnlyWhenBecameCurrent (0.00s)
+PASS
+ok  	github.com/hami9/hamicloud/runtime/internal/reconciler	2.394s
+=== RUN   TestScheduler_RunOnce_Empty
+--- PASS: TestScheduler_RunOnce_Empty (0.00s)
+=== RUN   TestScheduler_RunOnce_AdmitsReleasesAndJobs
+2026/10/04 12:27:25 INFO Requeued retry_wait jobs back to QUEUED for next attempt count=1
+2026/10/04 12:27:25 INFO Admitted release and created ExecutionIntent intent_id=intent-rel-rel-1 release_id=rel-1 resource_name=dep-web-app-123 generation=1
+2026/10/04 12:27:25 INFO Admitted job and created ExecutionIntent intent_id=intent-job-job-1 job_id=job-1 job_attempt_id=0x29a32a0147d0 resource_name=job-batch-proc-1
+2026/10/04 12:27:25 INFO Admitted job and created ExecutionIntent intent_id=intent-job-job-2 job_id=job-2 job_attempt_id=0x29a32a014820 resource_name=job-report-gen-1
+--- PASS: TestScheduler_RunOnce_AdmitsReleasesAndJobs (0.00s)
+=== RUN   TestScheduler_Wake
+2026/10/04 12:27:25 INFO Starting Scheduler admission loop period=10s
+2026/10/04 12:27:25 INFO Scheduler triggered by event notification
+2026/10/04 12:27:25 INFO Scheduler triggered by event notification
+2026/10/04 12:27:25 INFO Scheduler admission loop stopping
+--- PASS: TestScheduler_Wake (0.04s)
+PASS
+ok  	github.com/hami9/hamicloud/runtime/internal/scheduler	0.899s
+=== RUN   TestNewUUID_Format
+--- PASS: TestNewUUID_Format (0.00s)
+=== RUN   TestNewUUID_Uniqueness
+--- PASS: TestNewUUID_Uniqueness (0.00s)
+=== RUN   TestPostgresStore_MarkJobAttemptSucceeded_CancelRace
+--- PASS: TestPostgresStore_MarkJobAttemptSucceeded_CancelRace (0.70s)
+=== RUN   TestPostgresStore_MarkJobAttemptFailed_CancelRace
+--- PASS: TestPostgresStore_MarkJobAttemptFailed_CancelRace (0.81s)
+=== RUN   TestPostgresStore_UnfencedIntentRejected
+--- PASS: TestPostgresStore_UnfencedIntentRejected (0.04s)
+=== RUN   TestPostgresStore_MarkJobAttemptRunning_SuccessAndFencing
+--- PASS: TestPostgresStore_MarkJobAttemptRunning_SuccessAndFencing (1.01s)
+=== RUN   TestPostgresStore_MarkJobAttemptSucceeded_TerminalJobNotOverwritten
+--- PASS: TestPostgresStore_MarkJobAttemptSucceeded_TerminalJobNotOverwritten (0.71s)
+=== RUN   TestPostgresStore_MarkJobAttemptCancelled_StaleEpochReturnsFencingError
+--- PASS: TestPostgresStore_MarkJobAttemptCancelled_StaleEpochReturnsFencingError (0.53s)
+=== RUN   TestPostgresStore_MarkJobAttemptCancelled_GuardsOnCancelRequested
+--- PASS: TestPostgresStore_MarkJobAttemptCancelled_GuardsOnCancelRequested (0.72s)
+=== RUN   TestStore_JobStateTransitions_AllEdgesLegal
+--- PASS: TestStore_JobStateTransitions_AllEdgesLegal (0.00s)
+=== RUN   TestSafeDBTarget_DoesNotLeakPassword
+--- PASS: TestSafeDBTarget_DoesNotLeakPassword (0.00s)
+=== RUN   TestPostgresStore_CreateJobAttemptIntent_RetryBudgetExhausted
+--- PASS: TestPostgresStore_CreateJobAttemptIntent_RetryBudgetExhausted (0.61s)
+=== RUN   TestPostgresStore_ScanUnadmittedReleases_SupersededReleaseSkipped
+--- PASS: TestPostgresStore_ScanUnadmittedReleases_SupersededReleaseSkipped (0.91s)
+=== RUN   TestPostgresStore_ClaimNextServiceRelease_ReclaimsExpiredLease
+--- PASS: TestPostgresStore_ClaimNextServiceRelease_ReclaimsExpiredLease (0.79s)
+=== RUN   TestPostgresStore_RecoverExpiredJobIntents
+--- PASS: TestPostgresStore_RecoverExpiredJobIntents (0.68s)
+=== RUN   TestPostgresStore_RecoverExpiredJobIntents_DeleterFailureHaltsRetryWait
+2026/10/04 12:27:33 ERROR Failed to delete kubernetes job during recovery job_id=ddfb2988-3052-424e-bece-3e4b4bc92778 resource_name=hc-job-test-failing-deleter error="kubernetes API unreachable: connection refused"
+--- PASS: TestPostgresStore_RecoverExpiredJobIntents_DeleterFailureHaltsRetryWait (0.56s)
+=== RUN   TestPostgresStore_ClaimNextServiceRelease_SkipsSupersededReleaseWithPendingIntent
+--- PASS: TestPostgresStore_ClaimNextServiceRelease_SkipsSupersededReleaseWithPendingIntent (0.97s)
+=== RUN   TestPostgresStore_ScanUnadmittedReleases_PendingDigestDoesNotSupersede
+--- PASS: TestPostgresStore_ScanUnadmittedReleases_PendingDigestDoesNotSupersede (0.49s)
+PASS
+ok  	github.com/hami9/hamicloud/runtime/internal/store	9.626s
+

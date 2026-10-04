@@ -1,0 +1,7 @@
+﻿{"time":"2026-10-03T19:06:03.1807152+03:30","level":"INFO","msg":"Starting HamiCloud Scheduler process","version":"0.1.0"}
+{"time":"2026-10-03T19:06:06.3412501+03:30","level":"WARN","msg":"Kubernetes cluster unavailable for scheduler; falling back to NoopJobDeleter in development","warning":"in-cluster kubernetes configuration not available: unable to load in-cluster configuration, KUBERNETES_SERVICE_HOST and KUBERNETES_SERVICE_PORT must be defined"}
+{"time":"2026-10-03T19:06:06.56959+03:30","level":"INFO","msg":"Scheduler initialized with configuration","environment":"development","reconciliation_period":30000000000,"worker_id":"local-worker-1","run_once":true}
+{"time":"2026-10-03T19:06:06.56959+03:30","level":"INFO","msg":"Executing single scheduler admission pass (RUN_ONCE)"}
+{"time":"2026-10-03T19:06:09.3593248+03:30","level":"INFO","msg":"Admitted job and created ExecutionIntent","intent_id":"1267ce35-5e2f-490d-90b1-0622bf1c69b4","job_id":"32d5c9e8-da02-4f44-be1e-289cb67a394f","job_attempt_id":"b775488e-b2cf-4acd-bc58-41d3252af06a","resource_name":"hc-job-32d5c9e8-da02-4f44-be1e-289cb67a394f-1"}
+{"time":"2026-10-03T19:06:09.3593248+03:30","level":"INFO","msg":"Scheduler RunOnce completed successfully","admitted_count":1}
+

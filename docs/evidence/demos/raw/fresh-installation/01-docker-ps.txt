@@ -1,0 +1,7 @@
+﻿NAMES                IMAGE                              STATUS
+hamicloud-keycloak   quay.io/keycloak/keycloak:24.0.5   Up 2 hours (healthy)
+hamicloud-postgres   postgres:16-alpine                 Up 2 hours (healthy)
+hamicloud-nats       nats:2.10-alpine                   Up 2 hours (healthy)
+hamicloud-redis      redis:7.2-alpine                   Up 2 hours (healthy)
+hamicloud-minio      quay.io/minio/minio:latest         Up 2 hours (healthy)
+

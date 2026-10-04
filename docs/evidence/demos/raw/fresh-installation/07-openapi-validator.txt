@@ -1,0 +1,2 @@
+﻿E:\project\hamicloud\contracts\openapi\v1.yaml: OK
+

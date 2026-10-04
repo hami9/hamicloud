@@ -1,0 +1,7 @@
+﻿0005_source_builds_and_repos -> 0006_add_superseded_status (head), add superseded status to release check constraints
+0004_add_outbox_next_attempt_at -> 0005_source_builds_and_repos, add repositories, source builds, and webhook deliveries
+0003_add_recovery_pending_state -> 0004_add_outbox_next_attempt_at, add next_attempt_at column to outbox_events
+0002_close_schema_gaps -> 0003_add_recovery_pending_state, add recovery pending state to job check constraints
+0001_baseline_schema -> 0002_close_schema_gaps, close schema gaps
+<base> -> 0001_baseline_schema, baseline schema
+

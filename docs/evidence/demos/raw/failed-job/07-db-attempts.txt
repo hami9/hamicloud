@@ -1,0 +1,7 @@
+﻿ attempt_number | state  | exit_code |        failure_reason         | has_started | has_finished 
+----------------+--------+-----------+-------------------------------+-------------+--------------
+              1 | FAILED |        42 | process exited with status 42 | t           | t
+              2 | FAILED |        42 | process exited with status 42 | t           | t
+(2 rows)
+
+

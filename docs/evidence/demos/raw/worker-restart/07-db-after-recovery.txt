@@ -1,0 +1,11 @@
+﻿                  id                  |   state    | current_attempt_number 
+--------------------------------------+------------+------------------------
+ d98b1cc1-ab83-450f-ac32-f9ccb4ae4719 | RETRY_WAIT |                      1
+(1 row)
+
+ attempt_number | state  | exit_code |           failure_reason            | has_started | has_finished 
+----------------+--------+-----------+-------------------------------------+-------------+--------------
+              1 | FAILED |        -1 | Worker lease expired; executor lost | t           | t
+(1 row)
+
+

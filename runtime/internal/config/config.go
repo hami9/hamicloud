@@ -70,6 +70,14 @@ func LoadFromEnv() (*Config, error) {
 	kubeNamespace := getEnv("KUBE_NAMESPACE", "default")
 	ingressDomain := getEnv("INGRESS_DOMAIN", "")
 
+	runOnce := getEnv("RUN_ONCE", "false") == "true"
+	for _, arg := range os.Args[1:] {
+		if arg == "--run-once" || arg == "-run-once" {
+			runOnce = true
+			break
+		}
+	}
+
 	return &Config{
 		Environment:          env,
 		DatabaseURL:          dbURL,
@@ -81,7 +89,7 @@ func LoadFromEnv() (*Config, error) {
 		IngressDomain:        ingressDomain,
 		LeaseDuration:        time.Duration(leaseSec) * time.Second,
 		ReconciliationPeriod: time.Duration(reconSec) * time.Second,
-		RunOnce:              getEnv("RUN_ONCE", "false") == "true",
+		RunOnce:              runOnce,
 	}, nil
 }
 

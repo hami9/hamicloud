@@ -848,6 +848,15 @@ func (f *fakeFailingJobDeleter) DeleteJob(ctx context.Context, resourceName stri
 	return errors.New("kubernetes API unreachable: connection refused")
 }
 
+type fakeSucceedingJobDeleter struct {
+	deletedName string
+}
+
+func (f *fakeSucceedingJobDeleter) DeleteJob(ctx context.Context, resourceName string) error {
+	f.deletedName = resourceName
+	return nil
+}
+
 func TestPostgresStore_RecoverExpiredJobIntents_DeleterFailureHaltsRetryWait(t *testing.T) {
 	ctx := context.Background()
 	st := connectTestStore(t, ctx)
@@ -885,7 +894,7 @@ func TestPostgresStore_RecoverExpiredJobIntents_DeleterFailureHaltsRetryWait(t *
 		t.Fatalf("insert expired job intent: %v", err)
 	}
 
-	// Recover with failing deleter: DeleteJob returns error!
+	// Pass 1: Recover with failing deleter: DeleteJob returns error!
 	count, err := st.RecoverExpiredJobIntents(ctx, &fakeFailingJobDeleter{})
 	if err != nil {
 		t.Fatalf("RecoverExpiredJobIntents returned error: %v", err)
@@ -912,6 +921,27 @@ func TestPostgresStore_RecoverExpiredJobIntents_DeleterFailureHaltsRetryWait(t *
 	}
 	if attState != "FAILED" {
 		t.Errorf("expected attempt state FAILED, got %s", attState)
+	}
+
+	// Pass 2: Later pass with a working deleter: moves job from RECOVERY_PENDING to RETRY_WAIT!
+	workingDeleter := &fakeSucceedingJobDeleter{}
+	countPass2, err := st.RecoverExpiredJobIntents(ctx, workingDeleter)
+	if err != nil {
+		t.Fatalf("RecoverExpiredJobIntents pass 2 returned error: %v", err)
+	}
+	if countPass2 != 1 {
+		t.Errorf("expected 1 confirmed recovered job on pass 2 when deleter succeeds, got %d", countPass2)
+	}
+	if workingDeleter.deletedName != "hc-job-test-failing-deleter" {
+		t.Errorf("expected deleter to delete hc-job-test-failing-deleter, got %s", workingDeleter.deletedName)
+	}
+
+	err = st.pool.QueryRow(ctx, `SELECT state FROM jobs WHERE id = $1;`, jobID).Scan(&jobState)
+	if err != nil {
+		t.Fatalf("query job after pass 2: %v", err)
+	}
+	if jobState != "RETRY_WAIT" {
+		t.Errorf("expected job state RETRY_WAIT on pass 2, got %s", jobState)
 	}
 }
 

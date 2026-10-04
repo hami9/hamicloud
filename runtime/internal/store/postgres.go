@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -687,7 +688,7 @@ func (s *PostgresStore) RequeueRetryWaitJobs(ctx context.Context, baseBackoff ti
 	return requeuedCount, nil
 }
 
-// ExpiredJobRecoveryInfo contains information required to recover a job attempt whose worker lease expired.
+// ExpiredJobRecoveryInfo contains information required to recover a job attempt whose worker lease expired or whose recovery is incomplete.
 type ExpiredJobRecoveryInfo struct {
 	IntentID                  string
 	AttemptID                 string
@@ -697,18 +698,32 @@ type ExpiredJobRecoveryInfo struct {
 	LeaseEpoch                int
 	JobState                  string
 	DeterministicResourceName string
+	NeedsBegin                bool
+	JobUpdatedAt              time.Time
 }
 
-// FindExpiredJobIntents queries CLAIMED job attempt intents whose worker lease has expired.
+// FindExpiredJobIntents queries:
+// 1. CLAIMED job attempt intents whose worker lease has expired.
+// 2. Jobs in RECOVERY_PENDING (incomplete recovery from previous pass or failed delete).
+// 3. Jobs in STARTING or RUNNING whose latest attempt's intent was TERMINATED by recovery.
 func (s *PostgresStore) FindExpiredJobIntents(ctx context.Context) ([]ExpiredJobRecoveryInfo, error) {
 	query := `
-		SELECT ei.id, ei.job_attempt_id, ja.job_id, ja.attempt_number, j.max_retries, ei.lease_epoch, j.state, ei.deterministic_resource_name
+		SELECT ei.id, ei.job_attempt_id, ja.job_id, ja.attempt_number, j.max_retries, ei.lease_epoch, j.state,
+		       ei.deterministic_resource_name,
+		       (ei.status = 'CLAIMED' AND ei.lease_expires_at < NOW()) AS needs_begin,
+		       j.updated_at
 		FROM execution_intents ei
 		JOIN job_attempts ja ON ja.id = ei.job_attempt_id
 		JOIN jobs j ON j.id = ja.job_id
 		WHERE ei.resource_type = 'JOB_ATTEMPT'
-		  AND ei.status = 'CLAIMED'
-		  AND ei.lease_expires_at < NOW()
+		  AND ja.attempt_number = j.current_attempt_number
+		  AND (
+		    (ei.status = 'CLAIMED' AND ei.lease_expires_at < NOW() AND j.state IN ('STARTING', 'RUNNING', 'CANCEL_REQUESTED'))
+		    OR
+		    (j.state = 'RECOVERY_PENDING')
+		    OR
+		    (j.state IN ('STARTING', 'RUNNING') AND ei.status = 'TERMINATED')
+		  )
 		ORDER BY ei.created_at ASC;
 	`
 	rows, err := s.pool.Query(ctx, query)
@@ -720,7 +735,18 @@ func (s *PostgresStore) FindExpiredJobIntents(ctx context.Context) ([]ExpiredJob
 	var expired []ExpiredJobRecoveryInfo
 	for rows.Next() {
 		var item ExpiredJobRecoveryInfo
-		if err := rows.Scan(&item.IntentID, &item.AttemptID, &item.JobID, &item.AttemptNumber, &item.MaxRetries, &item.LeaseEpoch, &item.JobState, &item.DeterministicResourceName); err != nil {
+		if err := rows.Scan(
+			&item.IntentID,
+			&item.AttemptID,
+			&item.JobID,
+			&item.AttemptNumber,
+			&item.MaxRetries,
+			&item.LeaseEpoch,
+			&item.JobState,
+			&item.DeterministicResourceName,
+			&item.NeedsBegin,
+			&item.JobUpdatedAt,
+		); err != nil {
 			return nil, fmt.Errorf("scan expired job intent: %w", err)
 		}
 		expired = append(expired, item)
@@ -786,18 +812,18 @@ func (s *PostgresStore) BeginJobRecovery(ctx context.Context, item ExpiredJobRec
 		return fmt.Errorf("expected 1 row affected finalizing attempt %s, got %d", item.AttemptID, tagAttempt.RowsAffected())
 	}
 
-	// Step 3: Mark intent TERMINATED with lease_epoch check
+	// Step 3: Mark intent TERMINATED with lease_epoch check AND status='CLAIMED' AND lease_expires_at < now
 	tagIntent, err := tx.Exec(ctx, `
 		UPDATE execution_intents
 		SET status = 'TERMINATED',
 		    updated_at = $1
-		WHERE id = $2 AND lease_epoch = $3;
+		WHERE id = $2 AND lease_epoch = $3 AND status = 'CLAIMED' AND lease_expires_at < $1;
 	`, now, item.IntentID, item.LeaseEpoch)
 	if err != nil {
 		return fmt.Errorf("terminate expired intent %s: %w", item.IntentID, err)
 	}
 	if tagIntent.RowsAffected() != 1 {
-		return fmt.Errorf("expected 1 row affected terminating intent %s, got %d", item.IntentID, tagIntent.RowsAffected())
+		return fmt.Errorf("expected 1 row affected terminating intent %s, got %d (lease may have been renewed)", item.IntentID, tagIntent.RowsAffected())
 	}
 
 	return tx.Commit(ctx)
@@ -839,11 +865,12 @@ func (s *PostgresStore) ConfirmJobRecovery(ctx context.Context, jobID string, sh
 }
 
 // RecoverExpiredJobIntents finds CLAIMED job attempt intents whose lease has expired,
+// as well as jobs stuck in RECOVERY_PENDING or incomplete recovery from previous passes,
 // runs recovery for each intent in an isolated transaction, confirms deletion with JobDeleter,
 // and moves the job to RETRY_WAIT/FAILED/CANCELLED.
 func (s *PostgresStore) RecoverExpiredJobIntents(ctx context.Context, optionalDeleter ...JobDeleter) (int, error) {
 	var deleter JobDeleter = s.jobDeleter
-	if len(optionalDeleter) > 0 && optionalDeleter[0] != nil {
+	if len(optionalDeleter) > 0 {
 		deleter = optionalDeleter[0]
 	}
 
@@ -857,22 +884,40 @@ func (s *PostgresStore) RecoverExpiredJobIntents(ctx context.Context, optionalDe
 		isCancel := domain.JobState(item.JobState) == domain.StateCancelRequested
 		shouldRetry := !isCancel && item.AttemptNumber <= item.MaxRetries
 
-		// Step 1: Begin recovery in isolated transaction (moves RUNNING -> RECOVERY_PENDING, finalizes attempt & intent)
-		if err := s.BeginJobRecovery(ctx, item); err != nil {
-			// One row failing does not roll back the whole batch and does not block recovery of other intents
-			continue
-		}
-
-		// Step 2: Delete old Kubernetes Job outside DB transaction and confirm deletion before moving to RETRY_WAIT per ADR-0003
-		if deleter != nil && item.DeterministicResourceName != "" {
-			if delErr := deleter.DeleteJob(ctx, item.DeterministicResourceName); delErr != nil {
-				// Do not discard the error; do not move to RETRY_WAIT if delete failed
+		// Step 1: If recovery has not yet begun on this intent, execute BeginJobRecovery
+		// in an isolated transaction (moves RUNNING -> RECOVERY_PENDING, finalizes attempt & terminates intent).
+		if item.NeedsBegin {
+			if err := s.BeginJobRecovery(ctx, item); err != nil {
+				slog.Error("Failed to begin job recovery", "job_id", item.JobID, "intent_id", item.IntentID, "error", err)
 				continue
 			}
 		}
 
-		// Step 3: Now that deletion is confirmed, transition to RETRY_WAIT, FAILED, or CANCELLED
+		// Step 2: Delete old Kubernetes Job outside DB transaction and confirm deletion before moving to RETRY_WAIT per ADR-0003
+		deleteConfirmed := true
+		if deleter != nil && item.DeterministicResourceName != "" {
+			if delErr := deleter.DeleteJob(ctx, item.DeterministicResourceName); delErr != nil {
+				slog.Error("Failed to delete kubernetes job during recovery", "job_id", item.JobID, "resource_name", item.DeterministicResourceName, "error", delErr)
+				deleteConfirmed = false
+			}
+		}
+
+		// Recovery timeout check per ADR-0003:
+		// "RECOVERY_PENDING -> FAILED: Recovery timeout expires without termination confirmation or retry budget is exhausted."
+		recoveryTimeoutExpired := time.Since(item.JobUpdatedAt) >= 5*time.Minute
+		if !deleteConfirmed {
+			if recoveryTimeoutExpired {
+				slog.Warn("Recovery timeout expired without delete confirmation; forcing transition to FAILED", "job_id", item.JobID)
+				shouldRetry = false
+			} else {
+				// Retry on next recovery pass
+				continue
+			}
+		}
+
+		// Step 3: Now that deletion is confirmed (or timed out), transition to RETRY_WAIT, FAILED, or CANCELLED
 		if err := s.ConfirmJobRecovery(ctx, item.JobID, shouldRetry, isCancel); err != nil {
+			slog.Error("Failed to confirm job recovery", "job_id", item.JobID, "error", err)
 			continue
 		}
 

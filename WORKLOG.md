@@ -1839,3 +1839,28 @@ Following project review of `18a3a4e..816cc4a`, all required fixes were implemen
      - Updated `docs/evidence/M1.md`: explicitly noted that nothing in the current runtime writes `config_json.ingress_url`.
      - Verified all milestones (M1, M2, M3) remain open; current position remains `HamiCloud M1 — open`.
 
+
+### [2026-10-04T17:40:00Z] Review Remediation of 4465494..aa729b3 & Test Suite Hardening
+
+- **Status:** COMPLETED & VERIFIED (Milestone M1 remains open as current position; M2 and M3 remain reopened and unclosed)
+- **Milestone:** P1 / M1 (Current position: HamiCloud M1 — open)
+- **Review Remediations & Deliverables:**
+  1. **Cancelled Jobs Recovery Defect (`runtime/internal/store/postgres.go` & `postgres_test.go`):**
+     - Discovered that when a job was in `CANCEL_REQUESTED` with an expired lease and `JobDeleter.DeleteJob` failed on Pass 1 (leaving job in `CANCEL_REQUESTED` with `attempt=CANCELLED` and `intent=TERMINATED`), `FindExpiredJobIntents` failed to re-select it on subsequent passes because the query only checked `j.state IN ('STARTING', 'RUNNING') AND ei.status = 'TERMINATED'`.
+     - Updated `FindExpiredJobIntents` query to check `j.state IN ('STARTING', 'RUNNING', 'CANCEL_REQUESTED') AND ei.status = 'TERMINATED'`.
+     - Added store test `TestPostgresStore_RecoverExpiredJobIntents_CancelRequestedDeleterFailureRetriesToCancelled` asserting Pass 1 delete failure leaves the job visible to recovery scan and Pass 2 working deleter successfully transitions the job to `CANCELLED`. Result: **PASS**.
+  2. **Keycloak Password-Grant CPU & Timeout Resolution (`deploy/compose/realm-export.json` & `apps/api/tests/test_auth_oidc.py`):**
+     - Identified root cause of Keycloak test skip: Keycloak 24 defaults to PBKDF2 with 210,000 / 600,000 iterations when hashing plaintext imported passwords. On local/CI CPU resources, hashing 600,000 iterations pegged CPU at 120% and exceeded the 10.0s client timeout, causing `httpx.TimeoutException` and skipping the test.
+     - Configured `"passwordPolicy": "hashAlgorithm(pbkdf2-sha256) and hashIterations(1000)"` in `deploy/compose/realm-export.json` for fast development hashing, and increased token acquisition timeout to `30.0s` in `test_auth_oidc.py`.
+     - Recreated Keycloak container; verified initial password hash and token issuance completes in ~1.4s.
+     - Verified `test_live_keycloak_tokens_and_two_workspace_isolation` passes in 2.70s.
+     - Executed full test suite: **117 passed, 0 skipped, 0 failed** (report explicitly documented).
+  3. **Demo Scripts Hardening & Strict Assertions (`scripts/demos/` & `runtime/`):**
+     - Fixed `DATABASE_URL` asyncpg crash in `scripts/demos/*.ps1` by dropping `?sslmode=disable` when constructing `DATABASE_URL` (`.Split("?")[0]`).
+     - Fixed claim check regex in `worker_restart.ps1`: replaced `-match "CLAIMED"` (which matched the `claimed_by` column header) with exact multiline status check `(?m)^\s*CLAIMED\s*$`.
+     - Prevented cross-job claim interference by adding `WORKLOAD_WORKSPACE_ID` environment variable support to `runtime/internal/config/` and `runtime/internal/executor/`, passing workspace filter to `ClaimNextJobAttempt` and `ClaimNextServiceRelease`.
+     - Replaced `ProcessStartInfo` in demo scripts with `Start-Process` so child processes properly inherit full parent environment variables (including PATH and runtime DB config).
+     - Added unconditional binary recompilation (`go build`) to scripts before running.
+     - Added strict exit-code assertions across all 4 scripts asserting final states, attempt counts, exit codes, and diagnostic failure reasons.
+     - Re-recorded all 4 demos live and committed fresh raw evidence files in `docs/evidence/demos/raw/` and updated `.md` documentation.
+

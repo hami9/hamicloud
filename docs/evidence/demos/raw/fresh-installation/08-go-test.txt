@@ -6,7 +6,7 @@
 2026/10/04 12:27:08 WARN NATS broker unavailable at startup; runtime proceeding in periodic polling mode (retrying) nats_url=nats://127.0.0.1:59998 error="dial tcp 127.0.0.1:59998: connectex: No connection could be made because the target machine actively refused it."
 --- PASS: TestEventListener_GracefulDegradationWhenNATSUnavailable (0.06s)
 PASS
-ok  	github.com/hami9/hamicloud/runtime/internal/bus	1.414s
+ok  	github.com/hami9/hamicloud/runtime/internal/bus	(cached)
 === RUN   TestLoadFromEnv_TableDriven
 === RUN   TestLoadFromEnv_TableDriven/missing_values_in_development_fall_back_to_safe_dev_defaults
 === RUN   TestLoadFromEnv_TableDriven/missing_RUNTIME_DATABASE_URL_in_production_returns_error
@@ -30,7 +30,7 @@ ok  	github.com/hami9/hamicloud/runtime/internal/bus	1.414s
 === RUN   TestLoadFromEnv_PasswordNotLeakedInError
 --- PASS: TestLoadFromEnv_PasswordNotLeakedInError (0.00s)
 PASS
-ok  	github.com/hami9/hamicloud/runtime/internal/config	0.538s
+ok  	github.com/hami9/hamicloud/runtime/internal/config	(cached)
 === RUN   TestJobStateMachineContractEquality
 --- PASS: TestJobStateMachineContractEquality (0.00s)
 === RUN   TestValidateTransition
@@ -98,31 +98,30 @@ ok  	github.com/hami9/hamicloud/runtime/internal/config	0.538s
 === RUN   TestLegalSourcesFor
 --- PASS: TestLegalSourcesFor (0.00s)
 PASS
-ok  	github.com/hami9/hamicloud/runtime/internal/domain	0.651s
+ok  	github.com/hami9/hamicloud/runtime/internal/domain	(cached)
 === RUN   TestExecutor_RunOnce_NoPendingIntents
 --- PASS: TestExecutor_RunOnce_NoPendingIntents (0.00s)
 === RUN   TestExecutor_RunOnce_ClaimAndReconcileSuccess
-2026/10/04 12:27:07 INFO Claimed service release intent intent_id=intent-123 release_id=rel-456 app_slug=web-svc worker_id=worker-1 lease_epoch=1
+2026/10/04 16:20:51 INFO Claimed service release intent intent_id=intent-123 release_id=rel-456 app_slug=web-svc worker_id=worker-1 lease_epoch=1
 --- PASS: TestExecutor_RunOnce_ClaimAndReconcileSuccess (0.00s)
 === RUN   TestExecutor_RunOnce_HeartbeatLeaseRenewal
-2026/10/04 12:27:07 INFO Claimed service release intent intent_id=intent-heartbeat release_id=rel-hb app_slug=hb-app worker_id=worker-hb lease_epoch=1
+2026/10/04 16:20:51 INFO Claimed service release intent intent_id=intent-heartbeat release_id=rel-hb app_slug=hb-app worker_id=worker-hb lease_epoch=1
 --- PASS: TestExecutor_RunOnce_HeartbeatLeaseRenewal (0.05s)
 === RUN   TestExecutor_RunOnce_LeaseRenewalFailureCancelsWorkloadCtx
-2026/10/04 12:27:07 INFO Claimed service release intent intent_id=intent-lost release_id=rel-lost app_slug=lost-app worker_id=worker-fenced lease_epoch=1
-2026/10/04 12:27:07 WARN Failed to renew lease for claimed intent, cancelling workload context intent_id=intent-lost lease_epoch=1 error="lease renewal rejected: epoch is stale"
+2026/10/04 16:20:51 INFO Claimed service release intent intent_id=intent-lost release_id=rel-lost app_slug=lost-app worker_id=worker-fenced lease_epoch=1
+2026/10/04 16:20:51 WARN Failed to renew lease for claimed intent, cancelling workload context intent_id=intent-lost lease_epoch=1 error="lease renewal rejected: epoch is stale"
 --- PASS: TestExecutor_RunOnce_LeaseRenewalFailureCancelsWorkloadCtx (0.01s)
 === RUN   TestExecutor_Start_StopsOnContextCancellation
-2026/10/04 12:27:07 INFO Starting Executor control loop worker_id=worker-1 lease_duration=10s poll_interval=10ms
-2026/10/04 12:27:07 INFO Executor control loop stopping
+2026/10/04 16:20:51 INFO Starting Executor control loop worker_id=worker-1 lease_duration=10s poll_interval=10ms
 --- PASS: TestExecutor_Start_StopsOnContextCancellation (0.02s)
 === RUN   TestExecutor_RunOnce_ClaimAndReconcileJobSuccess
-2026/10/04 12:27:07 INFO Claimed job attempt intent intent_id=intent-job-1 job_id=job-1 job_name=test-task attempt_number=1 worker_id=worker-job lease_epoch=1
+2026/10/04 16:20:51 INFO Claimed job attempt intent intent_id=intent-job-1 job_id=job-1 job_name=test-task attempt_number=1 worker_id=worker-job lease_epoch=1
 --- PASS: TestExecutor_RunOnce_ClaimAndReconcileJobSuccess (0.00s)
 === RUN   TestExecutor_Wake
-2026/10/04 12:27:07 INFO Starting Executor control loop worker_id=worker-wake lease_duration=10s poll_interval=10s
---- PASS: TestExecutor_Wake (0.09s)
+2026/10/04 16:20:51 INFO Starting Executor control loop worker_id=worker-wake lease_duration=10s poll_interval=10s
+--- PASS: TestExecutor_Wake (0.04s)
 PASS
-ok  	github.com/hami9/hamicloud/runtime/internal/executor	1.181s
+ok  	github.com/hami9/hamicloud/runtime/internal/executor	(cached)
 === RUN   TestJobReconciler_Success
 2026/10/04 12:27:25 INFO Starting reconciliation for job attempt intent_id=intent-1 job_id=job-1 job_name="" attempt_number=1 lease_epoch=0
 2026/10/04 12:27:25 INFO Job attempt SUCCEEDED with exit code 0 job_id=job-1 attempt_number=1 resource_uid=res-job-job-1-1
@@ -180,7 +179,7 @@ ok  	github.com/hami9/hamicloud/runtime/internal/executor	1.181s
 2026/10/04 12:27:27 INFO Service release passed readiness probe. Marking HEALTHY. release_id=rel-2 app_id=app-123 lease_epoch=1
 --- PASS: TestServiceReconciler_TeardownOnlyWhenBecameCurrent (0.00s)
 PASS
-ok  	github.com/hami9/hamicloud/runtime/internal/reconciler	2.394s
+ok  	github.com/hami9/hamicloud/runtime/internal/reconciler	(cached)
 === RUN   TestScheduler_RunOnce_Empty
 --- PASS: TestScheduler_RunOnce_Empty (0.00s)
 === RUN   TestScheduler_RunOnce_AdmitsReleasesAndJobs
@@ -196,44 +195,47 @@ ok  	github.com/hami9/hamicloud/runtime/internal/reconciler	2.394s
 2026/10/04 12:27:25 INFO Scheduler admission loop stopping
 --- PASS: TestScheduler_Wake (0.04s)
 PASS
-ok  	github.com/hami9/hamicloud/runtime/internal/scheduler	0.899s
+ok  	github.com/hami9/hamicloud/runtime/internal/scheduler	(cached)
 === RUN   TestNewUUID_Format
 --- PASS: TestNewUUID_Format (0.00s)
 === RUN   TestNewUUID_Uniqueness
 --- PASS: TestNewUUID_Uniqueness (0.00s)
 === RUN   TestPostgresStore_MarkJobAttemptSucceeded_CancelRace
---- PASS: TestPostgresStore_MarkJobAttemptSucceeded_CancelRace (0.70s)
+--- PASS: TestPostgresStore_MarkJobAttemptSucceeded_CancelRace (0.80s)
 === RUN   TestPostgresStore_MarkJobAttemptFailed_CancelRace
---- PASS: TestPostgresStore_MarkJobAttemptFailed_CancelRace (0.81s)
+--- PASS: TestPostgresStore_MarkJobAttemptFailed_CancelRace (0.61s)
 === RUN   TestPostgresStore_UnfencedIntentRejected
---- PASS: TestPostgresStore_UnfencedIntentRejected (0.04s)
+--- PASS: TestPostgresStore_UnfencedIntentRejected (0.03s)
 === RUN   TestPostgresStore_MarkJobAttemptRunning_SuccessAndFencing
---- PASS: TestPostgresStore_MarkJobAttemptRunning_SuccessAndFencing (1.01s)
+--- PASS: TestPostgresStore_MarkJobAttemptRunning_SuccessAndFencing (0.72s)
 === RUN   TestPostgresStore_MarkJobAttemptSucceeded_TerminalJobNotOverwritten
---- PASS: TestPostgresStore_MarkJobAttemptSucceeded_TerminalJobNotOverwritten (0.71s)
+--- PASS: TestPostgresStore_MarkJobAttemptSucceeded_TerminalJobNotOverwritten (0.65s)
 === RUN   TestPostgresStore_MarkJobAttemptCancelled_StaleEpochReturnsFencingError
---- PASS: TestPostgresStore_MarkJobAttemptCancelled_StaleEpochReturnsFencingError (0.53s)
+--- PASS: TestPostgresStore_MarkJobAttemptCancelled_StaleEpochReturnsFencingError (0.48s)
 === RUN   TestPostgresStore_MarkJobAttemptCancelled_GuardsOnCancelRequested
---- PASS: TestPostgresStore_MarkJobAttemptCancelled_GuardsOnCancelRequested (0.72s)
+--- PASS: TestPostgresStore_MarkJobAttemptCancelled_GuardsOnCancelRequested (0.45s)
 === RUN   TestStore_JobStateTransitions_AllEdgesLegal
 --- PASS: TestStore_JobStateTransitions_AllEdgesLegal (0.00s)
 === RUN   TestSafeDBTarget_DoesNotLeakPassword
 --- PASS: TestSafeDBTarget_DoesNotLeakPassword (0.00s)
 === RUN   TestPostgresStore_CreateJobAttemptIntent_RetryBudgetExhausted
---- PASS: TestPostgresStore_CreateJobAttemptIntent_RetryBudgetExhausted (0.61s)
+--- PASS: TestPostgresStore_CreateJobAttemptIntent_RetryBudgetExhausted (0.23s)
 === RUN   TestPostgresStore_ScanUnadmittedReleases_SupersededReleaseSkipped
---- PASS: TestPostgresStore_ScanUnadmittedReleases_SupersededReleaseSkipped (0.91s)
+--- PASS: TestPostgresStore_ScanUnadmittedReleases_SupersededReleaseSkipped (1.22s)
 === RUN   TestPostgresStore_ClaimNextServiceRelease_ReclaimsExpiredLease
---- PASS: TestPostgresStore_ClaimNextServiceRelease_ReclaimsExpiredLease (0.79s)
+--- PASS: TestPostgresStore_ClaimNextServiceRelease_ReclaimsExpiredLease (0.82s)
 === RUN   TestPostgresStore_RecoverExpiredJobIntents
---- PASS: TestPostgresStore_RecoverExpiredJobIntents (0.68s)
+--- PASS: TestPostgresStore_RecoverExpiredJobIntents (0.65s)
 === RUN   TestPostgresStore_RecoverExpiredJobIntents_DeleterFailureHaltsRetryWait
-2026/10/04 12:27:33 ERROR Failed to delete kubernetes job during recovery job_id=ddfb2988-3052-424e-bece-3e4b4bc92778 resource_name=hc-job-test-failing-deleter error="kubernetes API unreachable: connection refused"
---- PASS: TestPostgresStore_RecoverExpiredJobIntents_DeleterFailureHaltsRetryWait (0.56s)
+2026/10/04 16:00:21 ERROR Failed to delete kubernetes job during recovery job_id=72584a78-25ed-46bf-80f1-9c72f420c3ea resource_name=hc-job-test-failing-deleter error="kubernetes API unreachable: connection refused"
+--- PASS: TestPostgresStore_RecoverExpiredJobIntents_DeleterFailureHaltsRetryWait (0.88s)
+=== RUN   TestPostgresStore_RecoverExpiredJobIntents_CancelRequestedDeleterFailureRetriesToCancelled
+2026/10/04 16:00:22 ERROR Failed to delete kubernetes job during recovery job_id=a9acf071-1e3d-4ca1-99bc-ae92eaa87766 resource_name=hc-job-test-cancel-deleter error="kubernetes API unreachable: connection refused"
+--- PASS: TestPostgresStore_RecoverExpiredJobIntents_CancelRequestedDeleterFailureRetriesToCancelled (0.96s)
 === RUN   TestPostgresStore_ClaimNextServiceRelease_SkipsSupersededReleaseWithPendingIntent
---- PASS: TestPostgresStore_ClaimNextServiceRelease_SkipsSupersededReleaseWithPendingIntent (0.97s)
+--- PASS: TestPostgresStore_ClaimNextServiceRelease_SkipsSupersededReleaseWithPendingIntent (0.80s)
 === RUN   TestPostgresStore_ScanUnadmittedReleases_PendingDigestDoesNotSupersede
---- PASS: TestPostgresStore_ScanUnadmittedReleases_PendingDigestDoesNotSupersede (0.49s)
+--- PASS: TestPostgresStore_ScanUnadmittedReleases_PendingDigestDoesNotSupersede (0.55s)
 PASS
-ok  	github.com/hami9/hamicloud/runtime/internal/store	9.626s
+ok  	github.com/hami9/hamicloud/runtime/internal/store	(cached)
 

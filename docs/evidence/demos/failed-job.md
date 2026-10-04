@@ -14,8 +14,8 @@ powershell -ExecutionPolicy Bypass -File ./scripts/demos/failed_job.ps1
 
 ## 1. Execution Overview
 
-- **Workspace ID:** `02403b64-8e41-4f2b-9f82-fc2eae910178`
-- **Job ID:** `32d5c9e8-da02-4f44-be1e-289cb67a394f`
+- **Workspace ID:** `32cb1deb-aff4-41a4-bc22-a5363d2ba182`
+- **Job ID:** `456ad0ab-1c51-4665-87fc-461b798726ca`
 - **Declared Budget:** `max_retries = 1` (allowing attempt 1 plus exactly 1 retry)
 - **Command:** `python -c "import sys; sys.exit(42)"`
 
@@ -25,11 +25,11 @@ powershell -ExecutionPolicy Bypass -File ./scripts/demos/failed_job.ps1
 
 ### Step 1: Submit Failing Job
 
-Submitted via `POST /v1/workspaces/02403b64-8e41-4f2b-9f82-fc2eae910178/jobs` with `Idempotency-Key: idemp-failed-job-1a8da57a` and `max_retries = 1`.
+Submitted via `POST /v1/workspaces/32cb1deb-aff4-41a4-bc22-a5363d2ba182/jobs` with `Idempotency-Key: idemp-failed-job-b896211e` and `max_retries = 1`.
 
 **Raw Response (`01-submit-job.json`):**
 ```json
-{"operation_id":"32d5c9e8-da02-4f44-be1e-289cb67a394f","status":"ACCEPTED","status_url":"/v1/operations/32d5c9e8-da02-4f44-be1e-289cb67a394f"}
+{"operation_id":"456ad0ab-1c51-4665-87fc-461b798726ca","status":"ACCEPTED","status_url":"/v1/operations/456ad0ab-1c51-4665-87fc-461b798726ca"}
 ```
 
 ---
@@ -40,30 +40,30 @@ Executed `hamicloud-scheduler.exe --run-once`.
 
 **Raw Log Output (`02-scheduler-admit-1.log`):**
 ```json
-{"time":"2026-10-03T19:06:44.2057796+03:30","level":"INFO","msg":"Starting HamiCloud Scheduler process","version":"0.1.0"}
-{"time":"2026-10-03T19:06:44.2882772+03:30","level":"WARN","msg":"Kubernetes cluster unavailable for scheduler; falling back to NoopJobDeleter in development","warning":"in-cluster kubernetes configuration not available: unable to load in-cluster configuration, KUBERNETES_SERVICE_HOST and KUBERNETES_SERVICE_PORT must be defined"}
-{"time":"2026-10-03T19:06:44.2882772+03:30","level":"INFO","msg":"Scheduler initialized with configuration","environment":"development","reconciliation_period":30000000000,"worker_id":"local-worker-1","run_once":true}
-{"time":"2026-10-03T19:06:44.2882772+03:30","level":"INFO","msg":"Executing single scheduler admission pass (RUN_ONCE)"}
-{"time":"2026-10-03T19:06:44.8219642+03:30","level":"INFO","msg":"Admitted job and created ExecutionIntent","intent_id":"30ce719b-c439-447d-8ae5-115f577cf479","job_id":"32d5c9e8-da02-4f44-be1e-289cb67a394f","job_attempt_id":"3157e3c1-0c58-45ae-952b-472e389df0b7","resource_name":"hc-job-32d5c9e8-da02-4f44-be1e-289cb67a394f-1"}
-{"time":"2026-10-03T19:06:44.8229649+03:30","level":"INFO","msg":"Scheduler RunOnce completed successfully","admitted_count":1}
+{"time":"2026-10-04T16:41:13.640781+03:30","level":"INFO","msg":"Starting HamiCloud Scheduler process","version":"0.1.0"}
+{"time":"2026-10-04T16:41:13.6916441+03:30","level":"WARN","msg":"Kubernetes cluster unavailable for scheduler; falling back to NoopJobDeleter in development","warning":"in-cluster kubernetes configuration not available: unable to load in-cluster configuration, KUBERNETES_SERVICE_HOST and KUBERNETES_SERVICE_PORT must be defined"}
+{"time":"2026-10-04T16:41:13.6926403+03:30","level":"INFO","msg":"Scheduler initialized with configuration","environment":"development","reconciliation_period":30000000000,"worker_id":"local-worker-1","run_once":true}
+{"time":"2026-10-04T16:41:13.6926403+03:30","level":"INFO","msg":"Executing single scheduler admission pass (RUN_ONCE)"}
+{"time":"2026-10-04T16:41:13.8243307+03:30","level":"INFO","msg":"Admitted job and created ExecutionIntent","intent_id":"4f7fcb9e-41ad-489c-90bd-708f59e086b7","job_id":"456ad0ab-1c51-4665-87fc-461b798726ca","job_attempt_id":"08fa9e64-aaf0-45f1-b59b-5858a62fb76a","resource_name":"hc-job-456ad0ab-1c51-4665-87fc-461b798726ca-1"}
+{"time":"2026-10-04T16:41:13.8249856+03:30","level":"INFO","msg":"Scheduler RunOnce completed successfully","admitted_count":1}
 ```
 
 ---
 
 ### Step 3: Attempt 1 Execution & Non-Zero Exit Code
 
-Executed `hamicloud-executor.exe --run-once`.
+Executed `hamicloud-executor.exe --run-once` with `WORKLOAD_WORKSPACE_ID=32cb1deb-aff4-41a4-bc22-a5363d2ba182`.
 
 **Raw Log Output (`03-executor-attempt-1.log`):**
 ```json
-{"time":"2026-10-03T19:06:48.7909569+03:30","level":"INFO","msg":"Starting HamiCloud Execution Worker process","version":"0.1.0"}
-{"time":"2026-10-03T19:06:48.8899849+03:30","level":"WARN","msg":"Kubernetes cluster unavailable; falling back to development-only HTTPProbeRunner and LocalProcessJobRunner","warning":"in-cluster kubernetes configuration not available: unable to load in-cluster configuration, KUBERNETES_SERVICE_HOST and KUBERNETES_SERVICE_PORT must be defined"}
-{"time":"2026-10-03T19:06:48.8909874+03:30","level":"INFO","msg":"Executor initialized with configuration","environment":"development","lease_duration":60000000000,"worker_id":"local-worker-1","run_once":true}
-{"time":"2026-10-03T19:06:48.8909874+03:30","level":"INFO","msg":"Executing single executor reconciliation pass (RUN_ONCE)"}
-{"time":"2026-10-03T19:06:49.0725515+03:30","level":"INFO","msg":"Claimed job attempt intent","intent_id":"30ce719b-c439-447d-8ae5-115f577cf479","job_id":"32d5c9e8-da02-4f44-be1e-289cb67a394f","job_name":"fatal-process","attempt_number":1,"worker_id":"local-worker-1","lease_epoch":1}
-{"time":"2026-10-03T19:06:49.0725515+03:30","level":"INFO","msg":"Starting reconciliation for job attempt","intent_id":"30ce719b-c439-447d-8ae5-115f577cf479","job_id":"32d5c9e8-da02-4f44-be1e-289cb67a394f","job_name":"fatal-process","attempt_number":1,"lease_epoch":1}
-{"time":"2026-10-03T19:06:49.5483812+03:30","level":"WARN","msg":"Job attempt failed","job_id":"32d5c9e8-da02-4f44-be1e-289cb67a394f","attempt_number":1,"exit_code":42,"should_retry":true,"reason":"process exited with status 42"}
-{"time":"2026-10-03T19:06:49.6961474+03:30","level":"INFO","msg":"Executor RunOnce completed successfully","workload_processed":true}
+{"time":"2026-10-04T16:41:13.8827397+03:30","level":"INFO","msg":"Starting HamiCloud Execution Worker process","version":"0.1.0"}
+{"time":"2026-10-04T16:41:14.0433579+03:30","level":"WARN","msg":"Kubernetes cluster unavailable; falling back to development-only HTTPProbeRunner and LocalProcessJobRunner","warning":"in-cluster kubernetes configuration not available: unable to load in-cluster configuration, KUBERNETES_SERVICE_HOST and KUBERNETES_SERVICE_PORT must be defined"}
+{"time":"2026-10-04T16:41:14.0433579+03:30","level":"INFO","msg":"Executor initialized with configuration","environment":"development","lease_duration":60000000000,"worker_id":"local-worker-1","run_once":true,"workspace_ids":["32cb1deb-aff4-41a4-bc22-a5363d2ba182"]}
+{"time":"2026-10-04T16:41:14.0433579+03:30","level":"INFO","msg":"Executing single executor reconciliation pass (RUN_ONCE)"}
+{"time":"2026-10-04T16:41:14.1368657+03:30","level":"INFO","msg":"Claimed job attempt intent","intent_id":"4f7fcb9e-41ad-489c-90bd-708f59e086b7","job_id":"456ad0ab-1c51-4665-87fc-461b798726ca","job_name":"fatal-process","attempt_number":1,"worker_id":"local-worker-1","lease_epoch":1}
+{"time":"2026-10-04T16:41:14.1368657+03:30","level":"INFO","msg":"Starting reconciliation for job attempt","intent_id":"4f7fcb9e-41ad-489c-90bd-708f59e086b7","job_id":"456ad0ab-1c51-4665-87fc-461b798726ca","job_name":"fatal-process","attempt_number":1,"lease_epoch":1}
+{"time":"2026-10-04T16:41:14.3728855+03:30","level":"WARN","msg":"Job attempt failed","job_id":"456ad0ab-1c51-4665-87fc-461b798726ca","attempt_number":1,"exit_code":42,"should_retry":true,"reason":"process exited with status 42"}
+{"time":"2026-10-04T16:41:14.5570225+03:30","level":"INFO","msg":"Executor RunOnce completed successfully","workload_processed":true}
 ```
 
 Since `attempt_number (1) <= max_retries (1)`, `should_retry` is `true`. The job safely transitioned to `RETRY_WAIT`.
@@ -76,31 +76,31 @@ Following the 6.0-second retry backoff window, `hamicloud-scheduler.exe --run-on
 
 **Raw Log Output (`04-scheduler-requeue.log`):**
 ```json
-{"time":"2026-10-03T19:06:55.7766345+03:30","level":"INFO","msg":"Starting HamiCloud Scheduler process","version":"0.1.0"}
-{"time":"2026-10-03T19:06:55.8569837+03:30","level":"WARN","msg":"Kubernetes cluster unavailable for scheduler; falling back to NoopJobDeleter in development","warning":"in-cluster kubernetes configuration not available: unable to load in-cluster configuration, KUBERNETES_SERVICE_HOST and KUBERNETES_SERVICE_PORT must be defined"}
-{"time":"2026-10-03T19:06:55.8569837+03:30","level":"INFO","msg":"Scheduler initialized with configuration","environment":"development","reconciliation_period":30000000000,"worker_id":"local-worker-1","run_once":true}
-{"time":"2026-10-03T19:06:55.8569837+03:30","level":"INFO","msg":"Executing single scheduler admission pass (RUN_ONCE)"}
-{"time":"2026-10-03T19:06:56.0963777+03:30","level":"INFO","msg":"Requeued retry_wait jobs back to QUEUED for next attempt","count":1}
-{"time":"2026-10-03T19:06:56.2427494+03:30","level":"INFO","msg":"Admitted job and created ExecutionIntent","intent_id":"391d124e-8d9d-4b84-a72a-1756cabf98bd","job_id":"32d5c9e8-da02-4f44-be1e-289cb67a394f","job_attempt_id":"341e3d3f-56bb-498c-851f-28784a9e52ce","resource_name":"hc-job-32d5c9e8-da02-4f44-be1e-289cb67a394f-2"}
-{"time":"2026-10-03T19:06:56.2432578+03:30","level":"INFO","msg":"Scheduler RunOnce completed successfully","admitted_count":1}
+{"time":"2026-10-04T16:41:20.6089454+03:30","level":"INFO","msg":"Starting HamiCloud Scheduler process","version":"0.1.0"}
+{"time":"2026-10-04T16:41:20.8388928+03:30","level":"WARN","msg":"Kubernetes cluster unavailable for scheduler; falling back to NoopJobDeleter in development","warning":"in-cluster kubernetes configuration not available: unable to load in-cluster configuration, KUBERNETES_SERVICE_HOST and KUBERNETES_SERVICE_PORT must be defined"}
+{"time":"2026-10-04T16:41:20.839411+03:30","level":"INFO","msg":"Scheduler initialized with configuration","environment":"development","reconciliation_period":30000000000,"worker_id":"local-worker-1","run_once":true}
+{"time":"2026-10-04T16:41:20.839411+03:30","level":"INFO","msg":"Executing single scheduler admission pass (RUN_ONCE)"}
+{"time":"2026-10-04T16:41:20.9537449+03:30","level":"INFO","msg":"Requeued retry_wait jobs back to QUEUED for next attempt","count":1}
+{"time":"2026-10-04T16:41:21.1918237+03:30","level":"INFO","msg":"Admitted job and created ExecutionIntent","intent_id":"0590957e-304f-4f56-bc96-b5add0760423","job_id":"456ad0ab-1c51-4665-87fc-461b798726ca","job_attempt_id":"8ad70ffb-ff31-47bd-9b19-f27e254b0359","resource_name":"hc-job-456ad0ab-1c51-4665-87fc-461b798726ca-2"}
+{"time":"2026-10-04T16:41:21.1926249+03:30","level":"INFO","msg":"Scheduler RunOnce completed successfully","admitted_count":1}
 ```
 
 ---
 
 ### Step 5: Attempt 2 Execution & Retry Budget Exhaustion
 
-Executed `hamicloud-executor.exe --run-once` on attempt 2.
+Executed `hamicloud-executor.exe --run-once` with `WORKLOAD_WORKSPACE_ID=32cb1deb-aff4-41a4-bc22-a5363d2ba182` on attempt 2.
 
 **Raw Log Output (`05-executor-attempt-2.log`):**
 ```json
-{"time":"2026-10-03T19:07:00.3813094+03:30","level":"INFO","msg":"Starting HamiCloud Execution Worker process","version":"0.1.0"}
-{"time":"2026-10-03T19:07:00.8439049+03:30","level":"WARN","msg":"Kubernetes cluster unavailable; falling back to development-only HTTPProbeRunner and LocalProcessJobRunner","warning":"in-cluster kubernetes configuration not available: unable to load in-cluster configuration, KUBERNETES_SERVICE_HOST and KUBERNETES_SERVICE_PORT must be defined"}
-{"time":"2026-10-03T19:07:00.8439049+03:30","level":"INFO","msg":"Executor initialized with configuration","environment":"development","lease_duration":60000000000,"worker_id":"local-worker-1","run_once":true}
-{"time":"2026-10-03T19:07:00.8439049+03:30","level":"INFO","msg":"Executing single executor reconciliation pass (RUN_ONCE)"}
-{"time":"2026-10-03T19:07:01.0021612+03:30","level":"INFO","msg":"Claimed job attempt intent","intent_id":"391d124e-8d9d-4b84-a72a-1756cabf98bd","job_id":"32d5c9e8-da02-4f44-be1e-289cb67a394f","job_name":"fatal-process","attempt_number":2,"worker_id":"local-worker-1","lease_epoch":1}
-{"time":"2026-10-03T19:07:01.0021612+03:30","level":"INFO","msg":"Starting reconciliation for job attempt","intent_id":"391d124e-8d9d-4b84-a72a-1756cabf98bd","job_id":"32d5c9e8-da02-4f44-be1e-289cb67a394f","job_name":"fatal-process","attempt_number":2,"lease_epoch":1}
-{"time":"2026-10-03T19:07:01.4758604+03:30","level":"WARN","msg":"Job attempt failed","job_id":"32d5c9e8-da02-4f44-be1e-289cb67a394f","attempt_number":2,"exit_code":42,"should_retry":false,"reason":"process exited with status 42"}
-{"time":"2026-10-03T19:07:01.7405861+03:30","level":"INFO","msg":"Executor RunOnce completed successfully","workload_processed":true}
+{"time":"2026-10-04T16:41:21.2538364+03:30","level":"INFO","msg":"Starting HamiCloud Execution Worker process","version":"0.1.0"}
+{"time":"2026-10-04T16:41:21.3112561+03:30","level":"WARN","msg":"Kubernetes cluster unavailable; falling back to development-only HTTPProbeRunner and LocalProcessJobRunner","warning":"in-cluster kubernetes configuration not available: unable to load in-cluster configuration, KUBERNETES_SERVICE_HOST and KUBERNETES_SERVICE_PORT must be defined"}
+{"time":"2026-10-04T16:41:21.3112561+03:30","level":"INFO","msg":"Executor initialized with configuration","environment":"development","lease_duration":60000000000,"worker_id":"local-worker-1","run_once":true,"workspace_ids":["32cb1deb-aff4-41a4-bc22-a5363d2ba182"]}
+{"time":"2026-10-04T16:41:21.3112561+03:30","level":"INFO","msg":"Executing single executor reconciliation pass (RUN_ONCE)"}
+{"time":"2026-10-04T16:41:21.4199355+03:30","level":"INFO","msg":"Claimed job attempt intent","intent_id":"0590957e-304f-4f56-bc96-b5add0760423","job_id":"456ad0ab-1c51-4665-87fc-461b798726ca","job_name":"fatal-process","attempt_number":2,"worker_id":"local-worker-1","lease_epoch":1}
+{"time":"2026-10-04T16:41:21.4199355+03:30","level":"INFO","msg":"Starting reconciliation for job attempt","intent_id":"0590957e-304f-4f56-bc96-b5add0760423","job_id":"456ad0ab-1c51-4665-87fc-461b798726ca","job_name":"fatal-process","attempt_number":2,"lease_epoch":1}
+{"time":"2026-10-04T16:41:21.5560215+03:30","level":"WARN","msg":"Job attempt failed","job_id":"456ad0ab-1c51-4665-87fc-461b798726ca","attempt_number":2,"exit_code":42,"should_retry":false,"reason":"process exited with status 42"}
+{"time":"2026-10-04T16:41:21.5878425+03:30","level":"INFO","msg":"Executor RunOnce completed successfully","workload_processed":true}
 ```
 
 With `attempt_number = 2` exceeding `max_retries = 1`, `should_retry` evaluates to `false`. The job transitions to terminal state `FAILED`.
@@ -111,7 +111,7 @@ With `attempt_number = 2` exceeding `max_retries = 1`, `should_retry` evaluates 
 
 **Raw API Response (`06-get-job-final.json`):**
 ```json
-{"id":"32d5c9e8-da02-4f44-be1e-289cb67a394f","workspace_id":"02403b64-8e41-4f2b-9f82-fc2eae910178","name":"fatal-process","state":"FAILED","current_attempt_number":2,"attempts":[{"attempt_number":1,"state":"FAILED","resource_uid":null,"lease_epoch":1,"exit_code":42,"failure_reason":"process exited with status 42","started_at":"2026-10-03T15:36:44.861565Z","finished_at":"2026-10-03T15:36:49.549383Z"},{"attempt_number":2,"state":"FAILED","resource_uid":null,"lease_epoch":1,"exit_code":42,"failure_reason":"process exited with status 42","started_at":"2026-10-03T15:37:00.869699Z","finished_at":"2026-10-03T15:37:01.476860Z"}],"created_at":"2026-10-03T15:35:12.841164Z"}
+{"id":"456ad0ab-1c51-4665-87fc-461b798726ca","workspace_id":"32cb1deb-aff4-41a4-bc22-a5363d2ba182","name":"fatal-process","state":"FAILED","current_attempt_number":2,"attempts":[{"attempt_number":1,"state":"FAILED","resource_uid":null,"lease_epoch":1,"exit_code":42,"failure_reason":"process exited with status 42","started_at":"2026-10-04T13:11:14.071120Z","finished_at":"2026-10-04T13:11:14.405964Z"},{"attempt_number":2,"state":"FAILED","resource_uid":null,"lease_epoch":1,"exit_code":42,"failure_reason":"process exited with status 42","started_at":"2026-10-04T13:11:21.335954Z","finished_at":"2026-10-04T13:11:21.557009Z"}],"created_at":"2026-10-04T13:11:13.372441Z"}
 ```
 
 **Raw Database Attempts Query (`07-db-attempts.txt`):**

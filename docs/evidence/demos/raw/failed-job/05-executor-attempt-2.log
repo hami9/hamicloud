@@ -1,9 +1,9 @@
-﻿{"time":"2026-10-03T19:07:00.3813094+03:30","level":"INFO","msg":"Starting HamiCloud Execution Worker process","version":"0.1.0"}
-{"time":"2026-10-03T19:07:00.8439049+03:30","level":"WARN","msg":"Kubernetes cluster unavailable; falling back to development-only HTTPProbeRunner and LocalProcessJobRunner","warning":"in-cluster kubernetes configuration not available: unable to load in-cluster configuration, KUBERNETES_SERVICE_HOST and KUBERNETES_SERVICE_PORT must be defined"}
-{"time":"2026-10-03T19:07:00.8439049+03:30","level":"INFO","msg":"Executor initialized with configuration","environment":"development","lease_duration":60000000000,"worker_id":"local-worker-1","run_once":true}
-{"time":"2026-10-03T19:07:00.8439049+03:30","level":"INFO","msg":"Executing single executor reconciliation pass (RUN_ONCE)"}
-{"time":"2026-10-03T19:07:01.0021612+03:30","level":"INFO","msg":"Claimed job attempt intent","intent_id":"391d124e-8d9d-4b84-a72a-1756cabf98bd","job_id":"32d5c9e8-da02-4f44-be1e-289cb67a394f","job_name":"fatal-process","attempt_number":2,"worker_id":"local-worker-1","lease_epoch":1}
-{"time":"2026-10-03T19:07:01.0021612+03:30","level":"INFO","msg":"Starting reconciliation for job attempt","intent_id":"391d124e-8d9d-4b84-a72a-1756cabf98bd","job_id":"32d5c9e8-da02-4f44-be1e-289cb67a394f","job_name":"fatal-process","attempt_number":2,"lease_epoch":1}
-{"time":"2026-10-03T19:07:01.4758604+03:30","level":"WARN","msg":"Job attempt failed","job_id":"32d5c9e8-da02-4f44-be1e-289cb67a394f","attempt_number":2,"exit_code":42,"should_retry":false,"reason":"process exited with status 42"}
-{"time":"2026-10-03T19:07:01.7405861+03:30","level":"INFO","msg":"Executor RunOnce completed successfully","workload_processed":true}
+﻿{"time":"2026-10-04T16:41:21.2538364+03:30","level":"INFO","msg":"Starting HamiCloud Execution Worker process","version":"0.1.0"}
+{"time":"2026-10-04T16:41:21.3112561+03:30","level":"WARN","msg":"Kubernetes cluster unavailable; falling back to development-only HTTPProbeRunner and LocalProcessJobRunner","warning":"in-cluster kubernetes configuration not available: unable to load in-cluster configuration, KUBERNETES_SERVICE_HOST and KUBERNETES_SERVICE_PORT must be defined"}
+{"time":"2026-10-04T16:41:21.3112561+03:30","level":"INFO","msg":"Executor initialized with configuration","environment":"development","lease_duration":60000000000,"worker_id":"local-worker-1","run_once":true,"workspace_ids":["32cb1deb-aff4-41a4-bc22-a5363d2ba182"]}
+{"time":"2026-10-04T16:41:21.3112561+03:30","level":"INFO","msg":"Executing single executor reconciliation pass (RUN_ONCE)"}
+{"time":"2026-10-04T16:41:21.4199355+03:30","level":"INFO","msg":"Claimed job attempt intent","intent_id":"0590957e-304f-4f56-bc96-b5add0760423","job_id":"456ad0ab-1c51-4665-87fc-461b798726ca","job_name":"fatal-process","attempt_number":2,"worker_id":"local-worker-1","lease_epoch":1}
+{"time":"2026-10-04T16:41:21.4199355+03:30","level":"INFO","msg":"Starting reconciliation for job attempt","intent_id":"0590957e-304f-4f56-bc96-b5add0760423","job_id":"456ad0ab-1c51-4665-87fc-461b798726ca","job_name":"fatal-process","attempt_number":2,"lease_epoch":1}
+{"time":"2026-10-04T16:41:21.5560215+03:30","level":"WARN","msg":"Job attempt failed","job_id":"456ad0ab-1c51-4665-87fc-461b798726ca","attempt_number":2,"exit_code":42,"should_retry":false,"reason":"process exited with status 42"}
+{"time":"2026-10-04T16:41:21.5878425+03:30","level":"INFO","msg":"Executor RunOnce completed successfully","workload_processed":true}
 

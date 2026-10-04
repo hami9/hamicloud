@@ -11,5 +11,19 @@ dist/index.html                   0.45 kB Γöé gzip:  0.29 kB
 dist/assets/index-CakGEGqm.css   17.25 kB Γöé gzip:  3.90 kB
 dist/assets/index-BD3M7Bg-.js   252.58 kB Γöé gzip: 76.10 kB
 
-[32mΓ£ô built in 7.75s[39m
+[32mΓ£ô built in 6.78s[39m
+node.exe : [33m[33m[PLUGIN_TIMINGS] [0mJavaScript callbacks ran for 5.2s of this 6.6s build (79%).
+At line:1 char:1
++ & "C:\Program Files\nodejs/node.exe" "C:\Program Files\nodejs/node_mo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ([33m[33m[PLUG...6s build (79%).:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+The slowest callbacks, timed inside each callback (the wait before a callback starts is excluded, the time it awaits 
+is included):
+  - plugin vite:build-html transform (38%, 2.5s, 1 call)
+  - plugin vite:css-post renderChunk (35%, 2.3s, 1 call)
+Additional callback time came from callbacks under 1s.
+See https://rolldown.rs/reference/InputOptions.checks#bundlertimings for more details.
+[39m
 

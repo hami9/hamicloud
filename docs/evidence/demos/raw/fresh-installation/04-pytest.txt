@@ -8,7 +8,7 @@ collected 117 items
 
 apps\api\tests\test_api_flows.py ........                                [  6%]
 apps\api\tests\test_application_endpoints.py ...                         [  9%]
-apps\api\tests\test_auth_oidc.py ......s......                           [ 20%]
+apps\api\tests\test_auth_oidc.py .............                           [ 20%]
 apps\api\tests\test_contracts.py .......                                 [ 26%]
 apps\api\tests\test_health.py ..                                         [ 28%]
 apps\api\tests\test_image_policy.py ...                                  [ 30%]
@@ -40,5 +40,5 @@ tests/test_m3_source_to_url.py::test_m3_trigger_build_no_invented_commit_sha[asy
     return await dependant.call(**values)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-=========== 116 passed, 1 skipped, 4 warnings in 236.77s (0:03:56) ============
+================= 117 passed, 4 warnings in 175.50s (0:02:55) =================
 

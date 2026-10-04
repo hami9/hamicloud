@@ -1,5 +1,5 @@
 ﻿python.exe : INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
-At E:\project\hamicloud\scripts\demos\fresh_installation.ps1:25 char:17
+At E:\project\hamicloud\scripts\demos\fresh_installation.ps1:33 char:17
 + ... mbicCheck = & $pythonExe -m alembic -c (Join-Path $RootDir "migration ...
 +                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     + CategoryInfo          : NotSpecified: (INFO  [alembic....PostgresqlImpl.:String) [], RemoteException

@@ -1,6 +1,6 @@
 ﻿                  id                  | status  |         claimed_by         | lease_epoch | is_expired 
 --------------------------------------+---------+----------------------------+-------------+------------
- 4baf3565-fc5f-4ee4-b580-1ad7bec3f840 | CLAIMED | executor-worker-crash-test |           1 | t
+ 74f536a2-b89a-44e3-b3b3-ff6568356920 | CLAIMED | executor-worker-crash-test |           1 | t
 (1 row)
 
 

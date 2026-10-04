@@ -88,7 +88,7 @@ collected 117 items
 
 apps\api\tests\test_api_flows.py ........                                [  6%]
 apps\api\tests\test_application_endpoints.py ...                         [  9%]
-apps\api\tests\test_auth_oidc.py ......s......                           [ 20%]
+apps\api\tests\test_auth_oidc.py .............                           [ 20%]
 apps\api\tests\test_contracts.py .......                                 [ 26%]
 apps\api\tests\test_health.py ..                                         [ 28%]
 apps\api\tests\test_image_policy.py ...                                  [ 30%]
@@ -104,7 +104,7 @@ apps\api\tests\test_phase3_contracts_idempotency.py .................... [ 80%]
 
 ============================== warnings summary ===============================
 ...
-=========== 116 passed, 1 skipped, 4 warnings in 236.77s (0:03:56) ============
+================= 117 passed, 4 warnings in 175.50s (0:02:55) =================
 ```
 
 #### 2. Static Typing (mypy)

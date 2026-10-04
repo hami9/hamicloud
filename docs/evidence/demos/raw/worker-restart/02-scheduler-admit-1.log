@@ -1,7 +1,7 @@
-﻿{"time":"2026-10-01T21:22:10.5822874+03:30","level":"INFO","msg":"Starting HamiCloud Scheduler process","version":"0.1.0"}
-{"time":"2026-10-01T21:22:10.694871+03:30","level":"WARN","msg":"Kubernetes cluster unavailable for scheduler; falling back to NoopJobDeleter in development","warning":"in-cluster kubernetes configuration not available: unable to load in-cluster configuration, KUBERNETES_SERVICE_HOST and KUBERNETES_SERVICE_PORT must be defined"}
-{"time":"2026-10-01T21:22:10.8094603+03:30","level":"INFO","msg":"Scheduler initialized with configuration","environment":"development","reconciliation_period":30000000000,"worker_id":"local-worker-1","run_once":true}
-{"time":"2026-10-01T21:22:10.8099696+03:30","level":"INFO","msg":"Executing single scheduler admission pass (RUN_ONCE)"}
-{"time":"2026-10-01T21:22:11.0133695+03:30","level":"INFO","msg":"Admitted job and created ExecutionIntent","intent_id":"4baf3565-fc5f-4ee4-b580-1ad7bec3f840","job_id":"d98b1cc1-ab83-450f-ac32-f9ccb4ae4719","job_attempt_id":"d37ec0b5-0b19-4232-b9d1-b7420952ff7b","resource_name":"hc-job-d98b1cc1-ab83-450f-ac32-f9ccb4ae4719-1"}
-{"time":"2026-10-01T21:22:11.0133695+03:30","level":"INFO","msg":"Scheduler RunOnce completed successfully","admitted_count":1}
+﻿{"time":"2026-10-04T16:38:39.4603352+03:30","level":"INFO","msg":"Starting HamiCloud Scheduler process","version":"0.1.0"}
+{"time":"2026-10-04T16:38:46.8615049+03:30","level":"WARN","msg":"Kubernetes cluster unavailable for scheduler; falling back to NoopJobDeleter in development","warning":"in-cluster kubernetes configuration not available: unable to load in-cluster configuration, KUBERNETES_SERVICE_HOST and KUBERNETES_SERVICE_PORT must be defined"}
+{"time":"2026-10-04T16:38:46.9492035+03:30","level":"INFO","msg":"Scheduler initialized with configuration","environment":"development","reconciliation_period":30000000000,"worker_id":"local-worker-1","run_once":true}
+{"time":"2026-10-04T16:38:46.9492035+03:30","level":"INFO","msg":"Executing single scheduler admission pass (RUN_ONCE)"}
+{"time":"2026-10-04T16:38:51.0344902+03:30","level":"INFO","msg":"Admitted job and created ExecutionIntent","intent_id":"74f536a2-b89a-44e3-b3b3-ff6568356920","job_id":"4751554d-3a0d-4db5-a2bd-9deeaf874337","job_attempt_id":"c536a771-fa9f-4472-b73a-7b9752dd2914","resource_name":"hc-job-4751554d-3a0d-4db5-a2bd-9deeaf874337-1"}
+{"time":"2026-10-04T16:38:51.035994+03:30","level":"INFO","msg":"Scheduler RunOnce completed successfully","admitted_count":1}
 

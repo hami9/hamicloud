@@ -15,6 +15,7 @@ import {
   submitJob,
   cancelJob,
   downloadJobOutput,
+  rerunJob,
 } from './api'
 import './App.css'
 
@@ -25,7 +26,7 @@ export default function App() {
   const [wsSlug, setWsSlug] = useState('')
   const [showNewWsForm, setShowNewWsForm] = useState(false)
 
-  const [activeTab, setActiveTab] = useState<'services' | 'jobs'>('services')
+  const [activeTab, setActiveTab] = useState<'services' | 'jobs' | 'dlq'>('services')
 
   // Services state
   const [apps, setApps] = useState<Application[]>([])
@@ -65,6 +66,7 @@ export default function App() {
   const [jobMaxRetries, setJobMaxRetries] = useState(2)
   const [isSubmittingJob, setIsSubmittingJob] = useState(false)
   const [jobOutputView, setJobOutputView] = useState<string | null>(null)
+  const [isRerunningJob, setIsRerunningJob] = useState(false)
 
   // Filters & Notifications
   const [filterQuery, setFilterQuery] = useState('')
@@ -129,7 +131,7 @@ export default function App() {
 
   // Poll jobs when active workspace changes and jobs tab is active
   useEffect(() => {
-    if (!activeWorkspace || activeTab !== 'jobs') return
+    if (!activeWorkspace || (activeTab !== 'jobs' && activeTab !== 'dlq')) return
     let ignore = false
     const pollJobs = () => {
       listWorkspaceJobs(token, activeWorkspace.id)
@@ -390,6 +392,29 @@ export default function App() {
     }
   }
 
+  const handleRerunJob = async (jobId: string) => {
+    if (!activeWorkspace) return
+    setIsRerunningJob(true)
+    setErrorMsg(null)
+    try {
+      const key = `idemp-rerun-${Date.now()}`
+      const res = await rerunJob(token, jobId, key)
+      setNoticeMsg(`Job rerun dispatched: Operation ${res.operation_id.slice(0, 8)}`)
+      const freshJobs = await listWorkspaceJobs(token, activeWorkspace.id)
+      setJobs(freshJobs)
+      const newJob = freshJobs.find((j) => j.id === res.operation_id)
+      if (newJob) {
+        setSelectedJob(newJob)
+      }
+    } catch (err: unknown) {
+      setErrorMsg((err as Error).message)
+    } finally {
+      setIsRerunningJob(false)
+    }
+  }
+
+  const failedJobs = jobs.filter((j) => j.state === 'FAILED')
+
   const filteredApps = apps.filter(
     (a) =>
       a.name.toLowerCase().includes(filterQuery.toLowerCase()) ||
@@ -400,6 +425,13 @@ export default function App() {
     (j) =>
       j.name.toLowerCase().includes(filterQuery.toLowerCase()) ||
       j.id.toLowerCase().includes(filterQuery.toLowerCase())
+  )
+
+  const filteredDlqJobs = failedJobs.filter(
+    (j) =>
+      j.name.toLowerCase().includes(filterQuery.toLowerCase()) ||
+      j.id.toLowerCase().includes(filterQuery.toLowerCase()) ||
+      j.attempts.some((att) => att.failure_reason?.toLowerCase().includes(filterQuery.toLowerCase()))
   )
 
   return (
@@ -497,6 +529,12 @@ export default function App() {
             <span className="stat-label">Batch Jobs</span>
             <span className="stat-value">{jobs.length}</span>
           </div>
+          <div className="stat-metric">
+            <span className="stat-label">DLQ / Failed</span>
+            <span className="stat-value" style={failedJobs.length > 0 ? { color: '#be123c' } : {}}>
+              {failedJobs.length}
+            </span>
+          </div>
           <button
             className="btn-action-secondary"
             onClick={() => setShowNewWsForm(!showNewWsForm)}
@@ -559,6 +597,20 @@ export default function App() {
             <span>Finite Jobs & Batch Tasks</span>
             <span className="tab-pill-count">{jobs.length}</span>
           </button>
+          <button
+            className={`tab-nav-item ${activeTab === 'dlq' ? 'active' : ''}`}
+            onClick={() => {
+              setActiveTab('dlq')
+              if (failedJobs.length > 0 && (!selectedJob || selectedJob.state !== 'FAILED')) {
+                setSelectedJob(failedJobs[0])
+              }
+            }}
+          >
+            <span>Dead-Letter Queue (DLQ)</span>
+            <span className={`tab-pill-count ${failedJobs.length > 0 ? 'dlq-badge' : ''}`}>
+              {failedJobs.length}
+            </span>
+          </button>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
@@ -579,7 +631,11 @@ export default function App() {
         <aside className="sidebar-panel">
           <div className="panel-header-box">
             <span className="panel-title">
-              {activeTab === 'services' ? 'Applications' : 'Submitted Jobs'}
+              {activeTab === 'services'
+                ? 'Applications'
+                : activeTab === 'jobs'
+                  ? 'Submitted Jobs'
+                  : 'Dead-Letter Workloads'}
             </span>
             {activeTab === 'services' ? (
               <button
@@ -589,7 +645,7 @@ export default function App() {
               >
                 + New App
               </button>
-            ) : (
+            ) : activeTab === 'jobs' ? (
               <button
                 className="btn-action-primary"
                 style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem' }}
@@ -597,6 +653,10 @@ export default function App() {
               >
                 + Submit Job
               </button>
+            ) : (
+              <span className="dlq-tag">
+                {failedJobs.length} Failed
+              </span>
             )}
           </div>
 
@@ -720,33 +780,80 @@ export default function App() {
                   </button>
                 ))
               )
-            ) : filteredJobs.length === 0 ? (
+            ) : activeTab === 'jobs' ? (
+              filteredJobs.length === 0 ? (
+                <div style={{ padding: '2rem 1rem', textAlign: 'center', color: 'var(--slate-400)', fontSize: '0.875rem' }}>
+                  No background jobs found.
+                </div>
+              ) : (
+                filteredJobs.map((j) => (
+                  <button
+                    key={j.id}
+                    className={`sidebar-list-row ${selectedJob?.id === j.id ? 'active' : ''}`}
+                    onClick={() => {
+                      setSelectedJob(j)
+                      setJobOutputView(null)
+                    }}
+                  >
+                    <div className="row-title-line">
+                      <span className="row-primary-name">{j.name}</span>
+                      <span className={`status-pill-clean ${j.state.toLowerCase()}`}>
+                        {j.state}
+                      </span>
+                    </div>
+                    <div className="row-sub-line">
+                      <span className="row-slug-code">#{j.current_attempt_number}</span>
+                      <span>•</span>
+                      <span className="row-slug-code">{j.id.slice(0, 8)}</span>
+                    </div>
+                  </button>
+                ))
+              )
+            ) : filteredDlqJobs.length === 0 ? (
               <div style={{ padding: '2rem 1rem', textAlign: 'center', color: 'var(--slate-400)', fontSize: '0.875rem' }}>
-                No background jobs found.
+                No dead-letter workloads.
               </div>
             ) : (
-              filteredJobs.map((j) => (
-                <button
-                  key={j.id}
-                  className={`sidebar-list-row ${selectedJob?.id === j.id ? 'active' : ''}`}
-                  onClick={() => {
-                    setSelectedJob(j)
-                    setJobOutputView(null)
-                  }}
-                >
-                  <div className="row-title-line">
-                    <span className="row-primary-name">{j.name}</span>
-                    <span className={`status-pill-clean ${j.state.toLowerCase()}`}>
-                      {j.state}
-                    </span>
-                  </div>
-                  <div className="row-sub-line">
-                    <span className="row-slug-code">#{j.current_attempt_number}</span>
-                    <span>•</span>
-                    <span className="row-slug-code">{j.id.slice(0, 8)}</span>
-                  </div>
-                </button>
-              ))
+              filteredDlqJobs.map((j) => {
+                const lastAtt = j.attempts[j.attempts.length - 1]
+                return (
+                  <button
+                    key={j.id}
+                    className={`sidebar-list-row ${selectedJob?.id === j.id ? 'active' : ''}`}
+                    onClick={() => {
+                      setSelectedJob(j)
+                      setJobOutputView(null)
+                    }}
+                  >
+                    <div className="row-title-line">
+                      <span className="row-primary-name">{j.name}</span>
+                      <span className="status-pill-clean failed">
+                        FAILED
+                      </span>
+                    </div>
+                    <div className="row-sub-line">
+                      <span className="dlq-tag">DLQ #{j.current_attempt_number}</span>
+                      <span>•</span>
+                      <span className="row-slug-code">{j.id.slice(0, 8)}</span>
+                    </div>
+                    {lastAtt?.failure_reason && (
+                      <div
+                        style={{
+                          fontSize: '0.72rem',
+                          color: '#be123c',
+                          marginTop: '0.2rem',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                        title={lastAtt.failure_reason}
+                      >
+                        ⚠️ {lastAtt.failure_reason}
+                      </div>
+                    )}
+                  </button>
+                )
+              })
             )}
           </div>
         </aside>
@@ -1187,13 +1294,19 @@ export default function App() {
               </>
             )
           ) : (
-            /* JOBS TAB DETAIL VIEW */
+            /* JOBS & DLQ TAB DETAIL VIEW */
             !selectedJob ? (
               <div className="empty-placeholder-card">
-                <span className="placeholder-icon">⚙️</span>
-                <span style={{ fontWeight: 600, color: 'var(--slate-800)' }}>No Job Selected</span>
-                <p style={{ maxWidth: '360px', fontSize: '0.875rem' }}>
-                  Select a job from the sidebar or click <strong>+ Submit Job</strong> to dispatch a finite batch workload.
+                <span className="placeholder-icon">
+                  {activeTab === 'dlq' ? '🛡️' : '⚙️'}
+                </span>
+                <span style={{ fontWeight: 600, color: 'var(--slate-800)' }}>
+                  {activeTab === 'dlq' ? 'Dead-Letter Queue Empty' : 'No Job Selected'}
+                </span>
+                <p style={{ maxWidth: '380px', fontSize: '0.875rem', color: 'var(--slate-600)' }}>
+                  {activeTab === 'dlq'
+                    ? 'No failed or quarantined workloads in this workspace. All batch jobs have succeeded or are actively progressing within their retry budget.'
+                    : 'Select a job from the sidebar or click + Submit Job to dispatch a finite batch workload.'}
                 </p>
               </div>
             ) : (
@@ -1206,6 +1319,9 @@ export default function App() {
                         <span className={`status-pill-clean ${selectedJob.state.toLowerCase()}`}>
                           {selectedJob.state}
                         </span>
+                        {selectedJob.state === 'FAILED' && (
+                          <span className="dlq-tag">DEAD-LETTER</span>
+                        )}
                       </div>
                       <div className="detail-tags-row">
                         <span className="meta-tag">id: {selectedJob.id}</span>
@@ -1225,6 +1341,15 @@ export default function App() {
                           Cancel Job ✕
                         </button>
                       )}
+                      {selectedJob.state === 'FAILED' && (
+                        <button
+                          className="btn-action-rerun"
+                          disabled={isRerunningJob}
+                          onClick={() => handleRerunJob(selectedJob.id)}
+                        >
+                          {isRerunningJob ? 'Re-running...' : 'Re-run Job ↺'}
+                        </button>
+                      )}
                       {['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(selectedJob.state) && (
                         <button
                           className="btn-action-primary"
@@ -1239,6 +1364,44 @@ export default function App() {
                     </div>
                   </div>
                 </div>
+
+                {/* Dead-Letter Queue (DLQ) Diagnostic Banner */}
+                {selectedJob.state === 'FAILED' && (
+                  <div className="dlq-banner-card">
+                    <div className="dlq-banner-header">
+                      <div className="dlq-banner-title">
+                        <span>⚠️ Dead-Letter Queue (Exhausted Retry Budget)</span>
+                      </div>
+                      <span className="dlq-tag">
+                        Attempt {selectedJob.current_attempt_number} of {selectedJob.attempts.length}
+                      </span>
+                    </div>
+                    <div className="dlq-banner-body">
+                      This job reached a terminal failure condition and exhausted its retry budget. Logical state is frozen and quarantined in the database. You can inspect stdout/stderr logs below or trigger an idempotent successor run with a fresh retry budget.
+                    </div>
+                    {(() => {
+                      const lastAtt = selectedJob.attempts[selectedJob.attempts.length - 1]
+                      if (!lastAtt) return null
+                      return (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', marginTop: '0.25rem' }}>
+                          <div style={{ display: 'flex', gap: '1.25rem', fontSize: '0.8rem', fontFamily: 'var(--font-mono)' }}>
+                            {lastAtt.exit_code !== null && lastAtt.exit_code !== undefined && (
+                              <span><strong>Exit Code:</strong> {lastAtt.exit_code}</span>
+                            )}
+                            {lastAtt.resource_uid && (
+                              <span><strong>Resource UID:</strong> {lastAtt.resource_uid}</span>
+                            )}
+                          </div>
+                          {lastAtt.failure_reason && (
+                            <div className="failure-diagnostics-pre">
+                              {lastAtt.failure_reason}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })()}
+                  </div>
+                )}
 
                 {/* Job Attempts Timeline */}
                 <div className="content-card">

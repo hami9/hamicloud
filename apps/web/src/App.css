@@ -976,3 +976,82 @@ body {
   background-color: var(--slate-100);
   border-color: var(--slate-400);
 }
+
+/* 15. Dead-Letter Queue (DLQ) Specific Styles */
+.tab-pill-count.dlq-badge {
+  background-color: #ffe4e6;
+  color: #be123c;
+  border: 1px solid #fecdd3;
+  font-weight: 700;
+}
+
+.dlq-banner-card {
+  background-color: #fff1f2;
+  border: 1px solid #fecdd3;
+  border-radius: 12px;
+  padding: 1.25rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.dlq-banner-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.dlq-banner-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #9f1239;
+}
+
+.dlq-banner-body {
+  font-size: 0.85rem;
+  color: #881337;
+  line-height: 1.5;
+}
+
+.btn-action-rerun {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background-color: #e11d48;
+  color: var(--color-white);
+  padding: 0.5rem 1rem;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  border: none;
+  cursor: pointer;
+  transition: all 150ms ease;
+  box-shadow: 0 1px 3px rgba(225, 29, 72, 0.3);
+}
+
+.btn-action-rerun:hover {
+  background-color: #be123c;
+}
+
+.btn-action-rerun:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.dlq-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  background-color: #ffe4e6;
+  color: #be123c;
+  border: 1px solid #fecdd3;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  font-family: var(--font-mono);
+}
+

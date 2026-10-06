@@ -390,3 +390,19 @@ export async function downloadJobOutput(token: string, jobId: string): Promise<s
   }
   return res.text()
 }
+
+export async function rerunJob(
+  token: string,
+  jobId: string,
+  idempotencyKey: string
+): Promise<{ operation_id: string; status: string; status_url: string }> {
+  const res = await fetch(`/v1/jobs/${jobId}/reruns`, {
+    method: 'POST',
+    headers: getHeaders(token, idempotencyKey),
+  })
+  if (!res.ok) {
+    const msg = await extractErrorMessage(res, 'Failed to rerun job')
+    throw new Error(msg)
+  }
+  return res.json()
+}

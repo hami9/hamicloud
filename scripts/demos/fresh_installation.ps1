@@ -38,6 +38,7 @@ if ($LASTEXITCODE -ne 0) {
 
 # 4. Pytest test suite
 Write-Host "Running pytest test suite (this may take ~2 minutes)..."
+$env:REQUIRE_LIVE_KEYCLOAK = "1"
 $pytestOut = & $pythonExe -m pytest (Join-Path $RootDir "apps/api/tests") 2>&1 | Out-String
 Set-Content -Path (Join-Path $RawDir "04-pytest.txt") -Value $pytestOut -Encoding utf8
 if ($LASTEXITCODE -ne 0) {

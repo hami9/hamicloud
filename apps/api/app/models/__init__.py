@@ -15,6 +15,7 @@ from app.models.secret import SecretReference
 from app.models.audit import AuditEvent
 from app.models.repository import Repository
 from app.models.webhook_delivery import WebhookDelivery
+from app.models.dead_letter import DeadLetterRecord
 
 __all__ = [
     "Base",
@@ -42,4 +43,5 @@ __all__ = [
     "AuditEvent",
     "Repository",
     "WebhookDelivery",
+    "DeadLetterRecord",
 ]

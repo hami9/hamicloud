@@ -26,9 +26,11 @@ from app.core.state_machine import (
     validate_job_transition,
 )
 from app.db.session import get_db
+from app.models.dead_letter import DeadLetterRecord
 from app.models.job import Job, JobAttempt, JobState
 from app.models.workspace import WorkspaceRole
 from app.schemas.common import AcceptedOperationResponse
+from app.schemas.dead_letter import DeadLetterRecordItem, DeadLetterRecordListResponse
 from app.schemas.job import JobAttemptItem, JobDetailsResponse, JobListResponse, SubmitJobRequest
 
 router = APIRouter(tags=["Jobs"])
@@ -521,4 +523,62 @@ async def get_job_output(
             "Content-Disposition": f'attachment; filename="job-{job.id}-output.txt"'
         },
     )
+
+
+@router.get(
+    "/workspaces/{workspace_id}/dead-letter-records",
+    response_model=DeadLetterRecordListResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def list_workspace_dead_letter_records(
+    workspace_id: uuid.UUID,
+    limit: int = Query(default=20, ge=1, le=100),
+    cursor: Optional[str] = Query(default=None),
+    caller: Caller = Depends(get_caller),
+    db: AsyncSession = Depends(get_db),
+) -> DeadLetterRecordListResponse:
+    # 1. Authorize workspace membership (VIEWER or higher)
+    await authorize_workspace_access(
+        db, caller, workspace_id, min_role=WorkspaceRole.VIEWER, not_found_detail="Workspace not found"
+    )
+
+    # 2. Query dead-letter records with cursor pagination
+    stmt = (
+        select(DeadLetterRecord)
+        .options(selectinload(DeadLetterRecord.job))
+        .where(DeadLetterRecord.workspace_id == workspace_id)
+    )
+    if cursor:
+        cursor_ts, cursor_id = decode_cursor(cursor)
+        stmt = stmt.where(
+            (DeadLetterRecord.created_at < cursor_ts)
+            | ((DeadLetterRecord.created_at == cursor_ts) & (DeadLetterRecord.id < cursor_id))
+        )
+
+    stmt = (
+        stmt.order_by(DeadLetterRecord.created_at.desc(), DeadLetterRecord.id.desc())
+        .limit(limit + 1)
+    )
+    records = (await db.execute(stmt)).scalars().all()
+
+    next_cursor = None
+    if len(records) > limit:
+        next_item = records[limit - 1]
+        next_cursor = encode_cursor(next_item.created_at, next_item.id)
+        records = records[:limit]
+
+    items = [
+        DeadLetterRecordItem(
+            id=r.id,
+            job_id=r.job_id,
+            workspace_id=r.workspace_id,
+            job_name=r.job.name if r.job else "unknown",
+            last_attempt=r.last_attempt,
+            exit_code=r.exit_code,
+            failure_reason=r.failure_reason,
+            created_at=r.created_at,
+        )
+        for r in records
+    ]
+    return DeadLetterRecordListResponse(items=items, next_cursor=next_cursor)
 

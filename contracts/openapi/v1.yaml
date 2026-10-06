@@ -467,6 +467,68 @@ paths:
         '405':
           $ref: '#/components/responses/405MethodNotAllowed'
 
+  /v1/workspaces/{workspace_id}/dead-letter-records:
+    get:
+      summary: List dead-letter records in workspace
+      description: Cursor-paginated listing of dead-letter records in a workspace; requires VIEWER role or higher.
+      operationId: listWorkspaceDeadLetterRecords
+      parameters:
+        - name: workspace_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+            example: "550e8400-e29b-41d4-a716-446655440000"
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+            example: 20
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+            example: "MjAyNi0wOS0xOVQxMjowMDowMHw1YmE1ZmI1Ny0wZjZhLTQ4NWItYTExMy1mZDE5ZDMyOTU5MWY="
+      responses:
+        '200':
+          description: List of dead-letter records with pagination metadata
+          headers:
+            X-Correlation-ID:
+              $ref: '#/components/headers/X-Correlation-ID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeadLetterRecordListResponse'
+              example:
+                items:
+                  - id: "4ba5fb57-0f6a-485b-a113-fd19d329591e"
+                    job_id: "5ba5fb57-0f6a-485b-a113-fd19d329591f"
+                    workspace_id: "550e8400-e29b-41d4-a716-446655440000"
+                    job_name: "nightly-backup"
+                    last_attempt: 3
+                    exit_code: 1
+                    failure_reason: "Command failed with exit code 1"
+                    created_at: "2026-09-19T12:00:00Z"
+                next_cursor: null
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '422':
+          $ref: '#/components/responses/422UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+        '405':
+          $ref: '#/components/responses/405MethodNotAllowed'
+
   /v1/apps/{app_id}:
     get:
       summary: Get application details
@@ -1936,6 +1998,62 @@ components:
                 failure_reason: null
                 started_at: "2026-09-19T12:00:00Z"
                 finished_at: null
+            created_at: "2026-09-19T12:00:00Z"
+        next_cursor: null
+
+    DeadLetterRecordItem:
+      type: object
+      required: [id, job_id, workspace_id, job_name, last_attempt, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: "4ba5fb57-0f6a-485b-a113-fd19d329591e"
+        job_id:
+          type: string
+          format: uuid
+          example: "5ba5fb57-0f6a-485b-a113-fd19d329591f"
+        workspace_id:
+          type: string
+          format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        job_name:
+          type: string
+          example: "nightly-backup"
+        last_attempt:
+          type: integer
+          example: 3
+        exit_code:
+          type: [integer, 'null']
+          example: 1
+        failure_reason:
+          type: [string, 'null']
+          example: "Command failed with exit code 1"
+        created_at:
+          type: string
+          format: date-time
+          example: "2026-09-19T12:00:00Z"
+
+    DeadLetterRecordListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeadLetterRecordItem'
+        next_cursor:
+          type: [string, 'null']
+          example: null
+      example:
+        items:
+          - id: "4ba5fb57-0f6a-485b-a113-fd19d329591e"
+            job_id: "5ba5fb57-0f6a-485b-a113-fd19d329591f"
+            workspace_id: "550e8400-e29b-41d4-a716-446655440000"
+            job_name: "nightly-backup"
+            last_attempt: 3
+            exit_code: 1
+            failure_reason: "Command failed with exit code 1"
             created_at: "2026-09-19T12:00:00Z"
         next_cursor: null
 

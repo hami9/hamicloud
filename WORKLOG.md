@@ -1884,3 +1884,36 @@ Following project review of `18a3a4e..816cc4a`, all required fixes were implemen
      - Mypy type check: 0 issues across 38 source files in `apps/api`.
      - Ruff linter: all checks passed in `apps/api`.
      - Go test suite: all packages in `runtime/internal/...` passed.
+
+### [2026-10-06T16:35:00Z] Review Remediation of aa729b3..3625738: Dead-Letter Record Persistence & Cold Keycloak Hardening
+
+- **Status:** COMPLETED & VERIFIED (Milestone M1 remains open as current position; M2 and M3 remain reopened and unclosed)
+- **Milestone:** P1 / M1 (Current position: HamiCloud M1 — open)
+- **Review Remediations & Deliverables:**
+  1. **Dead-Letter Handling & Persistence (`apps/api/`, `migrations/`, `runtime/`):**
+     - Created SQLAlchemy model `DeadLetterRecord` in `apps/api/app/models/dead_letter.py` with foreign key to `jobs(id)` and unique constraint on `job_id`.
+     - Generated and applied Alembic migration `0007_add_dead_letter_records.py`. Verified `alembic check` clean (0 schema drift).
+     - Transactional persistence in Go runtime store (`runtime/internal/store/postgres.go`): `MarkJobAttemptFailed` and `ConfirmJobRecovery` write dead-letter records in the same transaction that transitions a job to `FAILED`. Added unit test `TestPostgresStore_MarkJobAttemptFailed_WritesDeadLetterRecord`.
+     - Added `GET /v1/workspaces/{workspace_id}/dead-letter-records` in `apps/api/app/api/v1/jobs.py` with `VIEWER` or higher role authorization, `Caller` context, and cursor pagination (`created_at`, `id`).
+     - Added OpenAPI 3.1 schemas (`DeadLetterRecordItem`, `DeadLetterRecordListResponse`) and path definition in `contracts/openapi/v1.yaml`.
+     - Added endpoint tests in `apps/api/tests/test_dead_letter.py` validating authorization, workspace isolation, DB persistence, and cursor pagination.
+  2. **Dashboard DLQ Integration (`apps/web`):**
+     - Updated `apps/web/src/api.ts` with `DeadLetterRecord` types and `listWorkspaceDeadLetterRecords`.
+     - Updated `apps/web/src/App.tsx` to read dead-letter records directly from the new API endpoint rather than client-side filtering.
+     - Built deterministic Idempotency-Key per dead-letter entry (`rerun-dlq-${selectedDlqRecord.id}`) and disabled the re-run button while in-flight.
+     - Verified `apps/web`: `npm run build` cleanly passed, `oxlint` 0 warnings / 0 errors.
+  3. **Cold Keycloak Live Test Readiness (`apps/api/tests/test_auth_oidc.py` & `scripts/demos/`):**
+     - Hardened `test_live_keycloak_tokens_and_two_workspace_isolation` to poll OIDC discovery and token endpoint with backoff up to 60s.
+     - Enforced hard failure via `pytest.fail` when `REQUIRE_LIVE_KEYCLOAK=1` is set instead of silent skipping.
+     - Exported `$env:REQUIRE_LIVE_KEYCLOAK = "1"` in `scripts/demos/fresh_installation.ps1`.
+  4. **Multi-Workspace Claim Filtering (`runtime/internal/store/postgres.go`):**
+     - Updated `ClaimNextJobAttempt` and `ClaimNextServiceRelease` to filter with `ei.workspace_id::text = ANY($1)` when multiple workspace IDs are provided.
+     - Added store unit test `TestPostgresStore_ClaimNextJobAttempt_MultipleWorkspaces`.
+  5. **Verification & Quality Gates:**
+     - Full Python test suite: **120 passed, 0 skipped, 0 failed** in `apps/api/tests`.
+     - Alembic check: clean (`No new upgrade operations detected`).
+     - Mypy: 0 issues across 40 source files in `apps/api`.
+     - Ruff: all checks passed in `apps/api`.
+     - Go test suite: all packages in `runtime/internal/...` passed.
+     - Web dashboard: `oxlint` 0 errors, `npm run build` clean.
+     - Current milestone position remains `HamiCloud M1 — open`.

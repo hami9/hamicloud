@@ -406,3 +406,38 @@ export async function rerunJob(
   }
   return res.json()
 }
+
+export interface DeadLetterRecord {
+  id: string
+  job_id: string
+  workspace_id: string
+  job_name: string
+  last_attempt: number
+  exit_code: number | null
+  failure_reason: string | null
+  created_at: string
+}
+
+export interface DeadLetterRecordListResponse {
+  items: DeadLetterRecord[]
+  next_cursor: string | null
+}
+
+export async function listWorkspaceDeadLetterRecords(
+  token: string,
+  workspaceId: string,
+  cursor?: string
+): Promise<DeadLetterRecordListResponse> {
+  const url = cursor
+    ? `/v1/workspaces/${workspaceId}/dead-letter-records?cursor=${encodeURIComponent(cursor)}`
+    : `/v1/workspaces/${workspaceId}/dead-letter-records`
+  const res = await fetch(url, {
+    method: 'GET',
+    headers: getHeaders(token),
+  })
+  if (!res.ok) {
+    const msg = await extractErrorMessage(res, 'Failed to list dead-letter records')
+    throw new Error(msg)
+  }
+  return res.json()
+}

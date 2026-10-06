@@ -243,9 +243,16 @@ func (s *PostgresStore) ClaimNextServiceRelease(ctx context.Context, workerID st
 	}
 	defer tx.Rollback(ctx)
 
+	var validWS []string
+	for _, ws := range workspaceIDs {
+		if trimmed := strings.TrimSpace(ws); trimmed != "" {
+			validWS = append(validWS, trimmed)
+		}
+	}
+
 	var selectQuery string
 	var queryArgs []any
-	if len(workspaceIDs) > 0 && workspaceIDs[0] != "" {
+	if len(validWS) > 0 {
 		selectQuery = `
 			SELECT ei.id, ei.workspace_id, w.slug, ei.release_id, r.application_id, a.slug,
 			       r.release_number, r.image_digest, r.config_json, ei.target_generation,
@@ -257,12 +264,12 @@ func (s *PostgresStore) ClaimNextServiceRelease(ctx context.Context, workerID st
 			WHERE ei.resource_type = 'SERVICE_RELEASE'
 			  AND (ei.status = 'PENDING' OR (ei.status = 'CLAIMED' AND ei.lease_expires_at < NOW()))
 			  AND r.status != 'SUPERSEDED'
-			  AND ei.workspace_id = $1
+			  AND ei.workspace_id::text = ANY($1)
 			ORDER BY ei.created_at ASC
 			LIMIT 1
 			FOR UPDATE OF ei SKIP LOCKED;
 		`
-		queryArgs = append(queryArgs, workspaceIDs[0])
+		queryArgs = append(queryArgs, validWS)
 	} else {
 		selectQuery = `
 			SELECT ei.id, ei.workspace_id, w.slug, ei.release_id, r.application_id, a.slug,
@@ -851,14 +858,46 @@ func (s *PostgresStore) ConfirmJobRecovery(ctx context.Context, jobID string, sh
 		UPDATE jobs
 		SET state = $1,
 		    updated_at = $2
-		WHERE id = $3 AND state IN (%s);
+		WHERE id = $3 AND state IN (%s)
+		RETURNING workspace_id, current_attempt_number;
 	`, guard)
-	tagJob, err := tx.Exec(ctx, jobQuery, string(targetJobState), now, jobID)
+	var wsID string
+	var currentAttemptNum int
+	err = tx.QueryRow(ctx, jobQuery, string(targetJobState), now, jobID).Scan(&wsID, &currentAttemptNum)
 	if err != nil {
 		return fmt.Errorf("update job %s to %s: %w", jobID, targetJobState, err)
 	}
-	if tagJob.RowsAffected() != 1 {
-		return fmt.Errorf("expected 1 row affected updating job %s to %s, got %d", jobID, targetJobState, tagJob.RowsAffected())
+
+	if targetJobState == domain.StateFailed {
+		dlqID := NewUUID()
+		var attExitCode *int
+		var attReason *string
+		_ = tx.QueryRow(ctx, `
+			SELECT exit_code, failure_reason FROM job_attempts
+			WHERE job_id = $1 AND attempt_number = $2;
+		`, jobID, currentAttemptNum).Scan(&attExitCode, &attReason)
+
+		finalExitCode := -1
+		if attExitCode != nil {
+			finalExitCode = *attExitCode
+		}
+		finalReason := "Worker lease expired; executor lost"
+		if attReason != nil && *attReason != "" {
+			finalReason = *attReason
+		}
+
+		_, err = tx.Exec(ctx, `
+			INSERT INTO dead_letter_records (id, job_id, workspace_id, last_attempt, exit_code, failure_reason, created_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)
+			ON CONFLICT (job_id) DO UPDATE SET
+			    last_attempt = EXCLUDED.last_attempt,
+			    exit_code = EXCLUDED.exit_code,
+			    failure_reason = EXCLUDED.failure_reason,
+			    created_at = EXCLUDED.created_at;
+		`, dlqID, jobID, wsID, currentAttemptNum, finalExitCode, finalReason, now)
+		if err != nil {
+			return fmt.Errorf("insert recovery dead letter record: %w", err)
+		}
 	}
 
 	return tx.Commit(ctx)
@@ -935,9 +974,16 @@ func (s *PostgresStore) ClaimNextJobAttempt(ctx context.Context, workerID string
 	}
 	defer tx.Rollback(ctx)
 
+	var validWS []string
+	for _, ws := range workspaceIDs {
+		if trimmed := strings.TrimSpace(ws); trimmed != "" {
+			validWS = append(validWS, trimmed)
+		}
+	}
+
 	var selectQuery string
 	var queryArgs []any
-	if len(workspaceIDs) > 0 && workspaceIDs[0] != "" {
+	if len(validWS) > 0 {
 		selectQuery = `
 			SELECT ei.id, ei.job_attempt_id, ja.job_id, ja.workspace_id, w.slug, j.name, j.image_digest,
 			       j.command_args, j.env_vars, j.timeout_seconds, j.max_retries, ja.attempt_number,
@@ -948,12 +994,12 @@ func (s *PostgresStore) ClaimNextJobAttempt(ctx context.Context, workerID string
 			JOIN workspaces w ON w.id = ja.workspace_id
 			WHERE ei.resource_type = 'JOB_ATTEMPT'
 			  AND ei.status = 'PENDING'
-			  AND ei.workspace_id = $1
+			  AND ei.workspace_id::text = ANY($1)
 			ORDER BY ei.created_at ASC
 			LIMIT 1
 			FOR UPDATE OF ei SKIP LOCKED;
 		`
-		queryArgs = append(queryArgs, workspaceIDs[0])
+		queryArgs = append(queryArgs, validWS)
 	} else {
 		selectQuery = `
 			SELECT ei.id, ei.job_attempt_id, ja.job_id, ja.workspace_id, w.slug, j.name, j.image_digest,
@@ -1218,14 +1264,31 @@ func (s *PostgresStore) MarkJobAttemptFailed(ctx context.Context, intentID, atte
 		    ELSE 'FAILED'
 		END,
 		    updated_at = $2
-		WHERE id = $3 AND state IN (%s);
+		WHERE id = $3 AND state IN (%s)
+		RETURNING state, workspace_id, current_attempt_number;
 	`, legalSourcesSQL(domain.StateRetryWait, domain.StateFailed, domain.StateCancelled))
-	cmdJob, err := tx.Exec(ctx, updateJobQuery, shouldRetry, now, jobID)
+	var finalState string
+	var wsID string
+	var attemptNum int
+	err = tx.QueryRow(ctx, updateJobQuery, shouldRetry, now, jobID).Scan(&finalState, &wsID, &attemptNum)
 	if err != nil {
 		return fmt.Errorf("update job state: %w", err)
 	}
-	if cmdJob.RowsAffected() != 1 {
-		return fmt.Errorf("failed to transition job %s: expected 1 row affected, got %d (job not in active state)", jobID, cmdJob.RowsAffected())
+
+	if finalState == string(domain.StateFailed) {
+		dlqID := NewUUID()
+		_, err = tx.Exec(ctx, `
+			INSERT INTO dead_letter_records (id, job_id, workspace_id, last_attempt, exit_code, failure_reason, created_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)
+			ON CONFLICT (job_id) DO UPDATE SET
+			    last_attempt = EXCLUDED.last_attempt,
+			    exit_code = EXCLUDED.exit_code,
+			    failure_reason = EXCLUDED.failure_reason,
+			    created_at = EXCLUDED.created_at;
+		`, dlqID, jobID, wsID, attemptNum, exitCode, reason, now)
+		if err != nil {
+			return fmt.Errorf("insert dead letter record: %w", err)
+		}
 	}
 
 	return tx.Commit(ctx)

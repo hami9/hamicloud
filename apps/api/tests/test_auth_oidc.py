@@ -1,4 +1,6 @@
 from datetime import datetime, timedelta, timezone
+import os
+import time
 import uuid
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives import serialization
@@ -200,40 +202,72 @@ def test_invalid_auth_header_formats(client: TestClient):
 def test_live_keycloak_tokens_and_two_workspace_isolation(client: TestClient):
     """Live end-to-end integration test against running Keycloak container.
 
-    1. Obtains real access token for 'alice' and 'bob'.
+    1. Polls Keycloak discovery and acquires tokens for 'alice' and 'bob'.
     2. Alice creates workspace 1 using her real Keycloak token.
     3. Bob attempts to list jobs in workspace 1 using his real Keycloak token.
     4. Bob receives 404 'Workspace not found' (anti-enumeration isolation).
     5. Bob creates workspace 2 and lists it successfully.
     """
+    require_live = os.getenv("REQUIRE_LIVE_KEYCLOAK") == "1"
+    discovery_url = f"{settings.OIDC_ISSUER_URL}/.well-known/openid-configuration"
     keycloak_token_url = f"{settings.OIDC_ISSUER_URL}/protocol/openid-connect/token"
-    try:
-        resp = httpx.get(f"{settings.OIDC_ISSUER_URL}/.well-known/openid-configuration", timeout=15.0)
-        if resp.status_code != 200:
-            pytest.skip("Keycloak server is not running at OIDC_ISSUER_URL")
-    except Exception:
-        pytest.skip("Keycloak server is not reachable; skipping live Keycloak test")
+
+    # Poll Keycloak discovery up to 60s with backoff
+    discovery_ok = False
+    start_time = time.monotonic()
+    while time.monotonic() - start_time < 60.0:
+        try:
+            resp = httpx.get(discovery_url, timeout=5.0)
+            if resp.status_code == 200:
+                discovery_ok = True
+                break
+        except Exception:
+            pass
+        time.sleep(1.0)
+
+    if not discovery_ok:
+        if require_live:
+            pytest.fail("Keycloak server discovery failed within 60s but REQUIRE_LIVE_KEYCLOAK=1 is set")
+        else:
+            pytest.skip("Keycloak server is not running or reachable at OIDC_ISSUER_URL")
 
     # Reset any cached jwks client to ensure live Keycloak JWKS is used
     set_jwks_client(None)
 
-    try:
-        # 1. Acquire Alice token
-        alice_res = httpx.post(
-            keycloak_token_url,
-            data={
-                "client_id": "hamicloud-api",
-                "grant_type": "password",
-                "username": "alice",
-                "password": "alice123",
-            },
-            timeout=30.0,
-        )
-        assert alice_res.status_code == 200, f"Alice auth failed: {alice_res.text}"
-        alice_token = alice_res.json()["access_token"]
-        alice_headers = {"Authorization": f"Bearer {alice_token}"}
+    # 1. Acquire Alice token with polling up to 60s
+    alice_token = None
+    last_err = None
+    start_time = time.monotonic()
+    while time.monotonic() - start_time < 60.0:
+        try:
+            alice_res = httpx.post(
+                keycloak_token_url,
+                data={
+                    "client_id": "hamicloud-api",
+                    "grant_type": "password",
+                    "username": "alice",
+                    "password": "alice123",
+                },
+                timeout=30.0,
+            )
+            if alice_res.status_code == 200:
+                alice_token = alice_res.json()["access_token"]
+                break
+            last_err = f"Status {alice_res.status_code}: {alice_res.text}"
+        except Exception as exc:
+            last_err = str(exc)
+        time.sleep(1.0)
 
-        # 2. Acquire Bob token
+    if not alice_token:
+        if require_live:
+            pytest.fail(f"Keycloak Alice token request failed within 60s ({last_err}) but REQUIRE_LIVE_KEYCLOAK=1 is set")
+        else:
+            pytest.skip(f"Keycloak Alice token acquisition failed ({last_err})")
+
+    alice_headers = {"Authorization": f"Bearer {alice_token}"}
+
+    # 2. Acquire Bob token
+    try:
         bob_res = httpx.post(
             keycloak_token_url,
             data={
@@ -247,8 +281,11 @@ def test_live_keycloak_tokens_and_two_workspace_isolation(client: TestClient):
         assert bob_res.status_code == 200, f"Bob auth failed: {bob_res.text}"
         bob_token = bob_res.json()["access_token"]
         bob_headers = {"Authorization": f"Bearer {bob_token}"}
-    except (httpx.TimeoutException, httpx.RequestError):
-        pytest.skip("Keycloak server timed out or unreachable during token acquisition")
+    except Exception as exc:
+        if require_live:
+            pytest.fail(f"Keycloak Bob token acquisition failed: {exc}")
+        else:
+            pytest.skip("Keycloak Bob token acquisition failed")
 
     # 3. Alice creates Workspace 1
     ws1_slug = f"ws-alice-{uuid.uuid4().hex[:6]}"

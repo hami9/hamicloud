@@ -1203,3 +1203,136 @@ func TestPostgresStore_ScanUnadmittedReleases_PendingDigestDoesNotSupersede(t *t
 		t.Fatalf("expected release 1 to remain IMAGE_READY (not superseded by pending build), got %s", rel1Status)
 	}
 }
+
+func TestPostgresStore_ClaimNextJobAttempt_MultipleWorkspaces(t *testing.T) {
+	ctx := context.Background()
+	st := connectTestStore(t, ctx)
+
+	now := time.Now().UTC()
+	wsA := createTestWorkspace(t, ctx, st, "Multi-WS A")
+	wsB := createTestWorkspace(t, ctx, st, "Multi-WS B")
+	wsC := createTestWorkspace(t, ctx, st, "Multi-WS C")
+
+	createPendingJob := func(wsID, name string) (string, string, string) {
+		jobID := NewUUID()
+		attemptID := NewUUID()
+		intentID := NewUUID()
+		_, err := st.pool.Exec(ctx, `
+			INSERT INTO jobs (
+				id, workspace_id, name, image_digest, command_args, env_vars,
+				timeout_seconds, max_retries, current_attempt_number, state, created_at, updated_at
+			) VALUES ($1, $2, $3, 'sha256:dummy', '[]', '{}', 60, 3, 1, 'ADMITTED', $4, $4);
+		`, jobID, wsID, name, now)
+		if err != nil {
+			t.Fatalf("insert job: %v", err)
+		}
+		_, err = st.pool.Exec(ctx, `
+			INSERT INTO job_attempts (
+				id, job_id, workspace_id, attempt_number, state, lease_epoch, created_at, updated_at
+			) VALUES ($1, $2, $3, 1, 'ADMITTED', 0, $4, $4);
+		`, attemptID, jobID, wsID, now)
+		if err != nil {
+			t.Fatalf("insert attempt: %v", err)
+		}
+		_, err = st.pool.Exec(ctx, `
+			INSERT INTO execution_intents (
+				id, workspace_id, resource_type, job_attempt_id, status, lease_epoch,
+				deterministic_resource_name, created_at, updated_at
+			) VALUES ($1, $2, 'JOB_ATTEMPT', $3, 'PENDING', 0, $4, $5, $5);
+		`, intentID, wsID, attemptID, "hc-job-"+jobID+"-1", now)
+		if err != nil {
+			t.Fatalf("insert intent: %v", err)
+		}
+		return jobID, attemptID, intentID
+	}
+
+	createPendingJob(wsC, "job-c")
+	jobA, _, _ := createPendingJob(wsA, "job-a")
+
+	// Claim filtering by wsA and wsB: should claim job from wsA, not wsC
+	claimed, err := st.ClaimNextJobAttempt(ctx, "worker-test", 60*time.Second, wsA, wsB)
+	if err != nil {
+		t.Fatalf("ClaimNextJobAttempt failed: %v", err)
+	}
+	if claimed == nil {
+		t.Fatalf("expected claimed job from wsA or wsB, got nil")
+	}
+	if claimed.WorkspaceID != wsA {
+		t.Fatalf("expected claimed workspace to be %s (wsA), got %s", wsA, claimed.WorkspaceID)
+	}
+	if claimed.JobID != jobA {
+		t.Fatalf("expected claimed job to be %s, got %s", jobA, claimed.JobID)
+	}
+}
+
+func TestPostgresStore_MarkJobAttemptFailed_WritesDeadLetterRecord(t *testing.T) {
+	ctx := context.Background()
+	st := connectTestStore(t, ctx)
+
+	now := time.Now().UTC()
+	wsID := createTestWorkspace(t, ctx, st, "DLQ Store WS")
+	jobID := NewUUID()
+	attemptID := NewUUID()
+	intentID := NewUUID()
+
+	_, err := st.pool.Exec(ctx, `
+		INSERT INTO jobs (
+			id, workspace_id, name, image_digest, command_args, env_vars,
+			timeout_seconds, max_retries, current_attempt_number, state, created_at, updated_at
+		) VALUES ($1, $2, 'dlq-test-job', 'sha256:dummy', '[]', '{}', 60, 1, 1, 'RUNNING', $3, $3);
+	`, jobID, wsID, now)
+	if err != nil {
+		t.Fatalf("insert test job: %v", err)
+	}
+
+	_, err = st.pool.Exec(ctx, `
+		INSERT INTO job_attempts (
+			id, job_id, workspace_id, attempt_number, state, lease_epoch, created_at, updated_at
+		) VALUES ($1, $2, $3, 1, 'RUNNING', 1, $4, $4);
+	`, attemptID, jobID, wsID, now)
+	if err != nil {
+		t.Fatalf("insert test attempt: %v", err)
+	}
+
+	_, err = st.pool.Exec(ctx, `
+		INSERT INTO execution_intents (
+			id, workspace_id, resource_type, job_attempt_id, status, lease_epoch,
+			claimed_by, lease_expires_at, deterministic_resource_name, created_at, updated_at
+		) VALUES ($1, $2, 'JOB_ATTEMPT', $3, 'CLAIMED', 1, 'worker-1', $4, 'hc-job-1', $5, $5);
+	`, intentID, wsID, attemptID, now.Add(time.Minute), now)
+	if err != nil {
+		t.Fatalf("insert test intent: %v", err)
+	}
+
+	// Mark attempt failed with shouldRetry = false -> job becomes FAILED, writes dead-letter record
+	err = st.MarkJobAttemptFailed(ctx, intentID, attemptID, jobID, "Exit code 137 OOMKilled", 137, 1, false)
+	if err != nil {
+		t.Fatalf("MarkJobAttemptFailed failed: %v", err)
+	}
+
+	// Verify job is FAILED
+	var jobState string
+	err = st.pool.QueryRow(ctx, `SELECT state FROM jobs WHERE id = $1;`, jobID).Scan(&jobState)
+	if err != nil {
+		t.Fatalf("query job state: %v", err)
+	}
+	if jobState != "FAILED" {
+		t.Fatalf("expected job state to be FAILED, got %s", jobState)
+	}
+
+	// Verify dead_letter_records table has the entry
+	var dlqJobID, dlqWsID, dlqReason string
+	var dlqAttempt, dlqExitCode int
+	err = st.pool.QueryRow(ctx, `
+		SELECT job_id, workspace_id, last_attempt, exit_code, failure_reason
+		FROM dead_letter_records
+		WHERE job_id = $1;
+	`, jobID).Scan(&dlqJobID, &dlqWsID, &dlqAttempt, &dlqExitCode, &dlqReason)
+	if err != nil {
+		t.Fatalf("query dead_letter_records: %v", err)
+	}
+	if dlqJobID != jobID || dlqWsID != wsID || dlqAttempt != 1 || dlqExitCode != 137 || dlqReason != "Exit code 137 OOMKilled" {
+		t.Fatalf("unexpected dead_letter_records values: job=%s, ws=%s, attempt=%d, exit=%d, reason=%s",
+			dlqJobID, dlqWsID, dlqAttempt, dlqExitCode, dlqReason)
+	}
+}

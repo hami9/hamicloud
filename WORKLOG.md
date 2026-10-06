@@ -1864,3 +1864,23 @@ Following project review of `18a3a4e..816cc4a`, all required fixes were implemen
      - Added strict exit-code assertions across all 4 scripts asserting final states, attempt counts, exit codes, and diagnostic failure reasons.
      - Re-recorded all 4 demos live and committed fresh raw evidence files in `docs/evidence/demos/raw/` and updated `.md` documentation.
 
+### [2026-10-06T11:45:00Z] Dead-Letter Queue (DLQ) & Job Re-run UI Implementation (Milestone M2 Progress)
+
+- **Status:** COMPLETED & VERIFIED (Milestone M1 remains open as current position; M2 and M3 remain reopened and unclosed)
+- **Milestone:** P1 / M2 (Current position: HamiCloud M1 — open)
+- **Deliverables & Enhancements:**
+  1. **Frontend API Client (`apps/web/src/api.ts`):**
+     - Added and exported `rerunJob(token, jobId, idempotencyKey)` targeting `POST /v1/jobs/{job_id}/reruns` with full error handling and standard envelope support.
+  2. **DLQ Tab & Diagnostic UI (`apps/web/src/App.tsx` & `App.css`):**
+     - Expanded navigation strip with dedicated "Dead-Letter Queue" (`dlq`) tab including real-time failed job count badge.
+     - Added sidebar rendering displaying quarantined workloads with attempt count indicators (`DLQ #N`) and failure reason diagnostics.
+     - Implemented prominent DLQ diagnostic banner in job detail panel detailing retry budget exhaustion, resource UIDs, exit codes, and failure descriptions.
+     - Added idempotent "Re-run Job ↺" action button dispatching `rerunJob` and automatically navigating to the successor job upon completion.
+     - Styled all DLQ components in `apps/web/src/App.css` with dark/light theme polish (`.dlq-banner-card`, `.dlq-tag`, `.btn-action-rerun`, `.tab-pill-count.dlq-badge`).
+  3. **Verification & Test Gate Pass:**
+     - `apps/web`: `npm run build` completed cleanly (`tsc -b && vite build`, 0 errors, exit code 0).
+     - Full Python test suite: **117 passed, 0 skipped, 0 failed** in `apps/api/tests` (including OIDC Keycloak live integration and M2 jobs end-to-end tests).
+     - Alembic check: clean (`No new upgrade operations detected`).
+     - Mypy type check: 0 issues across 38 source files in `apps/api`.
+     - Ruff linter: all checks passed in `apps/api`.
+     - Go test suite: all packages in `runtime/internal/...` passed.

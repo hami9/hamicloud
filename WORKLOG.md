@@ -1917,3 +1917,28 @@ Following project review of `18a3a4e..816cc4a`, all required fixes were implemen
      - Go test suite: all packages in `runtime/internal/...` passed.
      - Web dashboard: `oxlint` 0 errors, `npm run build` clean.
      - Current milestone position remains `HamiCloud M1 — open`.
+
+### [2026-10-07T10:15:00Z] Review Follow-ups: DLQ Pagination, Keycloak Test Hardening & Fallback Alignment
+
+- **Status:** COMPLETED & VERIFIED (Milestone M1 remains open as current position; M2 and M3 remain reopened and unclosed)
+- **Milestone:** P1 / M1 (Current position: HamiCloud M1 — open)
+- **Deliverables & Enhancements:**
+  1. **Keycloak Live Test Hardening (`apps/api/tests/test_auth_oidc.py`):**
+     - Stopped retrying on 4xx responses in Alice's token acquisition loop, failing immediately if `REQUIRE_LIVE_KEYCLOAK=1` or skipping otherwise.
+     - Restricted retries exclusively to network errors (`httpx.RequestError`, `httpx.TimeoutException`) and 5xx server boot errors.
+     - Moved Bob's `assert bob_res.status_code == 200` out of the `try` block, catching only `(httpx.TimeoutException, httpx.RequestError)` so that real auth failures report as assertion errors rather than skips.
+  2. **Dashboard DLQ Cursor Pagination & Count Indicators (`apps/web/src/App.tsx`):**
+     - Added `dlqNextCursor` and `isLoadingMoreDlq` state.
+     - Implemented `handleLoadMoreDlq` fetching additional dead-letter records using cursor pagination and appending to the list without duplicates.
+     - Rendered "Load more..." button in the DLQ sidebar list when `dlqNextCursor` is present.
+     - Added `+` suffix indicator (e.g. `20+`) across the stat bar, tab pill, and sidebar header when `dlqNextCursor` is set.
+     - Verified `oxlint` (0 warnings, 0 errors) and `npm run build` cleanly passed.
+  3. **Dead-Letter Writer Fallback Alignment (`runtime/internal/store/postgres.go`):**
+     - Aligned fallback behavior in `ConfirmJobRecovery` to match the PostgreSQL trigger: `exit_code` falls back to `NULL` (rather than hardcoded `-1`) and `failure_reason` falls back to `"Job reached FAILED state"` when attempt diagnostics are missing.
+  4. **Quality Gates & Verification:**
+     - Full Python test suite: **120 passed, 0 skipped, 0 failed** in `apps/api/tests`.
+     - Go test suite: all packages passed across `runtime/internal/...`.
+     - Alembic check: clean (`No new upgrade operations detected`).
+     - Mypy: clean across 40 source files.
+     - Ruff: clean.
+     - Current milestone position remains `HamiCloud M1 — open`.

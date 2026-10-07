@@ -877,11 +877,8 @@ func (s *PostgresStore) ConfirmJobRecovery(ctx context.Context, jobID string, sh
 			WHERE job_id = $1 AND attempt_number = $2;
 		`, jobID, currentAttemptNum).Scan(&attExitCode, &attReason)
 
-		finalExitCode := -1
-		if attExitCode != nil {
-			finalExitCode = *attExitCode
-		}
-		finalReason := "Worker lease expired; executor lost"
+		var finalExitCode *int = attExitCode
+		finalReason := "Job reached FAILED state"
 		if attReason != nil && *attReason != "" {
 			finalReason = *attReason
 		}

@@ -72,6 +72,8 @@ export default function App() {
   // DLQ records state
   const [deadLetterRecords, setDeadLetterRecords] = useState<DeadLetterRecord[]>([])
   const [selectedDlqRecord, setSelectedDlqRecord] = useState<DeadLetterRecord | null>(null)
+  const [dlqNextCursor, setDlqNextCursor] = useState<string | null>(null)
+  const [isLoadingMoreDlq, setIsLoadingMoreDlq] = useState(false)
 
   // Filters & Notifications
   const [filterQuery, setFilterQuery] = useState('')
@@ -174,7 +176,18 @@ export default function App() {
       listWorkspaceDeadLetterRecords(token, activeWorkspace.id)
         .then((data) => {
           if (!ignore) {
-            setDeadLetterRecords(data.items || [])
+            setDeadLetterRecords((prev) => {
+              const firstPage = data.items || []
+              if (prev.length <= 20) {
+                return firstPage
+              }
+              const firstPageIds = new Set(firstPage.map((r) => r.id))
+              const older = prev.filter((r) => !firstPageIds.has(r.id))
+              return [...firstPage, ...older]
+            })
+            setDlqNextCursor((prevCursor) => {
+              return prevCursor !== null ? prevCursor : (data.next_cursor || null)
+            })
             setSelectedDlqRecord((prevSelected) => {
               if (prevSelected) {
                 const fresh = data.items?.find((r) => r.id === prevSelected.id)
@@ -198,6 +211,24 @@ export default function App() {
     }
   }, [activeWorkspace, token])
 
+  const handleLoadMoreDlq = async () => {
+    if (!activeWorkspace || !dlqNextCursor || isLoadingMoreDlq) return
+    setIsLoadingMoreDlq(true)
+    try {
+      const data = await listWorkspaceDeadLetterRecords(token, activeWorkspace.id, dlqNextCursor)
+      setDeadLetterRecords((prev) => {
+        const existingIds = new Set(prev.map((r) => r.id))
+        const newItems = (data.items || []).filter((r) => !existingIds.has(r.id))
+        return [...prev, ...newItems]
+      })
+      setDlqNextCursor(data.next_cursor || null)
+    } catch (err: unknown) {
+      setErrorMsg((err as Error).message)
+    } finally {
+      setIsLoadingMoreDlq(false)
+    }
+  }
+
   const manualRefreshReleases = async () => {
     if (!selectedApp) return
     try {
@@ -220,6 +251,7 @@ export default function App() {
       }
       const dlqData = await listWorkspaceDeadLetterRecords(token, activeWorkspace.id)
       setDeadLetterRecords(dlqData.items || [])
+      setDlqNextCursor(dlqData.next_cursor || null)
       if (selectedDlqRecord) {
         const freshDlq = dlqData.items?.find((r) => r.id === selectedDlqRecord.id)
         if (freshDlq) setSelectedDlqRecord(freshDlq)
@@ -447,6 +479,7 @@ export default function App() {
       setJobs(freshJobs)
       const freshDlq = await listWorkspaceDeadLetterRecords(token, activeWorkspace.id)
       setDeadLetterRecords(freshDlq.items || [])
+      setDlqNextCursor(freshDlq.next_cursor || null)
       const newJob = freshJobs.find((j) => j.id === res.operation_id)
       if (newJob) {
         setSelectedJob(newJob)
@@ -576,7 +609,7 @@ export default function App() {
           <div className="stat-metric">
             <span className="stat-label">DLQ Records</span>
             <span className="stat-value" style={deadLetterRecords.length > 0 ? { color: '#be123c' } : {}}>
-              {deadLetterRecords.length}
+              {deadLetterRecords.length}{dlqNextCursor ? '+' : ''}
             </span>
           </div>
           <button
@@ -652,7 +685,7 @@ export default function App() {
           >
             <span>Dead-Letter Queue (DLQ)</span>
             <span className={`tab-pill-count ${deadLetterRecords.length > 0 ? 'dlq-badge' : ''}`}>
-              {deadLetterRecords.length}
+              {deadLetterRecords.length}{dlqNextCursor ? '+' : ''}
             </span>
           </button>
         </div>
@@ -699,7 +732,7 @@ export default function App() {
               </button>
             ) : (
               <span className="dlq-tag">
-                {deadLetterRecords.length} Quarantined
+                {deadLetterRecords.length}{dlqNextCursor ? '+' : ''} Quarantined
               </span>
             )}
           </div>
@@ -897,6 +930,18 @@ export default function App() {
                   )}
                 </button>
               ))
+            )}
+            {activeTab === 'dlq' && dlqNextCursor && (
+              <div style={{ padding: '0.75rem', textAlign: 'center' }}>
+                <button
+                  className="btn-action-secondary"
+                  style={{ width: '100%', fontSize: '0.8rem', padding: '0.4rem' }}
+                  disabled={isLoadingMoreDlq}
+                  onClick={handleLoadMoreDlq}
+                >
+                  {isLoadingMoreDlq ? 'Loading...' : 'Load more...'}
+                </button>
+              </div>
             )}
           </div>
         </aside>

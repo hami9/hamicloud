@@ -253,8 +253,14 @@ def test_live_keycloak_tokens_and_two_workspace_isolation(client: TestClient):
             if alice_res.status_code == 200:
                 alice_token = alice_res.json()["access_token"]
                 break
+            if 400 <= alice_res.status_code < 500:
+                err_msg = f"Keycloak Alice auth returned {alice_res.status_code}: {alice_res.text}"
+                if require_live:
+                    pytest.fail(err_msg)
+                else:
+                    pytest.skip(err_msg)
             last_err = f"Status {alice_res.status_code}: {alice_res.text}"
-        except Exception as exc:
+        except (httpx.TimeoutException, httpx.RequestError) as exc:
             last_err = str(exc)
         time.sleep(1.0)
 
@@ -278,14 +284,15 @@ def test_live_keycloak_tokens_and_two_workspace_isolation(client: TestClient):
             },
             timeout=30.0,
         )
-        assert bob_res.status_code == 200, f"Bob auth failed: {bob_res.text}"
-        bob_token = bob_res.json()["access_token"]
-        bob_headers = {"Authorization": f"Bearer {bob_token}"}
-    except Exception as exc:
+    except (httpx.TimeoutException, httpx.RequestError) as exc:
         if require_live:
-            pytest.fail(f"Keycloak Bob token acquisition failed: {exc}")
+            pytest.fail(f"Keycloak Bob token network error: {exc}")
         else:
-            pytest.skip("Keycloak Bob token acquisition failed")
+            pytest.skip(f"Keycloak Bob token network error: {exc}")
+
+    assert bob_res.status_code == 200, f"Bob auth failed: {bob_res.text}"
+    bob_token = bob_res.json()["access_token"]
+    bob_headers = {"Authorization": f"Bearer {bob_token}"}
 
     # 3. Alice creates Workspace 1
     ws1_slug = f"ws-alice-{uuid.uuid4().hex[:6]}"

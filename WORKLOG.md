@@ -1942,3 +1942,22 @@ Following project review of `18a3a4e..816cc4a`, all required fixes were implemen
      - Mypy: clean across 40 source files.
      - Ruff: clean.
      - Current milestone position remains `HamiCloud M1 — open`.
+
+### [2026-10-10T11:15:00Z] Dashboard DLQ Workspace Scoping & Selection Fix
+
+- **Status:** COMPLETED & VERIFIED (Milestone M1 remains open as current position; M2 and M3 remain reopened and unclosed)
+- **Milestone:** P1 / M1 (Current position: HamiCloud M1 — open)
+- **Deliverables & Enhancements:**
+  1. **DLQ Workspace Scoping & State Reset (`apps/web/src/App.tsx`):**
+     - Scoped DLQ state (`deadLetterRecords`, `dlqNextCursor`, `selectedDlqRecord`) strictly to the active workspace.
+     - Reset DLQ state on workspace creation in `handleCreateWorkspace` and on workspace transitions in `pollDlq`.
+     - Replaced hard-coded page size checks with `hasLoadedMoreDlqRef`, ensuring older records are only merged if extra pages were actually requested for that workspace.
+     - Hardened selection reconciliation: `selectedDlqRecord` and `selectedJob` reset to `null` if the record no longer exists in the loaded list or belongs to another workspace.
+  2. **Quality Gates & Verification:**
+     - Web dashboard: `oxlint` passed (0 warnings, 0 errors); `npm run build` compiled cleanly.
+     - Full Python test suite: **120 passed, 0 skipped, 0 failed** with `REQUIRE_LIVE_KEYCLOAK=1`.
+     - Go test suite: all packages passed across `runtime/internal/...`.
+     - Alembic check: clean (`No new upgrade operations detected`).
+     - Mypy: clean across 40 source files.
+     - Ruff: clean.
+     - Milestone position remains `HamiCloud M1 — open`.

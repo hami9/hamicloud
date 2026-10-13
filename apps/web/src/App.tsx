@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import type { Workspace, Application, Release, JobDetails, Repository, DeadLetterRecord } from './api'
 import {
   createWorkspace,
@@ -18,6 +18,12 @@ import {
   rerunJob,
   listWorkspaceDeadLetterRecords,
 } from './api'
+import {
+  mergeDlqRecords,
+  appendDlqPage,
+  resolveDlqCursor,
+  deriveSelectedDlqRecord,
+} from './dlqUtils'
 import './App.css'
 
 export default function App() {
@@ -71,7 +77,11 @@ export default function App() {
 
   // DLQ records state
   const [deadLetterRecords, setDeadLetterRecords] = useState<DeadLetterRecord[]>([])
-  const [selectedDlqRecord, setSelectedDlqRecord] = useState<DeadLetterRecord | null>(null)
+  const [selectedDlqId, setSelectedDlqId] = useState<string | null>(null)
+  const selectedDlqRecord = useMemo(
+    () => deriveSelectedDlqRecord(selectedDlqId, deadLetterRecords, activeWorkspace?.id),
+    [selectedDlqId, deadLetterRecords, activeWorkspace?.id]
+  )
   const [dlqNextCursor, setDlqNextCursor] = useState<string | null>(null)
   const [isLoadingMoreDlq, setIsLoadingMoreDlq] = useState(false)
   const hasLoadedMoreDlqRef = useRef(false)
@@ -176,37 +186,26 @@ export default function App() {
     if (!activeWorkspace) return
     let ignore = false
     const pollDlq = () => {
-      listWorkspaceDeadLetterRecords(token, activeWorkspace.id)
+      const targetWorkspaceId = activeWorkspace.id
+      listWorkspaceDeadLetterRecords(token, targetWorkspaceId)
         .then((data) => {
           if (ignore) return
-          const isNewWorkspace = currentDlqWorkspaceIdRef.current !== activeWorkspace.id
+          if (activeWorkspace.id !== currentDlqWorkspaceIdRef.current && currentDlqWorkspaceIdRef.current !== null) {
+            return
+          }
+          const isNewWorkspace = currentDlqWorkspaceIdRef.current !== targetWorkspaceId
           if (isNewWorkspace) {
-            currentDlqWorkspaceIdRef.current = activeWorkspace.id
+            currentDlqWorkspaceIdRef.current = targetWorkspaceId
             hasLoadedMoreDlqRef.current = false
           }
 
+          const isNewWorkspaceOrNotPaged = isNewWorkspace || !hasLoadedMoreDlqRef.current
           const firstPage = data.items || []
-          let currentFullList: DeadLetterRecord[] = firstPage
 
-          setDeadLetterRecords((prev) => {
-            if (isNewWorkspace || !hasLoadedMoreDlqRef.current) {
-              currentFullList = firstPage
-              return firstPage
-            }
-            const firstPageIds = new Set(firstPage.map((r) => r.id))
-            const older = prev.filter((r) => !firstPageIds.has(r.id))
-            currentFullList = [...firstPage, ...older]
-            return currentFullList
-          })
-
-          setDlqNextCursor(data.next_cursor || null)
-
-          setSelectedDlqRecord((prevSelected) => {
-            if (!prevSelected) return null
-            if (prevSelected.workspace_id !== activeWorkspace.id) return null
-            const match = currentFullList.find((r) => r.id === prevSelected.id)
-            return match || null
-          })
+          setDeadLetterRecords((prev) => mergeDlqRecords(prev, firstPage, isNewWorkspaceOrNotPaged))
+          setDlqNextCursor((prevCursor) =>
+            resolveDlqCursor(prevCursor, data.next_cursor || null, isNewWorkspaceOrNotPaged)
+          )
         })
         .catch((err: unknown) => {
           if (!ignore) setErrorMsg((err as Error).message)
@@ -220,20 +219,21 @@ export default function App() {
     }
   }, [activeWorkspace, token])
 
+
   const handleLoadMoreDlq = async () => {
     if (!activeWorkspace || !dlqNextCursor || isLoadingMoreDlq) return
+    const targetWorkspaceId = activeWorkspace.id
     setIsLoadingMoreDlq(true)
     try {
-      const data = await listWorkspaceDeadLetterRecords(token, activeWorkspace.id, dlqNextCursor)
+      const data = await listWorkspaceDeadLetterRecords(token, targetWorkspaceId, dlqNextCursor)
+      if (activeWorkspace.id !== currentDlqWorkspaceIdRef.current) return
       hasLoadedMoreDlqRef.current = true
-      setDeadLetterRecords((prev) => {
-        const existingIds = new Set(prev.map((r) => r.id))
-        const newItems = (data.items || []).filter((r) => !existingIds.has(r.id))
-        return [...prev, ...newItems]
-      })
+      setDeadLetterRecords((prev) => appendDlqPage(prev, data.items || []))
       setDlqNextCursor(data.next_cursor || null)
     } catch (err: unknown) {
-      setErrorMsg((err as Error).message)
+      if (activeWorkspace.id === currentDlqWorkspaceIdRef.current) {
+        setErrorMsg((err as Error).message)
+      }
     } finally {
       setIsLoadingMoreDlq(false)
     }
@@ -252,28 +252,25 @@ export default function App() {
 
   const manualRefreshJobs = async () => {
     if (!activeWorkspace) return
+    const targetWorkspaceId = activeWorkspace.id
     try {
-      const data = await listWorkspaceJobs(token, activeWorkspace.id)
+      const data = await listWorkspaceJobs(token, targetWorkspaceId)
+      if (activeWorkspace.id !== currentDlqWorkspaceIdRef.current) return
       setJobs(data)
       if (selectedJob) {
         const fresh = data.find((j) => j.id === selectedJob.id)
         if (fresh) setSelectedJob(fresh)
       }
       hasLoadedMoreDlqRef.current = false
-      const dlqData = await listWorkspaceDeadLetterRecords(token, activeWorkspace.id)
+      const dlqData = await listWorkspaceDeadLetterRecords(token, targetWorkspaceId)
+      if (activeWorkspace.id !== currentDlqWorkspaceIdRef.current) return
       setDeadLetterRecords(dlqData.items || [])
       setDlqNextCursor(dlqData.next_cursor || null)
-      if (selectedDlqRecord) {
-        if (selectedDlqRecord.workspace_id !== activeWorkspace.id) {
-          setSelectedDlqRecord(null)
-        } else {
-          const freshDlq = dlqData.items?.find((r) => r.id === selectedDlqRecord.id)
-          setSelectedDlqRecord(freshDlq || null)
-        }
-      }
       setNoticeMsg('Jobs and DLQ refreshed.')
     } catch (err: unknown) {
-      setErrorMsg((err as Error).message)
+      if (activeWorkspace.id === currentDlqWorkspaceIdRef.current) {
+        setErrorMsg((err as Error).message)
+      }
     }
   }
 
@@ -290,7 +287,7 @@ export default function App() {
       setJobs([])
       setSelectedJob(null)
       setDeadLetterRecords([])
-      setSelectedDlqRecord(null)
+      setSelectedDlqId(null)
       setDlqNextCursor(null)
       hasLoadedMoreDlqRef.current = false
       currentDlqWorkspaceIdRef.current = ws.id
@@ -489,28 +486,30 @@ export default function App() {
 
   const handleRerunJob = async (jobId: string, customKey?: string) => {
     if (!activeWorkspace) return
+    const targetWorkspaceId = activeWorkspace.id
     setIsRerunningJob(true)
     setErrorMsg(null)
     try {
       const key = customKey || `idemp-rerun-${Date.now()}`
       const res = await rerunJob(token, jobId, key)
+      if (activeWorkspace.id !== currentDlqWorkspaceIdRef.current) return
       setNoticeMsg(`Job rerun dispatched: Operation ${res.operation_id.slice(0, 8)}`)
-      const freshJobs = await listWorkspaceJobs(token, activeWorkspace.id)
+      const freshJobs = await listWorkspaceJobs(token, targetWorkspaceId)
+      if (activeWorkspace.id !== currentDlqWorkspaceIdRef.current) return
       setJobs(freshJobs)
       hasLoadedMoreDlqRef.current = false
-      const freshDlq = await listWorkspaceDeadLetterRecords(token, activeWorkspace.id)
+      const freshDlq = await listWorkspaceDeadLetterRecords(token, targetWorkspaceId)
+      if (activeWorkspace.id !== currentDlqWorkspaceIdRef.current) return
       setDeadLetterRecords(freshDlq.items || [])
       setDlqNextCursor(freshDlq.next_cursor || null)
-      if (selectedDlqRecord) {
-        const match = freshDlq.items?.find((r) => r.id === selectedDlqRecord.id)
-        setSelectedDlqRecord(match || null)
-      }
       const newJob = freshJobs.find((j) => j.id === res.operation_id)
       if (newJob) {
         setSelectedJob(newJob)
       }
     } catch (err: unknown) {
-      setErrorMsg((err as Error).message)
+      if (activeWorkspace.id === currentDlqWorkspaceIdRef.current) {
+        setErrorMsg((err as Error).message)
+      }
     } finally {
       setIsRerunningJob(false)
     }
@@ -704,7 +703,7 @@ export default function App() {
             onClick={() => {
               setActiveTab('dlq')
               if (deadLetterRecords.length > 0 && !selectedDlqRecord) {
-                setSelectedDlqRecord(deadLetterRecords[0])
+                setSelectedDlqId(deadLetterRecords[0].id)
               }
             }}
           >
@@ -921,7 +920,7 @@ export default function App() {
                   key={r.id}
                   className={`sidebar-list-row ${selectedDlqRecord?.id === r.id ? 'active' : ''}`}
                   onClick={() => {
-                    setSelectedDlqRecord(r)
+                    setSelectedDlqId(r.id)
                     const matchingJob = jobs.find((j) => j.id === r.job_id)
                     if (matchingJob) setSelectedJob(matchingJob)
                     setJobOutputView(null)

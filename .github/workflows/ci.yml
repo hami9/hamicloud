@@ -148,3 +148,20 @@ jobs:
           cd runtime
           CGO_ENABLED=0 go build -o ../bin/hamicloud-scheduler ./cmd/hamicloud-scheduler
           CGO_ENABLED=0 go build -o ../bin/hamicloud-executor ./cmd/hamicloud-executor
+
+      - name: Create local Kubernetes cluster (Kind)
+        run: |
+          kind create cluster --name hamicloud-ci --wait 90s
+          kubectl cluster-info
+          kubectl get nodes
+
+      - name: Verify Live Kubernetes Reconciliation
+        env:
+          RUNTIME_DATABASE_URL: postgres://hamicloud:hamicloud_secret@localhost:5432/hamicloud_test?sslmode=disable
+          ENVIRONMENT: development
+          KUBE_NAMESPACE: default
+          RUN_ONCE: "true"
+        run: |
+          ./bin/hamicloud-scheduler --run-once
+          ./bin/hamicloud-executor --run-once
+          kubectl get all -n default

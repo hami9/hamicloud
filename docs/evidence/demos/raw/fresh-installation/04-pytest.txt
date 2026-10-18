@@ -4,21 +4,22 @@ rootdir: E:\project\hamicloud\apps\api
 configfile: pyproject.toml
 plugins: anyio-4.15.1, asyncio-1.4.0
 asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
-collected 117 items
+collected 120 items
 
 apps\api\tests\test_api_flows.py ........                                [  6%]
 apps\api\tests\test_application_endpoints.py ...                         [  9%]
 apps\api\tests\test_auth_oidc.py .............                           [ 20%]
-apps\api\tests\test_contracts.py .......                                 [ 26%]
-apps\api\tests\test_health.py ..                                         [ 28%]
-apps\api\tests\test_image_policy.py ...                                  [ 30%]
-apps\api\tests\test_job_state_machine.py ......                          [ 35%]
-apps\api\tests\test_m1_live_application_e2e.py ..                        [ 37%]
-apps\api\tests\test_m2_jobs_e2e.py .......                               [ 43%]
-apps\api\tests\test_m3_source_to_url.py .......                          [ 49%]
-apps\api\tests\test_models.py .......                                    [ 55%]
-apps\api\tests\test_operations.py ....                                   [ 58%]
-apps\api\tests\test_outbox_dispatcher.py .....                           [ 63%]
+apps\api\tests\test_contracts.py .......                                 [ 25%]
+apps\api\tests\test_dead_letter.py ...                                   [ 28%]
+apps\api\tests\test_health.py ..                                         [ 30%]
+apps\api\tests\test_image_policy.py ...                                  [ 32%]
+apps\api\tests\test_job_state_machine.py ......                          [ 37%]
+apps\api\tests\test_m1_live_application_e2e.py ..                        [ 39%]
+apps\api\tests\test_m2_jobs_e2e.py .......                               [ 45%]
+apps\api\tests\test_m3_source_to_url.py .......                          [ 50%]
+apps\api\tests\test_models.py .......                                    [ 56%]
+apps\api\tests\test_operations.py ....                                   [ 60%]
+apps\api\tests\test_outbox_dispatcher.py .....                           [ 64%]
 apps\api\tests\test_phase3_contracts_idempotency.py .................... [ 80%]
 .......................                                                  [100%]
 
@@ -40,5 +41,5 @@ tests/test_m3_source_to_url.py::test_m3_trigger_build_no_invented_commit_sha[asy
     return await dependant.call(**values)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-================= 117 passed, 4 warnings in 175.50s (0:02:55) =================
+================= 120 passed, 4 warnings in 372.94s (0:06:12) =================
 

@@ -1,7 +1,7 @@
-﻿{"time":"2026-10-04T16:38:39.4603352+03:30","level":"INFO","msg":"Starting HamiCloud Scheduler process","version":"0.1.0"}
-{"time":"2026-10-04T16:38:46.8615049+03:30","level":"WARN","msg":"Kubernetes cluster unavailable for scheduler; falling back to NoopJobDeleter in development","warning":"in-cluster kubernetes configuration not available: unable to load in-cluster configuration, KUBERNETES_SERVICE_HOST and KUBERNETES_SERVICE_PORT must be defined"}
-{"time":"2026-10-04T16:38:46.9492035+03:30","level":"INFO","msg":"Scheduler initialized with configuration","environment":"development","reconciliation_period":30000000000,"worker_id":"local-worker-1","run_once":true}
-{"time":"2026-10-04T16:38:46.9492035+03:30","level":"INFO","msg":"Executing single scheduler admission pass (RUN_ONCE)"}
-{"time":"2026-10-04T16:38:51.0344902+03:30","level":"INFO","msg":"Admitted job and created ExecutionIntent","intent_id":"74f536a2-b89a-44e3-b3b3-ff6568356920","job_id":"4751554d-3a0d-4db5-a2bd-9deeaf874337","job_attempt_id":"c536a771-fa9f-4472-b73a-7b9752dd2914","resource_name":"hc-job-4751554d-3a0d-4db5-a2bd-9deeaf874337-1"}
-{"time":"2026-10-04T16:38:51.035994+03:30","level":"INFO","msg":"Scheduler RunOnce completed successfully","admitted_count":1}
+﻿{"time":"2026-10-19T18:24:58.0194745+03:30","level":"INFO","msg":"Starting HamiCloud Scheduler process","version":"0.1.0"}
+{"time":"2026-10-19T18:24:58.0764847+03:30","level":"INFO","msg":"Connected scheduler to Kubernetes cluster for job recovery","namespace":"default"}
+{"time":"2026-10-19T18:24:58.0764847+03:30","level":"INFO","msg":"Scheduler initialized with configuration","environment":"development","reconciliation_period":30000000000,"worker_id":"local-worker-1","run_once":true}
+{"time":"2026-10-19T18:24:58.0764847+03:30","level":"INFO","msg":"Executing single scheduler admission pass (RUN_ONCE)"}
+{"time":"2026-10-19T18:24:58.2249488+03:30","level":"INFO","msg":"Admitted job and created ExecutionIntent","intent_id":"14ae95b9-85e5-4a99-9b50-4a8e3613f3d4","job_id":"19b79b71-841c-438c-9af8-107dd5108a56","job_attempt_id":"a8724714-a6fa-46df-b95a-dc9b28880c23","resource_name":"hc-job-19b79b71-841c-438c-9af8-107dd5108a56-1"}
+{"time":"2026-10-19T18:24:58.2249488+03:30","level":"INFO","msg":"Scheduler RunOnce completed successfully","admitted_count":1}
 

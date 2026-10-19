@@ -1,6 +1,6 @@
 ﻿                  id                  | status  |         claimed_by         | lease_epoch 
 --------------------------------------+---------+----------------------------+-------------
- 74f536a2-b89a-44e3-b3b3-ff6568356920 | CLAIMED | executor-worker-crash-test |           1
+ 14ae95b9-85e5-4a99-9b50-4a8e3613f3d4 | CLAIMED | executor-worker-crash-test |           1
 (1 row)
 
 

@@ -1,0 +1,12 @@
+﻿NAME                                                            READY   UP-TO-DATE   AVAILABLE   AGE   CONTAINERS               IMAGES                           SELECTOR
+deployment.apps/hc-svc-e539c46c-4dce-405a-986d-b35f467c6fc0-2   1/1     1            1           12s   nginx-service-92a89265   docker.io/library/nginx:alpine   app.kubernetes.io/instance=hc-svc-e539c46c-4dce-405a-986d-b35f467c6fc0-2
+
+NAME                                                    TYPE        CLUSTER-IP    EXTERNAL-IP   PORT(S)   AGE   SELECTOR
+service/hc-svc-e539c46c-4dce-405a-986d-b35f467c6fc0-2   ClusterIP   10.96.42.17   <none>        80/TCP    12s   app.kubernetes.io/instance=hc-svc-e539c46c-4dce-405a-986d-b35f467c6fc0-2
+
+NAME                                                                      CLASS    HOSTS                                                     ADDRESS   PORTS   AGE
+ingress.networking.k8s.io/hc-svc-e539c46c-4dce-405a-986d-b35f467c6fc0-2   <none>   nginx-service-92a89265.m1-live-92a89265.hamicloud.local             80      11s
+
+NAME                                                                READY   STATUS    RESTARTS   AGE   IP           NODE                    NOMINATED NODE   READINESS GATES
+pod/hc-svc-e539c46c-4dce-405a-986d-b35f467c6fc0-2-88cb464b4-m92cb   1/1     Running   0          12s   10.244.0.9   desktop-control-plane   <none>           <none>
+

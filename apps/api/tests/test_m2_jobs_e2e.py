@@ -44,6 +44,7 @@ def run_executor_once() -> subprocess.CompletedProcess:
     env = os.environ.copy()
     env["RUNTIME_DATABASE_URL"] = TEST_DB_URL
     env["ENVIRONMENT"] = "development"
+    env["WORKLOAD_RUNNER"] = "local"
     env["RUN_ONCE"] = "true"
     env["ARTIFACTS_DIR"] = os.path.join(REPO_ROOT, "var", "artifacts")
 

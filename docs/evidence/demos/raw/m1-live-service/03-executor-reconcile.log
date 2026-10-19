@@ -1,0 +1,9 @@
+﻿{"time":"2026-10-19T18:36:01.0151589+03:30","level":"INFO","msg":"Starting HamiCloud Execution Worker process","version":"0.1.0"}
+{"time":"2026-10-19T18:36:01.0809775+03:30","level":"INFO","msg":"Connected to Kubernetes cluster","namespace":"default","ingress_domain":"hamicloud.local"}
+{"time":"2026-10-19T18:36:01.0809775+03:30","level":"INFO","msg":"Executor initialized with configuration","environment":"development","lease_duration":60000000000,"worker_id":"local-worker-1","run_once":true,"workspace_ids":["ba2fc65d-8a6e-45cf-91cf-0551a4fbc193"]}
+{"time":"2026-10-19T18:36:01.0809775+03:30","level":"INFO","msg":"Executing single executor reconciliation pass (RUN_ONCE)"}
+{"time":"2026-10-19T18:36:01.3028983+03:30","level":"INFO","msg":"Claimed service release intent","intent_id":"c0eb7bda-8fe9-484d-af43-199e90a129f4","release_id":"0f25765c-d891-4ca2-957b-6262812c5b18","app_slug":"nginx-service-92a89265","worker_id":"local-worker-1","lease_epoch":1}
+{"time":"2026-10-19T18:36:01.3029623+03:30","level":"INFO","msg":"Starting reconciliation for service release","intent_id":"c0eb7bda-8fe9-484d-af43-199e90a129f4","release_id":"0f25765c-d891-4ca2-957b-6262812c5b18","app_slug":"nginx-service-92a89265","port":80,"health_path":"/","lease_epoch":1}
+{"time":"2026-10-19T18:36:13.2666409+03:30","level":"INFO","msg":"Service release passed readiness probe. Marking HEALTHY.","release_id":"0f25765c-d891-4ca2-957b-6262812c5b18","app_id":"e539c46c-4dce-405a-986d-b35f467c6fc0","lease_epoch":1}
+{"time":"2026-10-19T18:36:13.3392194+03:30","level":"INFO","msg":"Executor RunOnce completed successfully","workload_processed":true}
+

@@ -1,0 +1,7 @@
+﻿{"time":"2026-10-19T18:35:58.5452303+03:30","level":"INFO","msg":"Starting HamiCloud Scheduler process","version":"0.1.0"}
+{"time":"2026-10-19T18:35:58.6052107+03:30","level":"INFO","msg":"Connected scheduler to Kubernetes cluster for job recovery","namespace":"default"}
+{"time":"2026-10-19T18:35:58.6052107+03:30","level":"INFO","msg":"Scheduler initialized with configuration","environment":"development","reconciliation_period":30000000000,"worker_id":"local-worker-1","run_once":true}
+{"time":"2026-10-19T18:35:58.6057154+03:30","level":"INFO","msg":"Executing single scheduler admission pass (RUN_ONCE)"}
+{"time":"2026-10-19T18:35:58.8410299+03:30","level":"INFO","msg":"Admitted release and created ExecutionIntent","intent_id":"c0eb7bda-8fe9-484d-af43-199e90a129f4","release_id":"0f25765c-d891-4ca2-957b-6262812c5b18","resource_name":"hc-svc-e539c46c-4dce-405a-986d-b35f467c6fc0-2","generation":2}
+{"time":"2026-10-19T18:35:58.843095+03:30","level":"INFO","msg":"Scheduler RunOnce completed successfully","admitted_count":1}
+

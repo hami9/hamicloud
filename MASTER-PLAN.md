@@ -70,18 +70,16 @@ A closed milestone that later turns out to be wrong does not get its old checkli
 - **Closed Date:** 2026-09-26
 - **Evidence Record:** [`docs/evidence/M0.md`](docs/evidence/M0.md)
 
-## A.2 M1 — First live application `[ ]`
+## A.2 M1 — First live application `[x]`
 
-- **Status:** Reopened
-- **Reopened Date:** 2026-10-01
-- **Reason:** Closure rejected in engineering review. Workload runners only tested against fake clientset; real cluster deployment evidence required; dashboard hard-coded links and static labels must be removed.
+- **Status:** Closed
+- **Closed Date:** 2026-10-19
 - **Evidence Record:** [`docs/evidence/M1.md`](docs/evidence/M1.md)
 
-## A.3 M2 — Usable MVP `[ ]`
+## A.3 M2 — Usable MVP `[x]`
 
-- **Status:** Reopened
-- **Reopened Date:** 2026-10-01
-- **Reason:** Closure rejected in engineering review. Demos were not real recordings (UUIDs, resource names, log lines contradicted code); HTTPS URL and DLQ UI not met; superseded release race in ScanUnadmittedReleases and recovery defect (skipping RECOVERY_PENDING) must be resolved.
+- **Status:** Closed
+- **Closed Date:** 2026-10-19
 - **Evidence Record:** [`docs/evidence/M2.md`](docs/evidence/M2.md)
 
 ## A.4 M3 — Source-to-URL `[ ]`

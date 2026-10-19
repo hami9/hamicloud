@@ -110,6 +110,15 @@ func NewServiceReconciler(st ServiceStore, runner WorkloadRunner, logger *slog.L
 	}
 }
 
+func (r *ServiceReconciler) SetRetryPolicy(maxRetries int, retryInterval time.Duration) {
+	if maxRetries > 0 {
+		r.maxRetries = maxRetries
+	}
+	if retryInterval > 0 {
+		r.retryInterval = retryInterval
+	}
+}
+
 func (r *ServiceReconciler) ReconcileOne(ctx context.Context, workload *store.ClaimedWorkload) error {
 	r.logger.Info("Starting reconciliation for service release",
 		"intent_id", workload.IntentID,

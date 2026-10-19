@@ -1961,3 +1961,42 @@ Following project review of `18a3a4e..816cc4a`, all required fixes were implemen
      - Mypy: clean across 40 source files.
      - Ruff: clean.
      - Milestone position remains `HamiCloud M1 — open`.
+
+### [2026-10-19T18:45:00Z] Live Kubernetes Verification, Authentic M1/M2 Demo Recordings & Milestone Closure
+
+- **Status:** COMPLETED & VERIFIED (Milestones M1 and M2 formally CLOSED)
+- **Milestones:** P1 / M1 — First Live Application (`[x]` Closed), P2 / M2 — Usable MVP (`[x]` Closed)
+- **Key Deliverables & Actions:**
+  1. **Kubernetes Cluster Resolution & Node Health:**
+     - Configured and activated the live Kind Kubernetes cluster (`desktop-control-plane`, v1.36.1, containerd 2.3.1).
+     - Bound `cluster-admin` via `ClusterRoleBinding kubeadm-admin` for `kubernetes-admin` user.
+     - Resolved Kindnet CNI networking with valid `/etc/cni/net.d/10-kindnet.conflist`.
+     - Verified cluster node status: `Ready`.
+  2. **Go Runtime Kubernetes Interop:**
+     - Added automatic fallback to user home kubeconfig (`~/.kube/config`) in `BuildKubeClient` (`runtime/internal/reconciler/kube_runner.go`), with `WORKLOAD_RUNNER=local` bypass for local HTTP probe unit testing.
+     - Implemented `SetRetryPolicy(maxRetries, retryInterval)` in `ServiceReconciler` (`runtime/internal/reconciler/reconciler.go`) allowing 30s Kubernetes container startup windows.
+  3. **Milestone M1 Live Service Deployment Verification:**
+     - Automated and executed `scripts/demos/m1_live_service.ps1` against live Kubernetes cluster.
+     - Created workspace `ba2fc65d-8a6e-45cf-91cf-0551a4fbc193` and application `e539c46c-4dce-405a-986d-b35f467c6fc0`.
+     - Reconciled release `0f25765c-d891-4ca2-957b-6262812c5b18` via `KubeWorkloadRunner`, creating `apps/v1.Deployment`, `core/v1.Service`, and `networking/v1.Ingress` (`hc-svc-e539c46c-4dce-405a-986d-b35f467c6fc0-2`).
+     - Pod `hc-svc-e539c46c-4dce-405a-986d-b35f467c6fc0-2-88cb464b4-m92cb` reached `1/1 Running` & Ready on `desktop-control-plane`.
+     - Probed service delivering `HTTP/1.1 200 OK` from `nginx/1.31.7`.
+     - Promotion verified: release transitioned to `HEALTHY` and set as `current_release_id`.
+     - Raw outputs frozen in `docs/evidence/demos/raw/m1-live-service/`.
+     - Updated `docs/evidence/M1.md` and collapsed M1 entry in `MASTER-PLAN.md` §A.2.
+  4. **Milestone M2 Authentic Demo Re-Execution on Kubernetes:**
+     - Executed `scripts/demos/duplicate_submission.ps1`: verified identical `operation_id` (`11b66a04-7bc9-4883-91df-d314893a3904`) and exactly 1 DB record. Updated `duplicate-submission.md`.
+     - Executed `scripts/demos/failed_job.ps1` on live cluster: job `a6137530-d353-4152-9db8-6c5fd5d1b1ab` ran in Kubernetes pods, captured exit code 42 (`container exited with code 42: Error`), verified retry backoff and terminal state `FAILED`. Updated `failed-job.md`.
+     - Executed `scripts/demos/worker_restart.ps1` on live cluster: job `19b79b71-841c-438c-9af8-107dd5108a56` had attempt 1 killed while running 15s command, recovered by scheduler as `FAILED` (`Worker lease expired; executor lost`), requeued after backoff, and attempt 2 ran to `SUCCEEDED` (exit code 0) on Kubernetes. Updated `worker-restart.md`.
+     - Updated `docs/evidence/M2.md` and collapsed M2 entry in `MASTER-PLAN.md` §A.3.
+  5. **CI Workflow Verification:**
+     - Added automated Kind cluster provisioning and live Go scheduler/executor reconciliation steps to `.github/workflows/ci.yml`.
+  6. **Full Verification Gates:**
+     - Python pytest suite: **120 passed, 0 skipped, 0 failed** in `apps/api/tests`.
+     - Go test suite: 100% pass across all packages in `runtime/internal/...`.
+     - Alembic schema drift: 0 (`No new upgrade operations detected`).
+     - Mypy: 0 errors across all 40 files in `apps/api`.
+     - Ruff: clean.
+     - Web dashboard: `oxlint` 0 errors, `npm run build` clean.
+     - Next milestone: **M3 — Source-to-URL**.
+

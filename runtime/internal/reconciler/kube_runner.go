@@ -29,6 +29,10 @@ import (
 // BuildKubeClient constructs a Kubernetes client from KUBECONFIG or in-cluster config,
 // verifying connectivity against the API server.
 func BuildKubeClient(kubeconfigPath string) (kubernetes.Interface, error) {
+	if os.Getenv("WORKLOAD_RUNNER") == "local" {
+		return nil, errors.New("local workload runner forced via WORKLOAD_RUNNER=local")
+	}
+
 	var restCfg *rest.Config
 	var err error
 
@@ -41,7 +45,17 @@ func BuildKubeClient(kubeconfigPath string) (kubernetes.Interface, error) {
 		// In-cluster configuration when running inside Kubernetes
 		restCfg, err = rest.InClusterConfig()
 		if err != nil {
-			return nil, fmt.Errorf("in-cluster kubernetes configuration not available: %w", err)
+			// Fall back to default home kubeconfig if available
+			homeConfig := clientcmd.RecommendedHomeFile
+			if home, hErr := os.UserHomeDir(); hErr == nil && home != "" {
+				homeConfig = filepath.Join(home, ".kube", "config")
+			}
+			if _, statErr := os.Stat(homeConfig); statErr == nil {
+				restCfg, err = clientcmd.BuildConfigFromFlags("", homeConfig)
+			}
+			if err != nil {
+				return nil, fmt.Errorf("in-cluster kubernetes configuration not available: %w", err)
+			}
 		}
 	}
 

@@ -28,29 +28,29 @@ Submitted via `POST /v1/workspaces`.
 
 **Raw Response (`01-create-workspace.json`):**
 ```json
-{"id":"9c3546cf-e751-4ae7-9c49-f844c3d54210","name":"Duplicate Submission Demo cb8f9d8d","slug":"demo-dup-cb8f9d8d","created_at":"2026-10-04T13:33:22.598109Z"}
+{"id":"b53cb358-907a-4ce5-af4f-b5cad990a643","name":"Duplicate Submission Demo 518fa599","slug":"demo-dup-518fa599","created_at":"2026-10-19T14:48:09.728648Z"}
 ```
 
 ---
 
 ### Step 2: First Job Submission with Idempotency-Key
 
-Submitted via `POST /v1/workspaces/9c3546cf-e751-4ae7-9c49-f844c3d54210/jobs` with `Idempotency-Key: idemp-demo-dup-cb8f9d8d`.
+Submitted via `POST /v1/workspaces/b53cb358-907a-4ce5-af4f-b5cad990a643/jobs` with `Idempotency-Key: idemp-demo-dup-518fa599`.
 
 **Raw Response (`02-first-submission.json`):**
 ```json
-{"operation_id":"5c35be01-6a8d-405f-b766-0a1918e1494d","status":"ACCEPTED","status_url":"/v1/operations/5c35be01-6a8d-405f-b766-0a1918e1494d"}
+{"operation_id":"11b66a04-7bc9-4883-91df-d314893a3904","status":"ACCEPTED","status_url":"/v1/operations/11b66a04-7bc9-4883-91df-d314893a3904"}
 ```
 
 ---
 
 ### Step 3: Duplicate Submission with Identical Key
 
-Resubmitted identical payload to `POST /v1/workspaces/9c3546cf-e751-4ae7-9c49-f844c3d54210/jobs` with the same `Idempotency-Key: idemp-demo-dup-cb8f9d8d`.
+Resubmitted identical payload to `POST /v1/workspaces/b53cb358-907a-4ce5-af4f-b5cad990a643/jobs` with the same `Idempotency-Key: idemp-demo-dup-518fa599`.
 
 **Raw Response (`03-duplicate-submission.json`):**
 ```json
-{"operation_id":"5c35be01-6a8d-405f-b766-0a1918e1494d","status":"ACCEPTED","status_url":"/v1/operations/5c35be01-6a8d-405f-b766-0a1918e1494d"}
+{"operation_id":"11b66a04-7bc9-4883-91df-d314893a3904","status":"ACCEPTED","status_url":"/v1/operations/11b66a04-7bc9-4883-91df-d314893a3904"}
 ```
 
 ---
@@ -65,10 +65,10 @@ Resubmitted identical payload to `POST /v1/workspaces/9c3546cf-e751-4ae7-9c49-f8
 (1 row)
 ```
 
-The database confirms that exactly **1** job row exists for workspace `9c3546cf-e751-4ae7-9c49-f844c3d54210` with ID `5c35be01-6a8d-405f-b766-0a1918e1494d`.
+The database confirms that exactly **1** job row exists for workspace `b53cb358-907a-4ce5-af4f-b5cad990a643` with ID `11b66a04-7bc9-4883-91df-d314893a3904`.
 
 ---
 
 ## 4. Conclusion
 
-Both submissions returned the identical operation ID (`5c35be01-6a8d-405f-b766-0a1918e1494d`) and exactly 1 database job was recorded, conclusively verifying idempotency.
+Both submissions returned the identical operation ID (`11b66a04-7bc9-4883-91df-d314893a3904`) and exactly 1 database job was recorded, conclusively verifying idempotency.

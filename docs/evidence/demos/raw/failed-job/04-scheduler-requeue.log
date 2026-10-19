@@ -1,8 +1,8 @@
-﻿{"time":"2026-10-04T16:41:20.6089454+03:30","level":"INFO","msg":"Starting HamiCloud Scheduler process","version":"0.1.0"}
-{"time":"2026-10-04T16:41:20.8388928+03:30","level":"WARN","msg":"Kubernetes cluster unavailable for scheduler; falling back to NoopJobDeleter in development","warning":"in-cluster kubernetes configuration not available: unable to load in-cluster configuration, KUBERNETES_SERVICE_HOST and KUBERNETES_SERVICE_PORT must be defined"}
-{"time":"2026-10-04T16:41:20.839411+03:30","level":"INFO","msg":"Scheduler initialized with configuration","environment":"development","reconciliation_period":30000000000,"worker_id":"local-worker-1","run_once":true}
-{"time":"2026-10-04T16:41:20.839411+03:30","level":"INFO","msg":"Executing single scheduler admission pass (RUN_ONCE)"}
-{"time":"2026-10-04T16:41:20.9537449+03:30","level":"INFO","msg":"Requeued retry_wait jobs back to QUEUED for next attempt","count":1}
-{"time":"2026-10-04T16:41:21.1918237+03:30","level":"INFO","msg":"Admitted job and created ExecutionIntent","intent_id":"0590957e-304f-4f56-bc96-b5add0760423","job_id":"456ad0ab-1c51-4665-87fc-461b798726ca","job_attempt_id":"8ad70ffb-ff31-47bd-9b19-f27e254b0359","resource_name":"hc-job-456ad0ab-1c51-4665-87fc-461b798726ca-2"}
-{"time":"2026-10-04T16:41:21.1926249+03:30","level":"INFO","msg":"Scheduler RunOnce completed successfully","admitted_count":1}
+﻿{"time":"2026-10-19T18:24:27.8467421+03:30","level":"INFO","msg":"Starting HamiCloud Scheduler process","version":"0.1.0"}
+{"time":"2026-10-19T18:24:27.917855+03:30","level":"INFO","msg":"Connected scheduler to Kubernetes cluster for job recovery","namespace":"default"}
+{"time":"2026-10-19T18:24:27.917855+03:30","level":"INFO","msg":"Scheduler initialized with configuration","environment":"development","reconciliation_period":30000000000,"worker_id":"local-worker-1","run_once":true}
+{"time":"2026-10-19T18:24:27.917855+03:30","level":"INFO","msg":"Executing single scheduler admission pass (RUN_ONCE)"}
+{"time":"2026-10-19T18:24:28.0223854+03:30","level":"INFO","msg":"Requeued retry_wait jobs back to QUEUED for next attempt","count":1}
+{"time":"2026-10-19T18:24:28.0921013+03:30","level":"INFO","msg":"Admitted job and created ExecutionIntent","intent_id":"bd4a3e08-6994-4f87-a8a6-064f6779b5b0","job_id":"a6137530-d353-4152-9db8-6c5fd5d1b1ab","job_attempt_id":"bbeb78d6-9006-41fa-b0a5-c3e2bb32f5b3","resource_name":"hc-job-a6137530-d353-4152-9db8-6c5fd5d1b1ab-2"}
+{"time":"2026-10-19T18:24:28.0921013+03:30","level":"INFO","msg":"Scheduler RunOnce completed successfully","admitted_count":1}
 

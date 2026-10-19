@@ -34,6 +34,7 @@ def run_executor_once() -> subprocess.CompletedProcess:
     env = os.environ.copy()
     env["RUNTIME_DATABASE_URL"] = "postgres://hamicloud:hamicloud_secret@localhost:5432/hamicloud_test?sslmode=disable"
     env["ENVIRONMENT"] = "development"
+    env["WORKLOAD_RUNNER"] = "local"
     env["RUN_ONCE"] = "true"
 
     if os.path.exists(EXECUTOR_BIN):

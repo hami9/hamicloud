@@ -1,9 +1,9 @@
-﻿{"time":"2026-10-04T16:39:14.3058102+03:30","level":"INFO","msg":"Starting HamiCloud Execution Worker process","version":"0.1.0"}
-{"time":"2026-10-04T16:39:14.4763606+03:30","level":"WARN","msg":"Kubernetes cluster unavailable; falling back to development-only HTTPProbeRunner and LocalProcessJobRunner","warning":"in-cluster kubernetes configuration not available: unable to load in-cluster configuration, KUBERNETES_SERVICE_HOST and KUBERNETES_SERVICE_PORT must be defined"}
-{"time":"2026-10-04T16:39:14.4763606+03:30","level":"INFO","msg":"Executor initialized with configuration","environment":"development","lease_duration":60000000000,"worker_id":"local-worker-1","run_once":true,"workspace_ids":["0ac9d44e-c821-4f13-b401-05519de1bdb7"]}
-{"time":"2026-10-04T16:39:14.4763606+03:30","level":"INFO","msg":"Executing single executor reconciliation pass (RUN_ONCE)"}
-{"time":"2026-10-04T16:39:14.6034117+03:30","level":"INFO","msg":"Claimed job attempt intent","intent_id":"9f107aea-b67c-4d96-b91d-46842578a603","job_id":"4751554d-3a0d-4db5-a2bd-9deeaf874337","job_name":"crash-recovery-job","attempt_number":2,"worker_id":"local-worker-1","lease_epoch":1}
-{"time":"2026-10-04T16:39:14.6034888+03:30","level":"INFO","msg":"Starting reconciliation for job attempt","intent_id":"9f107aea-b67c-4d96-b91d-46842578a603","job_id":"4751554d-3a0d-4db5-a2bd-9deeaf874337","job_name":"crash-recovery-job","attempt_number":2,"lease_epoch":1}
-{"time":"2026-10-04T16:39:29.7308267+03:30","level":"INFO","msg":"Job attempt SUCCEEDED with exit code 0","job_id":"4751554d-3a0d-4db5-a2bd-9deeaf874337","attempt_number":2,"resource_uid":"res-job-4751554d-2"}
-{"time":"2026-10-04T16:39:29.827905+03:30","level":"INFO","msg":"Executor RunOnce completed successfully","workload_processed":true}
+﻿{"time":"2026-10-19T18:25:12.4607911+03:30","level":"INFO","msg":"Starting HamiCloud Execution Worker process","version":"0.1.0"}
+{"time":"2026-10-19T18:25:12.5151447+03:30","level":"INFO","msg":"Connected to Kubernetes cluster","namespace":"default","ingress_domain":""}
+{"time":"2026-10-19T18:25:12.5151447+03:30","level":"INFO","msg":"Executor initialized with configuration","environment":"development","lease_duration":60000000000,"worker_id":"local-worker-1","run_once":true,"workspace_ids":["02bf6fa1-f71f-4ef7-987b-96595cfc4d65"]}
+{"time":"2026-10-19T18:25:12.5151447+03:30","level":"INFO","msg":"Executing single executor reconciliation pass (RUN_ONCE)"}
+{"time":"2026-10-19T18:25:12.6625144+03:30","level":"INFO","msg":"Claimed job attempt intent","intent_id":"8e0c0f5c-a0d0-45c1-aeb9-3d439bc220f4","job_id":"19b79b71-841c-438c-9af8-107dd5108a56","job_name":"crash-recovery-job","attempt_number":2,"worker_id":"local-worker-1","lease_epoch":1}
+{"time":"2026-10-19T18:25:12.6625144+03:30","level":"INFO","msg":"Starting reconciliation for job attempt","intent_id":"8e0c0f5c-a0d0-45c1-aeb9-3d439bc220f4","job_id":"19b79b71-841c-438c-9af8-107dd5108a56","job_name":"crash-recovery-job","attempt_number":2,"lease_epoch":1}
+{"time":"2026-10-19T18:25:36.9355323+03:30","level":"INFO","msg":"Job attempt SUCCEEDED with exit code 0","job_id":"19b79b71-841c-438c-9af8-107dd5108a56","attempt_number":2,"resource_uid":"res-job-19b79b71-2"}
+{"time":"2026-10-19T18:25:37.2322425+03:30","level":"INFO","msg":"Executor RunOnce completed successfully","workload_processed":true}
 

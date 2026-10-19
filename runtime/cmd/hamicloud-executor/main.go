@@ -71,6 +71,9 @@ func main() {
 	}
 
 	rec := reconciler.NewServiceReconciler(pgStore, runner, logger)
+	if kubeErr == nil {
+		rec.SetRetryPolicy(30, 1*time.Second)
+	}
 	jobRec := reconciler.NewJobReconciler(pgStore, jobRunner, logger)
 
 	exec := executor.NewExecutor(pgStore, rec, cfg.WorkerID, cfg.LeaseDuration, logger)

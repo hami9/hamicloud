@@ -134,8 +134,10 @@ func (r *ServiceReconciler) ReconcileOne(ctx context.Context, workload *store.Cl
 	if err != nil {
 		reason := fmt.Sprintf("workload deployment failed: %v", err)
 		r.logger.Error(reason, "release_id", workload.ReleaseID)
-		_ = r.runner.Teardown(ctx, workload)
-		if markErr := r.store.MarkReleaseFailed(ctx, workload.IntentID, workload.ReleaseID, reason, workload.LeaseEpoch); markErr != nil {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+		defer cancel()
+		_ = r.runner.Teardown(cleanupCtx, workload)
+		if markErr := r.store.MarkReleaseFailed(cleanupCtx, workload.IntentID, workload.ReleaseID, reason, workload.LeaseEpoch); markErr != nil {
 			r.logger.Error("Failed to mark release failed", "error", markErr)
 		}
 		return err
@@ -148,6 +150,10 @@ func (r *ServiceReconciler) ReconcileOne(ctx context.Context, workload *store.Cl
 	for attempt := 1; attempt <= r.maxRetries; attempt++ {
 		select {
 		case <-ctx.Done():
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+			defer cancel()
+			_ = r.runner.Teardown(cleanupCtx, workload)
+			_ = r.store.MarkReleaseFailed(cleanupCtx, workload.IntentID, workload.ReleaseID, fmt.Sprintf("reconciliation context cancelled: %v", ctx.Err()), workload.LeaseEpoch)
 			return ctx.Err()
 		default:
 		}
@@ -165,6 +171,10 @@ func (r *ServiceReconciler) ReconcileOne(ctx context.Context, workload *store.Cl
 		if attempt < r.maxRetries {
 			select {
 			case <-ctx.Done():
+				cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+				defer cancel()
+				_ = r.runner.Teardown(cleanupCtx, workload)
+				_ = r.store.MarkReleaseFailed(cleanupCtx, workload.IntentID, workload.ReleaseID, fmt.Sprintf("reconciliation context cancelled: %v", ctx.Err()), workload.LeaseEpoch)
 				return ctx.Err()
 			case <-time.After(r.retryInterval):
 			}
@@ -199,8 +209,10 @@ func (r *ServiceReconciler) ReconcileOne(ctx context.Context, workload *store.Cl
 		"reason", lastFailureReason,
 		"lease_epoch", workload.LeaseEpoch,
 	)
-	_ = r.runner.Teardown(ctx, workload)
-	if err := r.store.MarkReleaseFailed(ctx, workload.IntentID, workload.ReleaseID, lastFailureReason, workload.LeaseEpoch); err != nil {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	defer cancel()
+	_ = r.runner.Teardown(cleanupCtx, workload)
+	if err := r.store.MarkReleaseFailed(cleanupCtx, workload.IntentID, workload.ReleaseID, lastFailureReason, workload.LeaseEpoch); err != nil {
 		r.logger.Error("Failed to mark release failed in database", "error", err)
 		return err
 	}

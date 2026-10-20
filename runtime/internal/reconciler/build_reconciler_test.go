@@ -207,3 +207,108 @@ func TestIsolatedBuildKitRunner_RejectsDockerfilePathTraversal(t *testing.T) {
 		t.Fatalf("expected path traversal failure reason, got %+v", res)
 	}
 }
+
+func TestMinimalSubprocessEnv_FiltersSensitiveVariables(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://leak:leak@localhost/db")
+	t.Setenv("RUNTIME_DATABASE_URL", "postgres://admin:secret@pg/db")
+	t.Setenv("SECRET_KEY", "super-secret-token")
+	t.Setenv("API_KEY", "api-key-1234")
+
+	env := minimalSubprocessEnv("CUSTOM_KEY=custom_value")
+
+	hasCustom := false
+	hasGitPrompt := false
+	hasBuildkit := false
+
+	for _, e := range env {
+		if strings.HasPrefix(e, "DATABASE_URL=") ||
+			strings.HasPrefix(e, "RUNTIME_DATABASE_URL=") ||
+			strings.HasPrefix(e, "SECRET_KEY=") ||
+			strings.HasPrefix(e, "API_KEY=") {
+			t.Errorf("SECURITY LEAK: sensitive environment variable leaked into subprocess env: %s", e)
+		}
+		if e == "CUSTOM_KEY=custom_value" {
+			hasCustom = true
+		}
+		if e == "GIT_TERMINAL_PROMPT=0" {
+			hasGitPrompt = true
+		}
+		if e == "DOCKER_BUILDKIT=1" {
+			hasBuildkit = true
+		}
+	}
+
+	if !hasCustom {
+		t.Errorf("expected extra env variable CUSTOM_KEY=custom_value to be present")
+	}
+	if !hasGitPrompt {
+		t.Errorf("expected GIT_TERMINAL_PROMPT=0 to be set")
+	}
+	if !hasBuildkit {
+		t.Errorf("expected DOCKER_BUILDKIT=1 to be set")
+	}
+}
+
+func TestIsValidCommitSHA(t *testing.T) {
+	valid := []string{
+		"a1b2c3d",
+		"0123456789abcdef",
+		"494613142a0ece19a913b88570b04034e656ae35",
+		"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+	}
+	for _, s := range valid {
+		if !isValidCommitSHA(s) {
+			t.Errorf("expected SHA %q to be valid", s)
+		}
+	}
+
+	invalid := []string{
+		"-b",
+		"--upload-pack=evil",
+		"abc", // too short (< 4)
+		"xyz1234",
+		"not-a-sha!",
+		"",
+	}
+	for _, s := range invalid {
+		if isValidCommitSHA(s) {
+			t.Errorf("expected SHA %q to be invalid", s)
+		}
+	}
+}
+
+func TestIsolatedBuildKitRunner_RejectsFlagInjection(t *testing.T) {
+	runner := NewIsolatedBuildKitRunner("tcp://127.0.0.1:1234", "localhost:5000")
+
+	// Injection via CommitSHA
+	res, err := runner.Build(context.Background(), &store.ClaimedBuildTask{
+		ReleaseID:      "rel-inject-1",
+		RepoURL:        "https://github.com/example/repo.git",
+		CommitSHA:      "--upload-pack=calc.exe",
+		GitRef:         "",
+		ContextDir:     ".",
+		DockerfilePath: "Dockerfile",
+	})
+	if err == nil {
+		t.Errorf("expected error when CommitSHA starts with '-'")
+	}
+	if res == nil || !strings.Contains(res.FailureReason, "invalid commit SHA") {
+		t.Errorf("expected invalid commit SHA failure reason, got %+v", res)
+	}
+
+	// Injection via GitRef
+	resRef, errRef := runner.Build(context.Background(), &store.ClaimedBuildTask{
+		ReleaseID:      "rel-inject-2",
+		RepoURL:        "https://github.com/example/repo.git",
+		CommitSHA:      "",
+		GitRef:         "-b evil-branch",
+		ContextDir:     ".",
+		DockerfilePath: "Dockerfile",
+	})
+	if errRef == nil {
+		t.Errorf("expected error when GitRef starts with '-'")
+	}
+	if resRef == nil || !strings.Contains(resRef.FailureReason, "invalid git ref") {
+		t.Errorf("expected invalid git ref failure reason, got %+v", resRef)
+	}
+}

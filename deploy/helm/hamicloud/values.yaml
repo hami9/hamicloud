@@ -76,3 +76,8 @@ config:
   s3EndpointUrl: "http://minio.hamicloud-system.svc.cluster.local:9000"
   registryEndpoint: "registry.local:5000"
   workloadNamespacePrefix: "hc-ws-"
+  artifactsDir: "/var/artifacts"
+
+secret:
+  existingSecret: ""
+  runtimeDatabaseUrl: "postgres://hamicloud:hamicloud_secret@postgres.hamicloud-system.svc.cluster.local:5432/hamicloud?sslmode=disable"

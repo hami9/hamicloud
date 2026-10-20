@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -1067,6 +1068,9 @@ func TestPostgresStore_ClaimNextServiceRelease_SkipsSupersededReleaseWithPending
 	st := connectTestStore(t, ctx)
 
 	now := time.Now().UTC()
+	// Clean residual IMAGE_READY or REQUESTED releases from earlier test passes
+	_, _ = st.pool.Exec(ctx, `UPDATE releases SET status = 'SUPERSEDED' WHERE status IN ('IMAGE_READY', 'REQUESTED');`)
+
 	wsID := createTestWorkspace(t, ctx, st, "Superseded Claim WS")
 	appID := createTestApp(t, ctx, st, wsID, "skip-superseded-app")
 
@@ -1582,5 +1586,117 @@ func TestPostgresStore_FairScheduler_NoisyWorkspaceDoesNotStarveQuietWorkspace(t
 		if j.WorkspaceID == wsNoisy {
 			t.Fatalf("noisy workspace bypassed concurrency limit: ScanUnadmittedJobs returned %s while 2 jobs already ADMITTED", j.JobID)
 		}
+	}
+}
+
+func TestPostgresStore_JobAttempt_EmitsOutboxEvents(t *testing.T) {
+	ctx := context.Background()
+	st := connectTestStore(t, ctx)
+	now := time.Now().UTC()
+
+	wsID := createTestWorkspace(t, ctx, st, "Outbox Events WS")
+
+	// 1. Test MarkJobAttemptSucceeded emits job.attempt.succeeded.v1
+	jobID1 := NewUUID()
+	attemptID1 := NewUUID()
+	intentID1 := NewUUID()
+	_, err := st.pool.Exec(ctx, `
+		INSERT INTO jobs (id, workspace_id, name, image_digest, command_args, env_vars, timeout_seconds, max_retries, current_attempt_number, state, created_at, updated_at)
+		VALUES ($1, $2, 'succeed-job', 'sha256:dummy', '[]', '{}', 60, 2, 1, 'RUNNING', $3, $3);
+	`, jobID1, wsID, now)
+	if err != nil {
+		t.Fatalf("setup job 1: %v", err)
+	}
+	_, err = st.pool.Exec(ctx, `
+		INSERT INTO job_attempts (id, job_id, workspace_id, attempt_number, state, created_at, updated_at)
+		VALUES ($1, $2, $3, 1, 'RUNNING', $4, $4);
+	`, attemptID1, jobID1, wsID, now)
+	if err != nil {
+		t.Fatalf("setup attempt 1: %v", err)
+	}
+	_, err = st.pool.Exec(ctx, `
+		INSERT INTO execution_intents (id, workspace_id, resource_type, job_attempt_id, deterministic_resource_name, status, lease_epoch, created_at, updated_at)
+		VALUES ($1, $2, 'JOB_ATTEMPT', $3, 'res-job-1', 'CLAIMED', 1, $4, $4);
+	`, intentID1, wsID, attemptID1, now)
+	if err != nil {
+		t.Fatalf("setup intent 1: %v", err)
+	}
+
+	err = st.MarkJobAttemptSucceeded(ctx, intentID1, attemptID1, jobID1, "res-uid-1", 1)
+	if err != nil {
+		t.Fatalf("MarkJobAttemptSucceeded failed: %v", err)
+	}
+
+	var succeededTopic string
+	var succeededPayload string
+	err = st.pool.QueryRow(ctx, `
+		SELECT topic, payload_json FROM outbox_events
+		WHERE workspace_id = $1 AND topic = 'job.attempt.succeeded.v1'
+		ORDER BY created_at DESC LIMIT 1;
+	`, wsID).Scan(&succeededTopic, &succeededPayload)
+	if err != nil {
+		t.Fatalf("query succeeded outbox event: %v", err)
+	}
+	if succeededTopic != "job.attempt.succeeded.v1" {
+		t.Errorf("expected topic job.attempt.succeeded.v1, got %s", succeededTopic)
+	}
+	var succMap map[string]any
+	if err := json.Unmarshal([]byte(succeededPayload), &succMap); err != nil {
+		t.Fatalf("unmarshal succeeded event JSON: %v", err)
+	}
+	if succMap["job_id"] != jobID1 || succMap["attempt_id"] != attemptID1 || succMap["exit_code"] != float64(0) {
+		t.Errorf("unexpected succeeded payload: %v", succMap)
+	}
+
+	// 2. Test MarkJobAttemptFailed emits job.attempt.failed.v1
+	jobID2 := NewUUID()
+	attemptID2 := NewUUID()
+	intentID2 := NewUUID()
+	_, err = st.pool.Exec(ctx, `
+		INSERT INTO jobs (id, workspace_id, name, image_digest, command_args, env_vars, timeout_seconds, max_retries, current_attempt_number, state, created_at, updated_at)
+		VALUES ($1, $2, 'failed-job', 'sha256:dummy', '[]', '{}', 60, 2, 1, 'RUNNING', $3, $3);
+	`, jobID2, wsID, now)
+	if err != nil {
+		t.Fatalf("setup job 2: %v", err)
+	}
+	_, err = st.pool.Exec(ctx, `
+		INSERT INTO job_attempts (id, job_id, workspace_id, attempt_number, state, created_at, updated_at)
+		VALUES ($1, $2, $3, 1, 'RUNNING', $4, $4);
+	`, attemptID2, jobID2, wsID, now)
+	if err != nil {
+		t.Fatalf("setup attempt 2: %v", err)
+	}
+	_, err = st.pool.Exec(ctx, `
+		INSERT INTO execution_intents (id, workspace_id, resource_type, job_attempt_id, deterministic_resource_name, status, lease_epoch, created_at, updated_at)
+		VALUES ($1, $2, 'JOB_ATTEMPT', $3, 'res-job-2', 'CLAIMED', 1, $4, $4);
+	`, intentID2, wsID, attemptID2, now)
+	if err != nil {
+		t.Fatalf("setup intent 2: %v", err)
+	}
+
+	err = st.MarkJobAttemptFailed(ctx, intentID2, attemptID2, jobID2, "command exited with status 1", 1, 1, true)
+	if err != nil {
+		t.Fatalf("MarkJobAttemptFailed failed: %v", err)
+	}
+
+	var failedTopic string
+	var failedPayload string
+	err = st.pool.QueryRow(ctx, `
+		SELECT topic, payload_json FROM outbox_events
+		WHERE workspace_id = $1 AND topic = 'job.attempt.failed.v1'
+		ORDER BY created_at DESC LIMIT 1;
+	`, wsID).Scan(&failedTopic, &failedPayload)
+	if err != nil {
+		t.Fatalf("query failed outbox event: %v", err)
+	}
+	if failedTopic != "job.attempt.failed.v1" {
+		t.Errorf("expected topic job.attempt.failed.v1, got %s", failedTopic)
+	}
+	var failMap map[string]any
+	if err := json.Unmarshal([]byte(failedPayload), &failMap); err != nil {
+		t.Fatalf("unmarshal failed event JSON: %v", err)
+	}
+	if failMap["job_id"] != jobID2 || failMap["attempt_id"] != attemptID2 || failMap["exit_code"] != float64(1) || failMap["is_retryable"] != true {
+		t.Errorf("unexpected failed payload: %v", failMap)
 	}
 }

@@ -77,7 +77,7 @@ func main() {
 	listener := bus.NewEventListener(cfg.NATSURL, []string{
 		"job.submitted.v1",
 		"app.deployment.requested.v1",
-		"app.rollback.requested.v1",
+		"app.build.completed.v1",
 	}, logger)
 	listener.Register(sched)
 

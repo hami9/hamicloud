@@ -127,10 +127,10 @@ func (r *BuildReconciler) ReconcileBuild(ctx context.Context, task *store.Claime
 }
 
 var (
-	urlCredsPattern   = regexp.MustCompile(`(https?://)([^/\s:@]+):([^/\s@]+)@`)
-	ghTokenPattern    = regexp.MustCompile(`\b(gh[pousr]_[A-Za-z0-9_]{8,}|github_pat_[A-Za-z0-9_]{8,}|whsec_[A-Za-z0-9_]{8,})\b`)
-	bearerPattern     = regexp.MustCompile(`(?i)(Bearer\s+)[A-Za-z0-9\-._~+/]+=*`)
-	kvSecretPattern   = regexp.MustCompile(`(?i)\b(password|passwd|secret|token|api_key|apikey|access_key|client_secret)(\s*[:=]\s*)([^\s"']+|"[^"]*"|'[^']*')`)
+	urlCredsPattern = regexp.MustCompile(`(https?://)([^/\s:@]+):([^/\s@]+)@`)
+	ghTokenPattern  = regexp.MustCompile(`\b(gh[pousr]_[A-Za-z0-9_]{8,}|github_pat_[A-Za-z0-9_]{8,}|whsec_[A-Za-z0-9_]{8,})\b`)
+	bearerPattern   = regexp.MustCompile(`(?i)(Bearer\s+)[A-Za-z0-9\-._~+/]+=*`)
+	kvSecretPattern = regexp.MustCompile(`(?i)\b(password|passwd|secret|token|api_key|apikey|access_key|client_secret)(\s*[:=]\s*)([^\s"']+|"[^"]*"|'[^']*')`)
 )
 
 // redactBuildLogs scrubs credentials, tokens, and secrets from build output before storage.
@@ -143,6 +143,54 @@ func redactBuildLogs(input string) string {
 	out = bearerPattern.ReplaceAllString(out, "${1}[REDACTED]")
 	out = kvSecretPattern.ReplaceAllString(out, "${1}${2}[REDACTED]")
 	return out
+}
+
+// validCommitSHARegex matches valid short or full git commit SHA hashes (4 to 64 hex characters).
+var validCommitSHARegex = regexp.MustCompile(`^[0-9a-fA-F]{4,64}$`)
+
+func isValidCommitSHA(sha string) bool {
+	return validCommitSHARegex.MatchString(sha)
+}
+
+// minimalSubprocessEnv constructs an allowlisted environment for external build tools (git, docker, buildctl).
+// This guarantees that sensitive credentials (database URLs, API tokens, webhook secrets) never leak into builds.
+func minimalSubprocessEnv(extra ...string) []string {
+	allowlist := []string{
+		"PATH",
+		"HOME",
+		"USERPROFILE",
+		"SystemRoot",
+		"SYSTEMROOT",
+		"SystemDrive",
+		"SYSTEMDRIVE",
+		"TEMP",
+		"TMP",
+		"DOCKER_HOST",
+		"DOCKER_CONFIG",
+		"BUILDKIT_HOST",
+	}
+	seen := make(map[string]bool)
+	var env []string
+	for _, key := range allowlist {
+		upper := strings.ToUpper(key)
+		if seen[upper] {
+			continue
+		}
+		if val, ok := os.LookupEnv(key); ok && val != "" {
+			env = append(env, key+"="+val)
+			seen[upper] = true
+		}
+	}
+	// Enforce non-interactive, isolated defaults
+	env = append(env, "GIT_TERMINAL_PROMPT=0", "DOCKER_BUILDKIT=1")
+	for _, e := range extra {
+		parts := strings.SplitN(e, "=", 2)
+		if len(parts) == 2 {
+			seen[strings.ToUpper(parts[0])] = true
+		}
+		env = append(env, e)
+	}
+	return env
 }
 
 // verifyPathWithinRoot ensures that relPath resolved inside rootDir does not escape rootDir.
@@ -246,11 +294,33 @@ func (r *IsolatedBuildKitRunner) Build(ctx context.Context, task *store.ClaimedB
 	}
 	defer os.RemoveAll(tempDir)
 
+	targetSHA := strings.TrimSpace(task.CommitSHA)
+	targetRef := strings.TrimSpace(task.GitRef)
+
+	if targetSHA != "" && (strings.HasPrefix(targetSHA, "-") || !isValidCommitSHA(targetSHA)) {
+		reason := fmt.Sprintf("invalid commit SHA %q: must be valid hex and not start with '-'", targetSHA)
+		writeLog("ERROR: %s", reason)
+		return &BuildResult{
+			DurationMs:    maxInt(int(time.Since(start).Milliseconds()), 1),
+			Logs:          redactBuildLogs(logBuf.String()),
+			FailureReason: reason,
+		}, fmt.Errorf("%s", reason)
+	}
+	if targetRef != "" && strings.HasPrefix(targetRef, "-") {
+		reason := fmt.Sprintf("invalid git ref %q: must not start with '-'", targetRef)
+		writeLog("ERROR: %s", reason)
+		return &BuildResult{
+			DurationMs:    maxInt(int(time.Since(start).Milliseconds()), 1),
+			Logs:          redactBuildLogs(logBuf.String()),
+			FailureReason: reason,
+		}, fmt.Errorf("%s", reason)
+	}
+
 	cloneDir := filepath.Join(tempDir, "repo")
 	sourceRepo := r.resolveRepoSource(task.RepoURL)
 	writeLog("==> Cloning repository %s into isolated workspace", redactBuildLogs(task.RepoURL))
 
-	if out, err := runCommandCombined(ctx, tempDir, "git", "clone", sourceRepo, cloneDir); err != nil {
+	if out, err := runCommandCombined(ctx, tempDir, "git", "clone", "--", sourceRepo, cloneDir); err != nil {
 		writeLog("%s", out)
 		reason := fmt.Sprintf("git clone failed: %v", err)
 		return &BuildResult{
@@ -262,12 +332,13 @@ func (r *IsolatedBuildKitRunner) Build(ctx context.Context, task *store.ClaimedB
 		writeLog("%s", strings.TrimSpace(out))
 	}
 
-	targetSHA := strings.TrimSpace(task.CommitSHA)
-	targetRef := strings.TrimSpace(task.GitRef)
-
 	if targetSHA != "" {
 		writeLog("==> Checking out commit %s", targetSHA)
-		if out, err := runCommandCombined(ctx, cloneDir, "git", "checkout", "--detach", targetSHA); err != nil {
+		out, err := runCommandCombined(ctx, cloneDir, "git", "checkout", "--detach", "--end-of-options", targetSHA)
+		if err != nil && strings.Contains(out, "unknown option: --end-of-options") {
+			out, err = runCommandCombined(ctx, cloneDir, "git", "checkout", "--detach", targetSHA)
+		}
+		if err != nil {
 			writeLog("%s", out)
 			reason := fmt.Sprintf("git checkout %s failed: %v", targetSHA, err)
 			return &BuildResult{
@@ -280,7 +351,11 @@ func (r *IsolatedBuildKitRunner) Build(ctx context.Context, task *store.ClaimedB
 		}
 	} else if targetRef != "" {
 		writeLog("==> Checking out ref %s", targetRef)
-		if out, err := runCommandCombined(ctx, cloneDir, "git", "checkout", targetRef); err != nil {
+		out, err := runCommandCombined(ctx, cloneDir, "git", "checkout", "--end-of-options", targetRef)
+		if err != nil && strings.Contains(out, "unknown option: --end-of-options") {
+			out, err = runCommandCombined(ctx, cloneDir, "git", "checkout", targetRef)
+		}
+		if err != nil {
 			writeLog("%s", out)
 			reason := fmt.Sprintf("git checkout ref %s failed: %v", targetRef, err)
 			return &BuildResult{
@@ -445,7 +520,7 @@ func (r *IsolatedBuildKitRunner) buildAndPushImage(
 
 	// Build with Docker (BuildKit backend) and push to local OCI registry
 	buildCmd := exec.CommandContext(ctx, "docker", "build", "-t", imageTag, "-f", absDockerfile, absContextDir)
-	buildCmd.Env = append(os.Environ(), "DOCKER_BUILDKIT=1")
+	buildCmd.Env = minimalSubprocessEnv("DOCKER_BUILDKIT=1")
 	buildOutBytes, buildErr := buildCmd.CombinedOutput()
 	combinedLogs.Write(buildOutBytes)
 	if buildErr != nil {
@@ -500,9 +575,12 @@ func (r *IsolatedBuildKitRunner) fetchRegistryDigest(ctx context.Context, repoPa
 
 func (r *IsolatedBuildKitRunner) syncKindNodeRegistry(ctx context.Context, imageTag string) {
 	// Ensure hamicloud-registry is attached to the kind network and containerd hosts.toml is present
-	_ = exec.CommandContext(ctx, "docker", "network", "connect", "kind", "hamicloud-registry").Run()
+	cmdNet := exec.CommandContext(ctx, "docker", "network", "connect", "kind", "hamicloud-registry")
+	cmdNet.Env = minimalSubprocessEnv()
+	_ = cmdNet.Run()
 	hostsToml := "server = \"http://hamicloud-registry:5000\"\n\n[host.\"http://hamicloud-registry:5000\"]\n  capabilities = [\"pull\", \"resolve\", \"push\"]\n  skip_verify = true\n"
 	cmd := exec.CommandContext(ctx, "docker", "exec", "-i", "desktop-control-plane", "sh", "-c", "mkdir -p /etc/containerd/certs.d/localhost:5000 && cat > /etc/containerd/certs.d/localhost:5000/hosts.toml")
+	cmd.Env = minimalSubprocessEnv()
 	cmd.Stdin = strings.NewReader(hostsToml)
 	_ = cmd.Run()
 	_ = imageTag
@@ -513,7 +591,7 @@ func runCommandCombined(ctx context.Context, dir string, name string, args ...st
 	if dir != "" {
 		cmd.Dir = dir
 	}
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	cmd.Env = minimalSubprocessEnv()
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }

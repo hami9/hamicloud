@@ -19,3 +19,4 @@ data:
   S3_ENDPOINT_URL: "{{ .Values.config.s3EndpointUrl }}"
   REGISTRY_ENDPOINT: "{{ .Values.config.registryEndpoint }}"
   WORKLOAD_NAMESPACE_PREFIX: "{{ .Values.config.workloadNamespacePrefix }}"
+  ARTIFACTS_DIR: "{{ .Values.config.artifactsDir }}"

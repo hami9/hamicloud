@@ -190,6 +190,9 @@ func (s *PostgresStore) ScanUnadmittedReleases(ctx context.Context, limit int) (
 		}
 		releases = append(releases, rel)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate unadmitted releases: %w", err)
+	}
 	return releases, nil
 }
 
@@ -522,7 +525,7 @@ func (s *PostgresStore) ScanUnadmittedJobs(ctx context.Context, limit int) ([]Un
 		WITH ws_active AS (
 			SELECT workspace_id, COUNT(*) AS active_jobs
 			FROM jobs
-			WHERE state IN ('ADMITTED', 'STARTING', 'RUNNING')
+			WHERE state IN ('ADMITTED', 'STARTING', 'RUNNING', 'CANCEL_REQUESTED', 'RECOVERY_PENDING')
 			GROUP BY workspace_id
 		),
 		ranked_queued AS (
@@ -568,6 +571,9 @@ func (s *PostgresStore) ScanUnadmittedJobs(ctx context.Context, limit int) ([]Un
 			return nil, fmt.Errorf("scan job row: %w", err)
 		}
 		jobs = append(jobs, j)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate unadmitted jobs: %w", err)
 	}
 	return jobs, nil
 }
@@ -653,25 +659,29 @@ func (s *PostgresStore) CreateJobAttemptIntent(ctx context.Context, job Unadmitt
 		return nil, fmt.Errorf("insert execution intent for job: %w", err)
 	}
 
-	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("commit admission tx: %w", err)
-	}
-
-	// Best-effort quota reservation accounting for CONCURRENT_JOB
+	// Quota reservation accounting for CONCURRENT_JOB inside transaction
 	ttlSec := job.TimeoutSeconds
 	if ttlSec <= 0 {
 		ttlSec = 600
 	}
 	expiresAt := now.Add(time.Duration(ttlSec) * time.Second)
-	_, _ = s.pool.Exec(ctx, `
+	if _, err := tx.Exec(ctx, `
 		UPDATE quota_reservations
 		SET status = 'EXPIRED', updated_at = $2
 		WHERE workspace_id = $1 AND status = 'ACTIVE' AND expires_at <= $2;
-	`, job.WorkspaceID, now)
-	_, _ = s.pool.Exec(ctx, `
+	`, job.WorkspaceID, now); err != nil {
+		return nil, fmt.Errorf("expire stale quota reservations: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
 		INSERT INTO quota_reservations (id, workspace_id, resource_class, units, status, expires_at, created_at, updated_at)
 		VALUES ($1, $2, 'CONCURRENT_JOB', 1, 'ACTIVE', $3, $4, $4);
-	`, NewUUID(), job.WorkspaceID, expiresAt, now)
+	`, NewUUID(), job.WorkspaceID, expiresAt, now); err != nil {
+		return nil, fmt.Errorf("insert quota reservation: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit admission tx: %w", err)
+	}
 
 	return &intent, nil
 }
@@ -702,6 +712,9 @@ func (s *PostgresStore) RequeueRetryWaitJobs(ctx context.Context, baseBackoff ti
 			return 0, fmt.Errorf("scan retry_wait job: %w", err)
 		}
 		toCheck = append(toCheck, r)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("iterate retry_wait jobs: %w", err)
 	}
 
 	now := time.Now().UTC()
@@ -801,6 +814,9 @@ func (s *PostgresStore) FindExpiredJobIntents(ctx context.Context) ([]ExpiredJob
 			return nil, fmt.Errorf("scan expired job intent: %w", err)
 		}
 		expired = append(expired, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate expired job intents: %w", err)
 	}
 	return expired, nil
 }
@@ -949,6 +965,7 @@ func (s *PostgresStore) ConfirmJobRecovery(ctx context.Context, jobID string, sh
 			WHERE workspace_id = $1 AND resource_class = 'CONCURRENT_JOB' AND status = 'ACTIVE'
 			ORDER BY created_at ASC
 			LIMIT 1
+			FOR UPDATE SKIP LOCKED
 		);
 	`, wsID, now)
 
@@ -1263,6 +1280,42 @@ func (s *PostgresStore) MarkJobAttemptSucceeded(ctx context.Context, intentID, a
 		return fmt.Errorf("failed to transition job %s: expected 1 row affected, got %d (job not in active state)", jobID, cmdJob.RowsAffected())
 	}
 
+	var workspaceID string
+	var attemptNumber int
+	err = tx.QueryRow(ctx, `
+		SELECT j.workspace_id, ja.attempt_number
+		FROM job_attempts ja
+		JOIN jobs j ON j.id = ja.job_id
+		WHERE ja.id = $1;
+	`, attemptID).Scan(&workspaceID, &attemptNumber)
+	if err != nil {
+		return fmt.Errorf("query job attempt details: %w", err)
+	}
+
+	eventID := NewUUID()
+	outboxID := NewUUID()
+	payload := map[string]any{
+		"event_id":       eventID,
+		"timestamp":      now.Format(time.RFC3339),
+		"workspace_id":   workspaceID,
+		"job_id":         jobID,
+		"attempt_id":     attemptID,
+		"attempt_number": attemptNumber,
+		"exit_code":      0,
+	}
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal job attempt succeeded event: %w", err)
+	}
+	_, err = tx.Exec(ctx, `
+		INSERT INTO outbox_events (
+			id, event_id, workspace_id, schema_version, topic, payload_json, headers_json, status, retry_count, created_at, updated_at
+		) VALUES ($1, $2, $3, 1, 'job.attempt.succeeded.v1', $4, '{}', 'PENDING', 0, $5, $5);
+	`, outboxID, eventID, workspaceID, string(payloadBytes), now)
+	if err != nil {
+		return fmt.Errorf("insert job attempt succeeded outbox event: %w", err)
+	}
+
 	_, _ = tx.Exec(ctx, `
 		UPDATE quota_reservations
 		SET status = 'RELEASED', updated_at = $2
@@ -1272,6 +1325,7 @@ func (s *PostgresStore) MarkJobAttemptSucceeded(ctx context.Context, intentID, a
 			WHERE j.id = $1 AND qr.resource_class = 'CONCURRENT_JOB' AND qr.status = 'ACTIVE'
 			ORDER BY qr.created_at ASC
 			LIMIT 1
+			FOR UPDATE OF qr SKIP LOCKED
 		);
 	`, jobID, now)
 
@@ -1355,6 +1409,32 @@ func (s *PostgresStore) MarkJobAttemptFailed(ctx context.Context, intentID, atte
 		}
 	}
 
+	eventID := NewUUID()
+	outboxID := NewUUID()
+	payload := map[string]any{
+		"event_id":       eventID,
+		"timestamp":      now.Format(time.RFC3339),
+		"workspace_id":   wsID,
+		"job_id":         jobID,
+		"attempt_id":     attemptID,
+		"attempt_number": attemptNum,
+		"exit_code":      exitCode,
+		"failure_reason": reason,
+		"is_retryable":   shouldRetry,
+	}
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal job attempt failed event: %w", err)
+	}
+	_, err = tx.Exec(ctx, `
+		INSERT INTO outbox_events (
+			id, event_id, workspace_id, schema_version, topic, payload_json, headers_json, status, retry_count, created_at, updated_at
+		) VALUES ($1, $2, $3, 1, 'job.attempt.failed.v1', $4, '{}', 'PENDING', 0, $5, $5);
+	`, outboxID, eventID, wsID, string(payloadBytes), now)
+	if err != nil {
+		return fmt.Errorf("insert job attempt failed outbox event: %w", err)
+	}
+
 	_, _ = tx.Exec(ctx, `
 		UPDATE quota_reservations
 		SET status = 'RELEASED', updated_at = $2
@@ -1363,6 +1443,7 @@ func (s *PostgresStore) MarkJobAttemptFailed(ctx context.Context, intentID, atte
 			WHERE workspace_id = $1 AND resource_class = 'CONCURRENT_JOB' AND status = 'ACTIVE'
 			ORDER BY created_at ASC
 			LIMIT 1
+			FOR UPDATE SKIP LOCKED
 		);
 	`, wsID, now)
 
@@ -1431,6 +1512,7 @@ func (s *PostgresStore) MarkJobAttemptCancelled(ctx context.Context, intentID, a
 			WHERE j.id = $1 AND qr.resource_class = 'CONCURRENT_JOB' AND qr.status = 'ACTIVE'
 			ORDER BY qr.created_at ASC
 			LIMIT 1
+			FOR UPDATE OF qr SKIP LOCKED
 		);
 	`, jobID, now)
 
@@ -1628,6 +1710,7 @@ func (s *PostgresStore) MarkBuildSucceeded(ctx context.Context, releaseID string
 			WHERE workspace_id = $1 AND resource_class = 'CONCURRENT_BUILD' AND status = 'ACTIVE'
 			ORDER BY created_at ASC
 			LIMIT 1
+			FOR UPDATE SKIP LOCKED
 		);
 	`, workspaceID, now)
 
@@ -1703,6 +1786,7 @@ func (s *PostgresStore) MarkBuildFailed(ctx context.Context, releaseID string, r
 			WHERE workspace_id = $1 AND resource_class = 'CONCURRENT_BUILD' AND status = 'ACTIVE'
 			ORDER BY created_at ASC
 			LIMIT 1
+			FOR UPDATE SKIP LOCKED
 		);
 	`, workspaceID, now)
 

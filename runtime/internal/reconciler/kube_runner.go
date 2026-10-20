@@ -23,6 +23,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/util/retry"
 
 	"github.com/hami9/hamicloud/runtime/internal/store"
 )
@@ -99,16 +100,34 @@ func sanitizeResourceName(name string) string {
 
 func hardenedContainerSecurityContext() *corev1.SecurityContext {
 	allowPrivEsc := false
-	return &corev1.SecurityContext{
+	sc := &corev1.SecurityContext{
 		AllowPrivilegeEscalation: &allowPrivEsc,
 		Capabilities: &corev1.Capabilities{
 			Drop: []corev1.Capability{"ALL"},
-			Add:  []corev1.Capability{"NET_BIND_SERVICE", "CHOWN", "SETUID", "SETGID", "DAC_OVERRIDE"},
+			Add:  []corev1.Capability{"NET_BIND_SERVICE"},
 		},
 		SeccompProfile: &corev1.SeccompProfile{
 			Type: corev1.SeccompProfileTypeRuntimeDefault,
 		},
 	}
+	if os.Getenv("WORKLOAD_RUN_AS_NON_ROOT") == "true" {
+		nonRoot := true
+		sc.RunAsNonRoot = &nonRoot
+	}
+	return sc
+}
+
+func workloadPodSecurityContext() *corev1.PodSecurityContext {
+	psc := &corev1.PodSecurityContext{
+		SeccompProfile: &corev1.SeccompProfile{
+			Type: corev1.SeccompProfileTypeRuntimeDefault,
+		},
+	}
+	if os.Getenv("WORKLOAD_RUN_AS_NON_ROOT") == "true" {
+		nonRoot := true
+		psc.RunAsNonRoot = &nonRoot
+	}
+	return psc
 }
 
 // EnsureWorkspaceIsolation reconciles tenant NetworkPolicy and default LimitRange/ResourceQuota guardrails
@@ -123,7 +142,7 @@ func EnsureWorkspaceIsolation(ctx context.Context, client kubernetes.Interface, 
 
 	policyName := sanitizeResourceName(fmt.Sprintf("hc-netpol-%s", workspaceID))
 	labels := map[string]string{
-		"hamicloud.io/workspace-id": workspaceID,
+		"hamicloud.io/workspace-id":    workspaceID,
 		"app.kubernetes.io/managed-by": "hamicloud-reconciler",
 	}
 	if workspaceSlug != "" {
@@ -195,19 +214,25 @@ func EnsureWorkspaceIsolation(ctx context.Context, client kubernetes.Interface, 
 		},
 	}
 
-	existingPolicy, err := client.NetworkingV1().NetworkPolicies(ns).Get(ctx, policyName, metav1.GetOptions{})
-	if apierrors.IsNotFound(err) {
-		if _, createErr := client.NetworkingV1().NetworkPolicies(ns).Create(ctx, desiredPolicy, metav1.CreateOptions{}); createErr != nil && !apierrors.IsAlreadyExists(createErr) {
-			return fmt.Errorf("create network policy %s: %w", policyName, createErr)
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		existingPolicy, getErr := client.NetworkingV1().NetworkPolicies(ns).Get(ctx, policyName, metav1.GetOptions{})
+		if apierrors.IsNotFound(getErr) {
+			_, createErr := client.NetworkingV1().NetworkPolicies(ns).Create(ctx, desiredPolicy, metav1.CreateOptions{})
+			if apierrors.IsAlreadyExists(createErr) {
+				return nil
+			}
+			return createErr
 		}
-	} else if err != nil {
-		return fmt.Errorf("get network policy %s: %w", policyName, err)
-	} else {
+		if getErr != nil {
+			return getErr
+		}
 		existingPolicy.Spec = desiredPolicy.Spec
 		existingPolicy.Labels = desiredPolicy.Labels
-		if _, updateErr := client.NetworkingV1().NetworkPolicies(ns).Update(ctx, existingPolicy, metav1.UpdateOptions{}); updateErr != nil {
-			return fmt.Errorf("update network policy %s: %w", policyName, updateErr)
-		}
+		_, updateErr := client.NetworkingV1().NetworkPolicies(ns).Update(ctx, existingPolicy, metav1.UpdateOptions{})
+		return updateErr
+	})
+	if err != nil {
+		return fmt.Errorf("reconcile network policy %s: %w", policyName, err)
 	}
 
 	// Ensure default container LimitRange exists in namespace
@@ -316,6 +341,7 @@ func (k *KubeWorkloadRunner) Deploy(ctx context.Context, workload *store.Claimed
 	}
 
 	replicas := int32(1)
+	automountSAToken := false
 	desiredDeploy := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
@@ -334,7 +360,9 @@ func (k *KubeWorkloadRunner) Deploy(ctx context.Context, workload *store.Claimed
 					Labels: labels,
 				},
 				Spec: corev1.PodSpec{
-					Containers: []corev1.Container{container},
+					AutomountServiceAccountToken: &automountSAToken,
+					SecurityContext:              workloadPodSecurityContext(),
+					Containers:                   []corev1.Container{container},
 				},
 			},
 		},
@@ -668,6 +696,7 @@ func (r *KubeJobTaskRunner) RunJob(ctx context.Context, workload *store.ClaimedJ
 	}
 
 	backoffLimit := int32(0)
+	automountSAToken := false
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      jobName,
@@ -681,8 +710,10 @@ func (r *KubeJobTaskRunner) RunJob(ctx context.Context, workload *store.ClaimedJ
 					Labels: labels,
 				},
 				Spec: corev1.PodSpec{
-					RestartPolicy: corev1.RestartPolicyNever,
-					Containers:    []corev1.Container{jobContainer},
+					AutomountServiceAccountToken: &automountSAToken,
+					SecurityContext:              workloadPodSecurityContext(),
+					RestartPolicy:                corev1.RestartPolicyNever,
+					Containers:                   []corev1.Container{jobContainer},
 				},
 			},
 		},
@@ -756,7 +787,11 @@ func (r *KubeJobTaskRunner) fetchPodLogs(ctx context.Context, jobName string) []
 	}
 	defer stream.Close()
 
-	data, _ := io.ReadAll(stream)
+	limited := io.LimitReader(stream, 10<<20) // 10MB limit
+	data, err := io.ReadAll(limited)
+	if err != nil && len(data) == 0 {
+		return nil
+	}
 	return data
 }
 

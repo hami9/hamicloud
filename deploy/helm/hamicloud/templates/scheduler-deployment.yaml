@@ -38,6 +38,12 @@ spec:
           envFrom:
             - configMapRef:
                 name: hamicloud-config
+          env:
+            - name: RUNTIME_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: "{{ .Values.secret.existingSecret | default \"hamicloud-secret\" }}"
+                  key: RUNTIME_DATABASE_URL
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

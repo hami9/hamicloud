@@ -382,15 +382,36 @@ func TestKubeWorkloadRunner_WorkspaceIsolation_NetworkPolicyAndSecurityContext(t
 	require.NoError(t, err)
 	require.Len(t, lr.Spec.Limits, 1)
 
-	// 3. Verify hardened container SecurityContext on deployed service pods
+	// 3. Verify hardened container SecurityContext and PodSecurityContext on deployed service pods
 	deployA, err := fakeClient.AppsV1().Deployments(ns).Get(ctx, "hc-svc-app-alpha-1", metav1.GetOptions{})
 	require.NoError(t, err)
-	sc := deployA.Spec.Template.Spec.Containers[0].SecurityContext
+
+	podSpec := deployA.Spec.Template.Spec
+	require.NotNil(t, podSpec.AutomountServiceAccountToken)
+	assert.False(t, *podSpec.AutomountServiceAccountToken)
+	require.NotNil(t, podSpec.SecurityContext)
+	require.NotNil(t, podSpec.SecurityContext.SeccompProfile)
+	assert.Equal(t, corev1.SeccompProfileTypeRuntimeDefault, podSpec.SecurityContext.SeccompProfile.Type)
+
+	sc := podSpec.Containers[0].SecurityContext
 	require.NotNil(t, sc)
 	require.NotNil(t, sc.AllowPrivilegeEscalation)
 	assert.False(t, *sc.AllowPrivilegeEscalation)
 	require.NotNil(t, sc.Capabilities)
 	assert.Contains(t, sc.Capabilities.Drop, corev1.Capability("ALL"))
+	assert.Equal(t, []corev1.Capability{"NET_BIND_SERVICE"}, sc.Capabilities.Add)
 	require.NotNil(t, sc.SeccompProfile)
 	assert.Equal(t, corev1.SeccompProfileTypeRuntimeDefault, sc.SeccompProfile.Type)
+}
+
+func TestKubeWorkloadRunner_WorkloadSecurity_RunAsNonRootConfigurable(t *testing.T) {
+	t.Setenv("WORKLOAD_RUN_AS_NON_ROOT", "true")
+
+	psc := workloadPodSecurityContext()
+	require.NotNil(t, psc.RunAsNonRoot)
+	assert.True(t, *psc.RunAsNonRoot)
+
+	csc := hardenedContainerSecurityContext()
+	require.NotNil(t, csc.RunAsNonRoot)
+	assert.True(t, *csc.RunAsNonRoot)
 }

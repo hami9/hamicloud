@@ -92,8 +92,36 @@ services:
       retries: 5
     restart: unless-stopped
 
+  registry:
+    image: registry:2
+    container_name: hamicloud-registry
+    ports:
+      - "${REGISTRY_PORT:-5000}:5000"
+    volumes:
+      - registry_data:/var/lib/registry
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:5000/v2/ || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  buildkit:
+    image: moby/buildkit:latest
+    container_name: hamicloud-buildkit
+    privileged: true
+    command: ["--addr", "tcp://0.0.0.0:1234", "--config", "/etc/buildkit/buildkitd.toml"]
+    ports:
+      - "${BUILDKIT_PORT:-1234}:1234"
+    volumes:
+      - ./buildkitd.toml:/etc/buildkit/buildkitd.toml:ro
+    depends_on:
+      - registry
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   redis_data:
   nats_data:
   minio_data:
+  registry_data:

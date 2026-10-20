@@ -29,6 +29,8 @@ class TriggerBuildRequest(BaseModel):
     commit_sha: Optional[str] = Field(default=None, max_length=40)
     git_ref: str = Field(default="main", max_length=100)
     commit_message: Optional[str] = Field(default=None, max_length=255)
+    port: Optional[int] = Field(default=None, ge=1, le=65535)
+    health_path: Optional[str] = Field(default=None, max_length=255)
 
 
 class WebhookDeliveryResponse(BaseModel):

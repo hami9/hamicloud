@@ -147,6 +147,7 @@ func (s *PostgresStore) ScanUnadmittedReleases(ctx context.Context, limit int) (
 		      SELECT MAX(r2.release_number)
 		      FROM releases r2
 		      WHERE r2.application_id = r.application_id
+		        AND r2.image_digest != 'pending'
 		  )
 		  AND NOT EXISTS (
 		      SELECT 1 FROM execution_intents ei
@@ -1355,4 +1356,244 @@ func (s *PostgresStore) IsJobCancelRequested(ctx context.Context, jobID string) 
 		return false, err
 	}
 	return state == "CANCEL_REQUESTED", nil
+}
+
+// ClaimNextBuildRelease atomically claims the oldest pending source-build release (status='REQUESTED' and image_digest='pending')
+// using FOR UPDATE OF r SKIP LOCKED and transitions its status to BUILDING.
+func (s *PostgresStore) ClaimNextBuildRelease(ctx context.Context, workerID string, workspaceIDs ...string) (*ClaimedBuildTask, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin build claim tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var validWS []string
+	for _, ws := range workspaceIDs {
+		if trimmed := strings.TrimSpace(ws); trimmed != "" {
+			validWS = append(validWS, trimmed)
+		}
+	}
+
+	var selectQuery string
+	var queryArgs []any
+	if len(validWS) > 0 {
+		selectQuery = `
+			SELECT r.id, r.application_id, a.slug, r.workspace_id, w.slug, r.release_number,
+			       r.repository_id, repo.repo_url, COALESCE(r.commit_sha, ''),
+			       COALESCE(r.git_ref, a.git_branch, 'main'),
+			       COALESCE(a.dockerfile_path, 'Dockerfile'),
+			       COALESCE(a.context_dir, '.')
+			FROM releases r
+			JOIN applications a ON a.id = r.application_id
+			JOIN repositories repo ON repo.id = r.repository_id
+			JOIN workspaces w ON w.id = r.workspace_id
+			WHERE r.status = 'REQUESTED'
+			  AND r.image_digest = 'pending'
+			  AND r.repository_id IS NOT NULL
+			  AND r.workspace_id::text = ANY($1)
+			ORDER BY r.created_at ASC
+			LIMIT 1
+			FOR UPDATE OF r SKIP LOCKED;
+		`
+		queryArgs = append(queryArgs, validWS)
+	} else {
+		selectQuery = `
+			SELECT r.id, r.application_id, a.slug, r.workspace_id, w.slug, r.release_number,
+			       r.repository_id, repo.repo_url, COALESCE(r.commit_sha, ''),
+			       COALESCE(r.git_ref, a.git_branch, 'main'),
+			       COALESCE(a.dockerfile_path, 'Dockerfile'),
+			       COALESCE(a.context_dir, '.')
+			FROM releases r
+			JOIN applications a ON a.id = r.application_id
+			JOIN repositories repo ON repo.id = r.repository_id
+			JOIN workspaces w ON w.id = r.workspace_id
+			WHERE r.status = 'REQUESTED'
+			  AND r.image_digest = 'pending'
+			  AND r.repository_id IS NOT NULL
+			ORDER BY r.created_at ASC
+			LIMIT 1
+			FOR UPDATE OF r SKIP LOCKED;
+		`
+	}
+
+	var task ClaimedBuildTask
+	err = tx.QueryRow(ctx, selectQuery, queryArgs...).Scan(
+		&task.ReleaseID,
+		&task.ApplicationID,
+		&task.ApplicationSlug,
+		&task.WorkspaceID,
+		&task.WorkspaceSlug,
+		&task.ReleaseNumber,
+		&task.RepositoryID,
+		&task.RepoURL,
+		&task.CommitSHA,
+		&task.GitRef,
+		&task.DockerfilePath,
+		&task.ContextDir,
+	)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("query pending build release: %w", err)
+	}
+
+	updateQuery := `
+		UPDATE releases
+		SET status = 'BUILDING',
+		    updated_at = NOW()
+		WHERE id = $1 AND status = 'REQUESTED';
+	`
+	cmd, err := tx.Exec(ctx, updateQuery, task.ReleaseID)
+	if err != nil {
+		return nil, fmt.Errorf("update release status to BUILDING: %w", err)
+	}
+	if cmd.RowsAffected() == 0 {
+		return nil, nil
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit build claim tx: %w", err)
+	}
+
+	return &task, nil
+}
+
+// MarkBuildSucceeded atomically updates the release to IMAGE_READY with its built digest and logs,
+// increments applications.desired_generation so the scheduler admits the release for deployment,
+// and emits the transactional outbox event app.build.completed.v1.
+func (s *PostgresStore) MarkBuildSucceeded(ctx context.Context, releaseID string, imageDigest string, durationMs int, buildLogs string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin mark build succeeded tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	now := time.Now().UTC()
+
+	var appID, workspaceID, commitSHA string
+	updateReleaseQuery := `
+		UPDATE releases
+		SET status = 'IMAGE_READY',
+		    image_digest = $2,
+		    build_duration_ms = $3,
+		    build_logs = $4,
+		    status_reason = NULL,
+		    updated_at = $5
+		WHERE id = $1 AND status = 'BUILDING'
+		RETURNING application_id, workspace_id, COALESCE(commit_sha, '');
+	`
+	err = tx.QueryRow(ctx, updateReleaseQuery, releaseID, imageDigest, durationMs, buildLogs, now).Scan(&appID, &workspaceID, &commitSHA)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return fmt.Errorf("release %s is not in BUILDING state", releaseID)
+		}
+		return fmt.Errorf("update release IMAGE_READY: %w", err)
+	}
+
+	_, err = tx.Exec(ctx, `
+		UPDATE applications
+		SET desired_generation = desired_generation + 1,
+		    updated_at = $2
+		WHERE id = $1;
+	`, appID, now)
+	if err != nil {
+		return fmt.Errorf("increment application desired_generation: %w", err)
+	}
+
+	eventID := NewUUID()
+	outboxID := NewUUID()
+	var commitSHAPtr *string
+	if commitSHA != "" {
+		commitSHAPtr = &commitSHA
+	}
+	payload := map[string]any{
+		"event_id":       eventID,
+		"timestamp":      now.Format(time.RFC3339),
+		"workspace_id":   workspaceID,
+		"application_id": appID,
+		"release_id":     releaseID,
+		"image_digest":   imageDigest,
+		"commit_sha":     commitSHAPtr,
+		"status":         "IMAGE_READY",
+	}
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal build completed event: %w", err)
+	}
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO outbox_events (
+			id, event_id, workspace_id, schema_version, topic, payload_json, headers_json, status, retry_count, created_at, updated_at
+		) VALUES ($1, $2, $3, 1, 'app.build.completed.v1', $4, '{}', 'PENDING', 0, $5, $5);
+	`, outboxID, eventID, workspaceID, string(payloadBytes), now)
+	if err != nil {
+		return fmt.Errorf("insert build completed outbox event: %w", err)
+	}
+
+	return tx.Commit(ctx)
+}
+
+// MarkBuildFailed atomically updates the release to BUILD_FAILED with its reason and logs,
+// without modifying applications.desired_generation or applications.current_release_id,
+// and emits the transactional outbox event app.build.completed.v1.
+func (s *PostgresStore) MarkBuildFailed(ctx context.Context, releaseID string, reason string, durationMs int, buildLogs string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin mark build failed tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	now := time.Now().UTC()
+
+	var appID, workspaceID, commitSHA string
+	updateReleaseQuery := `
+		UPDATE releases
+		SET status = 'BUILD_FAILED',
+		    status_reason = $2,
+		    build_duration_ms = $3,
+		    build_logs = $4,
+		    updated_at = $5
+		WHERE id = $1 AND status = 'BUILDING'
+		RETURNING application_id, workspace_id, COALESCE(commit_sha, '');
+	`
+	err = tx.QueryRow(ctx, updateReleaseQuery, releaseID, reason, durationMs, buildLogs, now).Scan(&appID, &workspaceID, &commitSHA)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return fmt.Errorf("release %s is not in BUILDING state", releaseID)
+		}
+		return fmt.Errorf("update release BUILD_FAILED: %w", err)
+	}
+
+	eventID := NewUUID()
+	outboxID := NewUUID()
+	var commitSHAPtr *string
+	if commitSHA != "" {
+		commitSHAPtr = &commitSHA
+	}
+	payload := map[string]any{
+		"event_id":       eventID,
+		"timestamp":      now.Format(time.RFC3339),
+		"workspace_id":   workspaceID,
+		"application_id": appID,
+		"release_id":     releaseID,
+		"image_digest":   "pending",
+		"commit_sha":     commitSHAPtr,
+		"status":         "BUILD_FAILED",
+	}
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal build failed event: %w", err)
+	}
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO outbox_events (
+			id, event_id, workspace_id, schema_version, topic, payload_json, headers_json, status, retry_count, created_at, updated_at
+		) VALUES ($1, $2, $3, 1, 'app.build.completed.v1', $4, '{}', 'PENDING', 0, $5, $5);
+	`, outboxID, eventID, workspaceID, string(payloadBytes), now)
+	if err != nil {
+		return fmt.Errorf("insert build failed outbox event: %w", err)
+	}
+
+	return tx.Commit(ctx)
 }

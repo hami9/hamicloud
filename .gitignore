@@ -61,6 +61,7 @@ env.bak/
 venv.bak/
 
 # Go
+bin/
 runtime/bin/
 runtime/dist/
 *.exe

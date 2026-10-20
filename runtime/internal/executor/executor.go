@@ -12,6 +12,7 @@ import (
 type Store interface {
 	ClaimNextServiceRelease(ctx context.Context, workerID string, leaseDuration time.Duration, workspaceIDs ...string) (*store.ClaimedWorkload, error)
 	ClaimNextJobAttempt(ctx context.Context, workerID string, leaseDuration time.Duration, workspaceIDs ...string) (*store.ClaimedJobWorkload, error)
+	ClaimNextBuildRelease(ctx context.Context, workerID string, workspaceIDs ...string) (*store.ClaimedBuildTask, error)
 	RenewLease(ctx context.Context, intentID string, currentEpoch int, extension time.Duration) error
 }
 
@@ -23,15 +24,20 @@ type JobReconciler interface {
 	ReconcileJob(ctx context.Context, workload *store.ClaimedJobWorkload) error
 }
 
+type BuildReconciler interface {
+	ReconcileBuild(ctx context.Context, task *store.ClaimedBuildTask) error
+}
+
 type Executor struct {
-	store         Store
-	reconciler    Reconciler
-	jobReconciler JobReconciler
-	workerID      string
-	leaseDuration time.Duration
-	workspaceIDs  []string
-	logger        *slog.Logger
-	wakeCh        chan struct{}
+	store           Store
+	reconciler      Reconciler
+	jobReconciler   JobReconciler
+	buildReconciler BuildReconciler
+	workerID        string
+	leaseDuration   time.Duration
+	workspaceIDs    []string
+	logger          *slog.Logger
+	wakeCh          chan struct{}
 }
 
 func NewExecutor(
@@ -70,6 +76,11 @@ func (e *Executor) Wake() {
 // SetJobReconciler configures an optional JobReconciler for processing job attempts.
 func (e *Executor) SetJobReconciler(jr JobReconciler) {
 	e.jobReconciler = jr
+}
+
+// SetBuildReconciler configures an optional BuildReconciler for processing source builds.
+func (e *Executor) SetBuildReconciler(br BuildReconciler) {
+	e.buildReconciler = br
 }
 
 func (e *Executor) startLeaseHeartbeat(parentCtx context.Context, intentID string, leaseEpoch int) (context.Context, context.CancelFunc) {
@@ -113,9 +124,34 @@ func (e *Executor) startLeaseHeartbeat(parentCtx context.Context, intentID strin
 	return workloadCtx, cleanup
 }
 
-// RunOnce attempts to claim and reconcile a pending job attempt or service release intent.
-// Returns true if an intent was claimed and processed, false if no work was available.
+// RunOnce attempts to claim and reconcile a pending build task, job attempt, or service release intent.
+// Returns true if work was claimed and processed, false if no work was available.
 func (e *Executor) RunOnce(ctx context.Context) (bool, error) {
+	// 0. Try to claim and reconcile pending source build release
+	if e.buildReconciler != nil {
+		buildTask, err := e.store.ClaimNextBuildRelease(ctx, e.workerID, e.workspaceIDs...)
+		if err != nil {
+			return false, fmt.Errorf("claim next build release: %w", err)
+		}
+		if buildTask != nil {
+			e.logger.Info("Claimed source build release",
+				"release_id", buildTask.ReleaseID,
+				"app_slug", buildTask.ApplicationSlug,
+				"commit_sha", buildTask.CommitSHA,
+				"worker_id", e.workerID,
+			)
+			if err := e.buildReconciler.ReconcileBuild(ctx, buildTask); err != nil {
+				e.logger.Error("Reconcile error for source build",
+					"release_id", buildTask.ReleaseID,
+					"app_slug", buildTask.ApplicationSlug,
+					"error", err,
+				)
+				return true, err
+			}
+			return true, nil
+		}
+	}
+
 	// 1. Try to claim and reconcile pending job attempt
 	if e.jobReconciler != nil {
 		jobWorkload, err := e.store.ClaimNextJobAttempt(ctx, e.workerID, e.leaseDuration, e.workspaceIDs...)

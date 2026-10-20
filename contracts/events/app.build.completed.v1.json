@@ -34,7 +34,10 @@
       "format": "uuid"
     },
     "image_digest": {
-      "type": "string"
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "commit_sha": {
       "type": [
@@ -45,6 +48,7 @@
     "status": {
       "type": "string",
       "enum": [
+        "IMAGE_READY",
         "HEALTHY",
         "BUILD_FAILED"
       ]

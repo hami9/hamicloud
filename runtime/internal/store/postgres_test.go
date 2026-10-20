@@ -1336,3 +1336,154 @@ func TestPostgresStore_MarkJobAttemptFailed_WritesDeadLetterRecord(t *testing.T)
 			dlqJobID, dlqWsID, dlqAttempt, dlqExitCode, dlqReason)
 	}
 }
+
+func TestPostgresStore_BuildLifecycle_SuccessAndFailedBuildPreservesHealthyRelease(t *testing.T) {
+	ctx := context.Background()
+	st := connectTestStore(t, ctx)
+
+	now := time.Now().UTC()
+	wsID := createTestWorkspace(t, ctx, st, "M3 Build Store WS")
+	repoID := NewUUID()
+	appID := NewUUID()
+	rel1ID := NewUUID()
+	rel2ID := NewUUID()
+
+	_, err := st.pool.Exec(ctx, `
+		INSERT INTO repositories (id, workspace_id, name, repo_url, webhook_secret, default_branch, created_at, updated_at)
+		VALUES ($1, $2, 'm3-repo', 'https://github.com/hami9/m3-repo.git', 'secret-12345678', 'main', $3, $3);
+	`, repoID, wsID, now)
+	if err != nil {
+		t.Fatalf("insert test repository: %v", err)
+	}
+
+	_, err = st.pool.Exec(ctx, `
+		INSERT INTO applications (
+			id, workspace_id, repository_id, name, slug, workload_type,
+			dockerfile_path, context_dir, git_branch, desired_generation, created_at, updated_at
+		) VALUES ($1, $2, $3, 'M3 App', 'm3-app', 'HTTP_SERVICE', 'Dockerfile', '.', 'main', 0, $4, $4);
+	`, appID, wsID, repoID, now)
+	if err != nil {
+		t.Fatalf("insert test application: %v", err)
+	}
+
+	commit1 := "1111111111111111111111111111111111111111"
+	_, err = st.pool.Exec(ctx, `
+		INSERT INTO releases (
+			id, application_id, workspace_id, repository_id, release_number,
+			commit_sha, git_ref, image_digest, config_json, status, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, 1, $5, 'main', 'pending', '{"port": 80, "health_path": "/healthz"}', 'REQUESTED', $6, $6);
+	`, rel1ID, appID, wsID, repoID, commit1, now)
+	if err != nil {
+		t.Fatalf("insert release 1: %v", err)
+	}
+
+	// 1. Claim Release 1 for build
+	task1, err := st.ClaimNextBuildRelease(ctx, "worker-build-1", wsID)
+	if err != nil {
+		t.Fatalf("ClaimNextBuildRelease failed: %v", err)
+	}
+	if task1 == nil || task1.ReleaseID != rel1ID {
+		t.Fatalf("expected to claim release 1 (%s), got %+v", rel1ID, task1)
+	}
+	if task1.CommitSHA != commit1 || task1.RepoURL != "https://github.com/hami9/m3-repo.git" {
+		t.Fatalf("unexpected task1 metadata: %+v", task1)
+	}
+
+	// 2. Mark Release 1 build succeeded
+	digest1 := "localhost:5000/ws/m3-app@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+	if err := st.MarkBuildSucceeded(ctx, rel1ID, digest1, 1250, "Step 1/1 : FROM nginx:alpine\nSuccessfully built"); err != nil {
+		t.Fatalf("MarkBuildSucceeded failed: %v", err)
+	}
+
+	var rel1Status, rel1Digest string
+	var appGen int
+	err = st.pool.QueryRow(ctx, `SELECT status, image_digest FROM releases WHERE id = $1;`, rel1ID).Scan(&rel1Status, &rel1Digest)
+	if err != nil {
+		t.Fatalf("query release 1: %v", err)
+	}
+	if rel1Status != "IMAGE_READY" || rel1Digest != digest1 {
+		t.Fatalf("expected release 1 IMAGE_READY with digest %s, got status=%s digest=%s", digest1, rel1Status, rel1Digest)
+	}
+
+	err = st.pool.QueryRow(ctx, `SELECT desired_generation FROM applications WHERE id = $1;`, appID).Scan(&appGen)
+	if err != nil || appGen != 1 {
+		t.Fatalf("expected desired_generation=1 after build success, got %d (err=%v)", appGen, err)
+	}
+
+	// Admit and mark Release 1 HEALTHY
+	unadmitted, err := st.ScanUnadmittedReleases(ctx, 50)
+	if err != nil {
+		t.Fatalf("ScanUnadmittedReleases: %v", err)
+	}
+	var foundRel1 *UnadmittedRelease
+	for i := range unadmitted {
+		if unadmitted[i].ReleaseID == rel1ID {
+			foundRel1 = &unadmitted[i]
+			break
+		}
+	}
+	if foundRel1 == nil {
+		t.Fatalf("expected release 1 to be returned by ScanUnadmittedReleases")
+	}
+	intent1, err := st.CreateServiceReleaseIntent(ctx, *foundRel1)
+	if err != nil || intent1 == nil {
+		t.Fatalf("CreateServiceReleaseIntent failed: %v", err)
+	}
+	claimed1, err := st.ClaimNextServiceRelease(ctx, "worker-1", 60*time.Second, wsID)
+	if err != nil || claimed1 == nil {
+		t.Fatalf("ClaimNextServiceRelease failed: %v", err)
+	}
+	becameCurrent, err := st.MarkReleaseHealthy(ctx, claimed1.IntentID, rel1ID, appID, "k8s-uid-1", claimed1.LeaseEpoch)
+	if err != nil || !becameCurrent {
+		t.Fatalf("MarkReleaseHealthy failed: becameCurrent=%v err=%v", becameCurrent, err)
+	}
+
+	// 3. Insert Release 2 (Commit 2) and fail its build
+	commit2 := "2222222222222222222222222222222222222222"
+	_, err = st.pool.Exec(ctx, `
+		INSERT INTO releases (
+			id, application_id, workspace_id, repository_id, release_number,
+			commit_sha, git_ref, image_digest, config_json, status, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, 2, $5, 'main', 'pending', '{"port": 80, "health_path": "/healthz"}', 'REQUESTED', $6, $6);
+	`, rel2ID, appID, wsID, repoID, commit2, now.Add(time.Second))
+	if err != nil {
+		t.Fatalf("insert release 2: %v", err)
+	}
+
+	task2, err := st.ClaimNextBuildRelease(ctx, "worker-build-1", wsID)
+	if err != nil || task2 == nil || task2.ReleaseID != rel2ID {
+		t.Fatalf("expected to claim release 2, got %+v (err=%v)", task2, err)
+	}
+
+	if err := st.MarkBuildFailed(ctx, rel2ID, "dockerfile RUN step exited with code 1", 640, "ERROR: process \"/bin/sh -c exit 1\" did not complete"); err != nil {
+		t.Fatalf("MarkBuildFailed failed: %v", err)
+	}
+
+	// Verify Release 2 is BUILD_FAILED, while Release 1 remains HEALTHY and current_release_id is still rel1ID
+	_, err = st.ScanUnadmittedReleases(ctx, 50)
+	if err != nil {
+		t.Fatalf("ScanUnadmittedReleases after failed build: %v", err)
+	}
+
+	var rel2Status, rel2Reason, currentRelID string
+	err = st.pool.QueryRow(ctx, `SELECT status, COALESCE(status_reason, '') FROM releases WHERE id = $1;`, rel2ID).Scan(&rel2Status, &rel2Reason)
+	if err != nil {
+		t.Fatalf("query release 2: %v", err)
+	}
+	if rel2Status != "BUILD_FAILED" || !strings.Contains(rel2Reason, "exited with code 1") {
+		t.Fatalf("unexpected release 2 state: status=%s reason=%s", rel2Status, rel2Reason)
+	}
+
+	err = st.pool.QueryRow(ctx, `SELECT status FROM releases WHERE id = $1;`, rel1ID).Scan(&rel1Status)
+	if err != nil || rel1Status != "HEALTHY" {
+		t.Fatalf("expected release 1 to remain HEALTHY, got %s (err=%v)", rel1Status, err)
+	}
+
+	err = st.pool.QueryRow(ctx, `SELECT desired_generation, COALESCE(current_release_id::text, '') FROM applications WHERE id = $1;`, appID).Scan(&appGen, &currentRelID)
+	if err != nil {
+		t.Fatalf("query app after failed build: %v", err)
+	}
+	if appGen != 1 || currentRelID != rel1ID {
+		t.Fatalf("expected desired_generation=1 and current_release_id=%s, got gen=%d current=%s", rel1ID, appGen, currentRelID)
+	}
+}

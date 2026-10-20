@@ -1,0 +1,12 @@
+﻿NAME                                                            READY   UP-TO-DATE   AVAILABLE   AGE   CONTAINERS        IMAGES                                                                                                                    SELECTOR
+deployment.apps/hc-svc-c96c08eb-cb12-4f97-bddf-41966cdb4026-3   1/1     1            1           34s   m3-web-19be1ded   localhost:5000/m3-live-19be1ded/m3-web-19be1ded@sha256:a8648530fb397b1320c549e04ca02c7beab08e1dae73dded4987130f734345f5   app.kubernetes.io/instance=hc-svc-c96c08eb-cb12-4f97-bddf-41966cdb4026-3
+
+NAME                                                    TYPE        CLUSTER-IP    EXTERNAL-IP   PORT(S)   AGE   SELECTOR
+service/hc-svc-c96c08eb-cb12-4f97-bddf-41966cdb4026-3   ClusterIP   10.96.46.82   <none>        80/TCP    34s   app.kubernetes.io/instance=hc-svc-c96c08eb-cb12-4f97-bddf-41966cdb4026-3
+
+NAME                                                                      CLASS    HOSTS                                              ADDRESS   PORTS   AGE
+ingress.networking.k8s.io/hc-svc-c96c08eb-cb12-4f97-bddf-41966cdb4026-3   <none>   m3-web-19be1ded.m3-live-19be1ded.hamicloud.local             80      33s
+
+NAME                                                                READY   STATUS    RESTARTS   AGE   IP           NODE                    NOMINATED NODE   READINESS GATES
+pod/hc-svc-c96c08eb-cb12-4f97-bddf-41966cdb4026-3-d86674947-wmx5f   1/1     Running   0          34s   10.244.0.4   desktop-control-plane   <none>           <none>
+

@@ -561,3 +561,134 @@ async def test_m3_trigger_build_no_invented_commit_sha():
             headers={"X-Dev-Subject": "alice"},
         )
         assert trig_invalid.status_code == 422
+
+
+@pytest.mark.anyio
+async def test_m3_failed_build_preserves_currently_serving_application():
+    """Verifies M3 criterion 2: A failed build does not replace a currently serving application."""
+    from sqlalchemy import update
+    from app.db.session import AsyncSessionLocal
+    from app.models.application import Application
+    from app.models.release import Release
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        ws_slug = f"ws-fail-pres-{uuid.uuid4().hex[:6]}"
+        ws_resp = await client.post(
+            "/v1/workspaces",
+            json={"name": "Fail Preserve WS", "slug": ws_slug},
+            headers={"X-Dev-Subject": "alice"},
+        )
+        assert ws_resp.status_code == 201
+        ws_id = ws_resp.json()["id"]
+
+        repo_resp = await client.post(
+            f"/v1/workspaces/{ws_id}/repositories",
+            json={
+                "name": "preserve-repo",
+                "repo_url": "https://github.com/org/preserve.git",
+                "webhook_secret": SECRET_KEY,
+                "default_branch": "main",
+            },
+            headers={"X-Dev-Subject": "alice"},
+        )
+        assert repo_resp.status_code == 201
+        repo_id = repo_resp.json()["id"]
+
+        app_resp = await client.post(
+            f"/v1/workspaces/{ws_id}/apps",
+            json={
+                "name": "Preserve App",
+                "slug": f"pres-app-{uuid.uuid4().hex[:6]}",
+                "repository_id": repo_id,
+                "git_branch": "main",
+            },
+            headers={"X-Dev-Subject": "alice"},
+        )
+        assert app_resp.status_code == 201
+        app_id = app_resp.json()["id"]
+
+        # 1. Trigger Release 1 for Commit 1
+        commit_1 = "1111111111111111111111111111111111111111"
+        rel1_resp = await client.post(
+            f"/v1/apps/{app_id}/builds",
+            json={
+                "commit_sha": commit_1,
+                "git_ref": "main",
+                "commit_message": "Initial healthy release",
+                "port": 80,
+                "health_path": "/healthz",
+            },
+            headers={"X-Dev-Subject": "alice"},
+        )
+        assert rel1_resp.status_code == 202
+        rel1_id = rel1_resp.json()["id"]
+        assert rel1_resp.json()["config_json"]["port"] == 80
+        assert rel1_resp.json()["config_json"]["health_path"] == "/healthz"
+
+        # Simulate runtime completing Release 1 build & Kubernetes rollout -> HEALTHY
+        digest_1 = "localhost:5000/ws/pres-app@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        async with AsyncSessionLocal() as session:
+            await session.execute(
+                update(Release)
+                .where(Release.id == uuid.UUID(rel1_id))
+                .values(
+                    status=ReleaseStatus.HEALTHY,
+                    image_digest=digest_1,
+                    build_duration_ms=1100,
+                    build_logs="Successfully built and pushed commit 1",
+                )
+            )
+            await session.execute(
+                update(Application)
+                .where(Application.id == uuid.UUID(app_id))
+                .values(
+                    desired_generation=1,
+                    current_release_id=uuid.UUID(rel1_id),
+                )
+            )
+            await session.commit()
+
+        # 2. Trigger Release 2 for broken Commit 2
+        commit_2 = "2222222222222222222222222222222222222222"
+        rel2_resp = await client.post(
+            f"/v1/apps/{app_id}/builds",
+            json={
+                "commit_sha": commit_2,
+                "git_ref": "main",
+                "commit_message": "Broken Dockerfile commit",
+            },
+            headers={"X-Dev-Subject": "alice"},
+        )
+        assert rel2_resp.status_code == 202
+        rel2_id = rel2_resp.json()["id"]
+
+        # Simulate runtime BuildReconciler marking Release 2 BUILD_FAILED
+        async with AsyncSessionLocal() as session:
+            await session.execute(
+                update(Release)
+                .where(Release.id == uuid.UUID(rel2_id))
+                .values(
+                    status=ReleaseStatus.BUILD_FAILED,
+                    status_reason="image build failed: docker build failed: exit status 1",
+                    build_duration_ms=420,
+                    build_logs="Step 2/2 : RUN exit 1\nERROR: process did not complete successfully",
+                )
+            )
+            await session.commit()
+
+        # 3. Verify application still serves Release 1 and Release 2 is BUILD_FAILED
+        app_after = (await client.get(f"/v1/apps/{app_id}", headers={"X-Dev-Subject": "alice"})).json()
+        assert app_after["current_release_id"] == rel1_id
+        assert app_after["desired_generation"] == 1
+
+        rels_after = (await client.get(f"/v1/apps/{app_id}/releases", headers={"X-Dev-Subject": "alice"})).json()["items"]
+        assert len(rels_after) == 2
+        assert rels_after[0]["id"] == rel2_id
+        assert rels_after[0]["status"] == ReleaseStatus.BUILD_FAILED.value
+        assert "exit status 1" in rels_after[0]["status_reason"]
+        assert "Step 2/2 : RUN exit 1" in rels_after[0]["build_logs"]
+        assert rels_after[1]["id"] == rel1_id
+        assert rels_after[1]["status"] == ReleaseStatus.HEALTHY.value
+        assert rels_after[1]["image_digest"] == digest_1
+

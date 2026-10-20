@@ -646,7 +646,15 @@ async def trigger_build(
         .limit(1)
     )
     latest_rel = (await db.execute(latest_rel_stmt)).scalar_one_or_none()
-    config_json = latest_rel.config_json if latest_rel else {"port": 8080, "health_path": "/healthz"}
+    config_json = (
+        dict(latest_rel.config_json)
+        if (latest_rel and latest_rel.config_json)
+        else {"port": 8080, "health_path": "/healthz"}
+    )
+    if payload.port is not None:
+        config_json["port"] = payload.port
+    if payload.health_path is not None:
+        config_json["health_path"] = payload.health_path
 
     release = Release(
         id=uuid.uuid4(),

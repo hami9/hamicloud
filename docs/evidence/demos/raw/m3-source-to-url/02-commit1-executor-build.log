@@ -1,0 +1,9 @@
+﻿{"time":"2026-10-20T09:40:27.6708532+03:30","level":"INFO","msg":"Starting HamiCloud Execution Worker process","version":"0.1.0"}
+{"time":"2026-10-20T09:40:27.7483145+03:30","level":"INFO","msg":"Connected to Kubernetes cluster","namespace":"default","ingress_domain":"hamicloud.local"}
+{"time":"2026-10-20T09:40:27.7483145+03:30","level":"INFO","msg":"Executor initialized with configuration","environment":"development","lease_duration":60000000000,"worker_id":"local-worker-1","run_once":true,"workspace_ids":["f919b8e7-1b35-41b2-a97e-aa7fe072975f"]}
+{"time":"2026-10-20T09:40:27.7483145+03:30","level":"INFO","msg":"Executing single executor reconciliation pass (RUN_ONCE)"}
+{"time":"2026-10-20T09:40:28.0197775+03:30","level":"INFO","msg":"Claimed source build release","release_id":"7fd3f352-c99f-4622-8b08-6e3d2f343880","app_slug":"m3-web-19be1ded","commit_sha":"23b43db154d2f0e27c420b6fb019673baf61821b","worker_id":"local-worker-1"}
+{"time":"2026-10-20T09:40:28.0197775+03:30","level":"INFO","msg":"Starting source build reconciliation","release_id":"7fd3f352-c99f-4622-8b08-6e3d2f343880","app_id":"c96c08eb-cb12-4f97-bddf-41966cdb4026","app_slug":"m3-web-19be1ded","repo_url":"https://github.com/hami9/m3-live-demo.git","commit_sha":"23b43db154d2f0e27c420b6fb019673baf61821b","git_ref":"main"}
+{"time":"2026-10-20T09:41:27.688717+03:30","level":"INFO","msg":"Source build succeeded","release_id":"7fd3f352-c99f-4622-8b08-6e3d2f343880","app_slug":"m3-web-19be1ded","image_digest":"localhost:5000/m3-live-19be1ded/m3-web-19be1ded@sha256:e2e2503c715a3633076f8838100cafcf6d88eb9a14dc992de20959f6a92b868b","duration_ms":59654}
+{"time":"2026-10-20T09:41:27.7651635+03:30","level":"INFO","msg":"Executor RunOnce completed successfully","workload_processed":true}
+

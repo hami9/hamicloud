@@ -75,12 +75,15 @@ func main() {
 		rec.SetRetryPolicy(30, 1*time.Second)
 	}
 	jobRec := reconciler.NewJobReconciler(pgStore, jobRunner, logger)
+	buildRunner := reconciler.NewIsolatedBuildKitRunner("", "")
+	buildRec := reconciler.NewBuildReconciler(pgStore, buildRunner, logger)
 
 	exec := executor.NewExecutor(pgStore, rec, cfg.WorkerID, cfg.LeaseDuration, logger)
 	if len(cfg.WorkspaceIDs) > 0 {
 		exec.SetWorkspaceFilter(cfg.WorkspaceIDs...)
 	}
 	exec.SetJobReconciler(jobRec)
+	exec.SetBuildReconciler(buildRec)
 
 	logger.Info("Executor initialized with configuration",
 		"environment", cfg.Environment,

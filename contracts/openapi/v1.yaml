@@ -2247,6 +2247,15 @@ components:
           type: [string, 'null']
           maxLength: 255
           example: "feat: add user authentication"
+        port:
+          type: [integer, 'null']
+          minimum: 1
+          maximum: 65535
+          example: 8080
+        health_path:
+          type: [string, 'null']
+          maxLength: 255
+          example: "/healthz"
       example:
         commit_sha: "7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b"
         git_ref: "main"

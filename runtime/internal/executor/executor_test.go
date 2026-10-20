@@ -14,6 +14,7 @@ type mockStore struct {
 	mu           sync.Mutex
 	claimed      *store.ClaimedWorkload
 	claimedJob   *store.ClaimedJobWorkload
+	claimedBuild *store.ClaimedBuildTask
 	claimErr     error
 	renewCalls   int
 	renewErr     error
@@ -30,6 +31,12 @@ func (m *mockStore) ClaimNextJobAttempt(ctx context.Context, workerID string, le
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.claimedJob, m.claimErr
+}
+
+func (m *mockStore) ClaimNextBuildRelease(ctx context.Context, workerID string, workspaceIDs ...string) (*store.ClaimedBuildTask, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.claimedBuild, m.claimErr
 }
 
 func (m *mockStore) RenewLease(ctx context.Context, intentID string, currentEpoch int, extension time.Duration) error {

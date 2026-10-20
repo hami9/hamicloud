@@ -1,0 +1,11 @@
+[registry."hamicloud-registry:5000"]
+  http = true
+  insecure = true
+
+[registry."localhost:5000"]
+  http = true
+  insecure = true
+
+[registry."127.0.0.1:5000"]
+  http = true
+  insecure = true

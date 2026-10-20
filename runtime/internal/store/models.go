@@ -106,3 +106,18 @@ type ClaimedJobWorkload struct {
 	DeterministicResourceName string
 	LeaseEpoch                int
 }
+
+type ClaimedBuildTask struct {
+	ReleaseID       string
+	ApplicationID   string
+	ApplicationSlug string
+	WorkspaceID     string
+	WorkspaceSlug   string
+	ReleaseNumber   int
+	RepositoryID    string
+	RepoURL         string
+	CommitSHA       string
+	GitRef          string
+	DockerfilePath  string
+	ContextDir      string
+}

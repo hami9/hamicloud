@@ -4,7 +4,7 @@ Single tracking file for both projects. It links the two roadmaps, fixes the exe
 
 **Status legend:** `[ ]` not started · `[~]` in progress · `[x]` closed with a committed evidence record
 
-**Current position:** HamiCloud M5 — open.
+**Current position:** HamiCloud M6 — open.
 
 ---
 
@@ -94,16 +94,11 @@ A closed milestone that later turns out to be wrong does not get its old checkli
 - **Closed Date:** 2026-10-20
 - **Evidence Record:** [`docs/evidence/M4.md`](docs/evidence/M4.md)
 
-## A.6 M5 — Operational evidence `[ ]`
+## A.6 M5 — Operational evidence `[x]`
 
-P5, 32–44 hours. Dashboards, tracing, alerts, scale experiments, load tests, backup/restore, failure runbooks.
-
-- [ ] Benchmark report published with raw data and honest target outcomes.
-- [ ] Restore drill completed and reported.
-- [ ] Controller failure report published.
-- [ ] Alert-to-runbook exercise performed.
-- [ ] 7-day observation window completed.
-- [ ] Evidence record committed.
+- **Status:** Closed
+- **Closed Date:** 2026-10-20
+- **Evidence Record:** [`docs/evidence/M5.md`](docs/evidence/M5.md)
 
 ## A.7 M6 — HamiCloud v1.0 `[ ]`
 

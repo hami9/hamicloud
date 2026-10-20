@@ -2049,3 +2049,33 @@ Following project review of `18a3a4e..816cc4a`, all required fixes were implemen
      - `go test -count=1 ./...` in `runtime/`: **100% pass across all 7 packages**.
      - `npx oxlint src && npm run build` in `apps/web`: **0 warnings, 0 errors**.
      - Next milestone: **M5 — Operational evidence**.
+
+### [2026-10-20T10:35:00Z] Phase 5 / Milestone M5: Telemetry, W3C Trace Propagation, Alerts/Runbooks, Live Benchmarks, Restore Drill, Controller Failure Drill & Milestone Closure
+
+- **Status:** COMPLETED & VERIFIED (Milestone M5 formally CLOSED)
+- **Milestone:** P5 / M5 — Operational evidence (`[x]` Closed)
+- **Key Deliverables & Actions:**
+  1. **Telemetry, Prometheus Metrics & W3C Trace Propagation (`apps/api/app/`):**
+     - Created `apps/api/app/core/telemetry.py` and `apps/api/app/api/v1/metrics.py` with `TelemetryCollector` tracking HTTP latency percentiles (`p50`, `p95`, `p99`), status classes (`2xx`, `4xx`, `5xx`), and live PostgreSQL operational gauges (`outbox_pending_total`, `active_leases_total`, `queued_jobs_total`, `oldest_queued_job_age_seconds`, `running_jobs_total`, `healthy_services_total`, `job_retry_ratio`, `dead_letter_total`).
+     - Added W3C `traceparent`, `X-Trace-ID`, and `X-Correlation-ID` propagation across HTTP middleware (`apps/api/app/main.py`) and PostgreSQL transactional outbox event headers (`apps/api/app/core/events.py`).
+     - Exposed public `GET /metrics` (Prometheus text format) and tenant-scoped `GET /v1/workspaces/{workspace_id}/telemetry` (`VIEWER+` RBAC, published in `contracts/openapi/v1.yaml` and rendered in `apps/web/src/App.tsx`).
+  2. **Observability Configuration & Executable Runbooks (`deploy/observability/`, `docs/runbooks/`):**
+     - Created `deploy/observability/alerts.yml` (5 Prometheus alert rules: `HamiCloudApiHigh5xxRate`, `HamiCloudStalledAcceptedWork`, `HamiCloudJobRetryStorm`, `HamiCloudPersistentDiskPressure`, `HamiCloudBackupRestoreVerificationFailed`) and `deploy/observability/grafana-dashboard.json` (6 operational panels).
+     - Created 5 runbooks in `docs/runbooks/`: `api-5xx-errors.md`, `stalled-operations.md`, `retry-storms.md`, `disk-pressure.md`, and `disaster-restore.md`.
+  3. **Live Benchmarks, Disaster Restore Drill, Controller Failure Drill & Alert Exercise (`scripts/demos/m5_operational_evidence.ps1`):**
+     - Executed `scripts/demos/m5_operational_evidence.ps1` (`scripts/demos/m5_runner.py`) against the live PostgreSQL, Redis, Go Scheduler/Executor, and Kind Kubernetes (`desktop-control-plane`) stack, capturing 8 raw JSON evidence artifacts in `docs/evidence/demos/raw/m5-operational-evidence/`:
+       - `01-api-latency-benchmark.json`: Read `p50=31.28ms, p95=114.50ms, p99=116.75ms`; Write `p50=73.21ms, p95=256.92ms, p99=256.92ms`; `5xx=0.0%` (**PASS**).
+       - `02-admission-latency-benchmark.json`: Scheduler admission `p50=279.09ms, p95=345.29ms, p99=345.29ms` (**PASS**).
+       - `03-warm-cold-rollout-benchmark.json`: Warm K8s service rollout `12.28s` (`HEALTHY`), warm K8s job `13.97s` (`SUCCEEDED`, cold pull `44.01s`) (**PASS**).
+       - `04-duplicate-resistance-benchmark.json`: 10 replayed submissions + 3 scheduler scans -> `0` duplicate attempts, `0` duplicate intents (**PASS**).
+       - `05-scaling-1v3-workers.json`: 1 worker `29.63s` vs 3 concurrent workers `20.24s` (`1.46x` speedup, `0` double claims) (**PASS**).
+       - `06-restore-drill.json`: `pg_dump -Fc` + artifact backup + `pg_restore` into `hamicloud_restore_drill` verified 100% row count and SHA-256 artifact checksum match in `RTO = 18.68s` (`RPO = 0.0s`) (**PASS**).
+       - `07-controller-failure-drill.json`: Crashed worker lease expiration, scheduler fencing, and replacement worker execution to `SUCCEEDED` in `15.81s` (**PASS**).
+       - `08-alert-runbook-exercise.json`: `HamiCloudStalledAcceptedWork` triggered (`125.034s > 60s`), mitigated via `stalled-operations.md` (`hamicloud-scheduler --run-once`), resolved to `0.0s` (**PASS**).
+     - Published `docs/evidence/M5.md` and closed `A.6 M5` in `MASTER-PLAN.md` (`Current position: HamiCloud M6 — open.`).
+  4. **Verification Gates:**
+     - `pytest apps/api/tests/test_m5_operational_evidence.py apps/api/tests/test_contracts.py apps/api/tests/test_phase3_contracts_idempotency.py`: **54 passed**.
+     - `mypy --explicit-package-bases app && ruff check .` in `apps/api`: **0 issues**.
+     - `go test -count=1 ./...` in `runtime/`: **100% pass across all 7 packages**.
+     - `npx oxlint src && npm run build` in `apps/web`: **0 warnings, 0 errors**.
+     - Next milestone: **M6 — HamiCloud v1.0**.

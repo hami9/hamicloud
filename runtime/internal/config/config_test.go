@@ -23,6 +23,8 @@ func clearEnv(t *testing.T) {
 		"INGRESS_DOMAIN",
 		"LEASE_DURATION_SECONDS",
 		"RECONCILIATION_PERIOD_SECONDS",
+		"HEALTH_ADDR",
+		"SHUTDOWN_TIMEOUT",
 	}
 	for _, k := range keys {
 		os.Unsetenv(k)
@@ -66,6 +68,12 @@ func TestLoadFromEnv_TableDriven(t *testing.T) {
 				if !strings.HasSuffix(cfg.ArtifactsDir, "artifacts") {
 					t.Errorf("expected default ArtifactsDir to end in artifacts, got %q", cfg.ArtifactsDir)
 				}
+				if cfg.HealthAddr != ":8081" {
+					t.Errorf("expected HealthAddr ':8081', got %q", cfg.HealthAddr)
+				}
+				if cfg.ShutdownTimeout != 30*time.Second {
+					t.Errorf("expected ShutdownTimeout 30s, got %v", cfg.ShutdownTimeout)
+				}
 			},
 		},
 		{
@@ -101,6 +109,8 @@ func TestLoadFromEnv_TableDriven(t *testing.T) {
 				"ARTIFACTS_DIR":                 "/custom/artifacts",
 				"LEASE_DURATION_SECONDS":        "120",
 				"RECONCILIATION_PERIOD_SECONDS": "45",
+				"HEALTH_ADDR":                   ":9090",
+				"SHUTDOWN_TIMEOUT":              "45s",
 			},
 			expectErr: false,
 			validateCfg: func(t *testing.T, cfg *config.Config) {
@@ -125,7 +135,22 @@ func TestLoadFromEnv_TableDriven(t *testing.T) {
 				if cfg.ReconciliationPeriod != 45*time.Second {
 					t.Errorf("expected ReconciliationPeriod 45s, got %v", cfg.ReconciliationPeriod)
 				}
+				if cfg.HealthAddr != ":9090" {
+					t.Errorf("expected HealthAddr ':9090', got %q", cfg.HealthAddr)
+				}
+				if cfg.ShutdownTimeout != 45*time.Second {
+					t.Errorf("expected ShutdownTimeout 45s, got %v", cfg.ShutdownTimeout)
+				}
 			},
+		},
+		{
+			name: "invalid SHUTDOWN_TIMEOUT returns error",
+			env: map[string]string{
+				"ENVIRONMENT":      "development",
+				"SHUTDOWN_TIMEOUT": "invalid-seconds",
+			},
+			expectErr:    true,
+			errSubstring: "SHUTDOWN_TIMEOUT",
 		},
 		{
 			name: "rejected SQLAlchemy postgresql+asyncpg format",

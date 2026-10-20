@@ -143,3 +143,17 @@ func (l *EventListener) Start(ctx context.Context) error {
 	l.logger.Info("NATS event listener stopped")
 	return nil
 }
+
+// Close unsubscribes all active subscriptions and terminates the NATS connection.
+func (l *EventListener) Close() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, sub := range l.subs {
+		_ = sub.Unsubscribe()
+	}
+	l.subs = nil
+	if l.nc != nil {
+		l.nc.Close()
+		l.nc = nil
+	}
+}

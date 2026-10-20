@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/hami9/hamicloud/runtime/internal/store"
@@ -19,10 +21,13 @@ type Store interface {
 }
 
 type Scheduler struct {
-	store      Store
-	jobDeleter store.JobDeleter
-	logger     *slog.Logger
-	wakeCh     chan struct{}
+	store         Store
+	jobDeleter    store.JobDeleter
+	logger        *slog.Logger
+	wakeCh        chan struct{}
+	wg            *sync.WaitGroup
+	stopAdmission atomic.Bool
+	onTick        func()
 }
 
 func NewScheduler(st Store, jobDeleter store.JobDeleter, logger *slog.Logger) *Scheduler {
@@ -37,6 +42,27 @@ func NewScheduler(st Store, jobDeleter store.JobDeleter, logger *slog.Logger) *S
 	}
 }
 
+// SetWaitGroup registers a WaitGroup to track in-flight admission passes for graceful shutdown.
+func (s *Scheduler) SetWaitGroup(wg *sync.WaitGroup) {
+	s.wg = wg
+}
+
+// SetOnTick registers a callback that fires on each scheduler loop tick.
+func (s *Scheduler) SetOnTick(fn func()) {
+	s.onTick = fn
+}
+
+// Stop signals the scheduler to cease admitting new work and terminate its loop.
+func (s *Scheduler) Stop() {
+	s.stopAdmission.Store(true)
+}
+
+func (s *Scheduler) tick() {
+	if s.onTick != nil {
+		s.onTick()
+	}
+}
+
 // Wake non-blockingly signals the scheduler to perform an immediate admission pass.
 func (s *Scheduler) Wake() {
 	select {
@@ -47,6 +73,14 @@ func (s *Scheduler) Wake() {
 
 // RunOnce scans for releases and jobs awaiting execution intents and admits them.
 func (s *Scheduler) RunOnce(ctx context.Context) (int, error) {
+	if s.stopAdmission.Load() {
+		return 0, nil
+	}
+	if s.wg != nil {
+		s.wg.Add(1)
+		defer s.wg.Done()
+	}
+
 	// 0. Recover any expired job attempt intents from crashed executors
 	recovered, err := s.store.RecoverExpiredJobIntents(ctx, s.jobDeleter)
 	if err != nil {
@@ -120,15 +154,18 @@ func (s *Scheduler) RunOnce(ctx context.Context) (int, error) {
 	return totalAdmitted, nil
 }
 
-// Start runs the admission scheduler loop until context is cancelled.
+// Start runs the admission scheduler loop until context is cancelled or Stop is called.
 func (s *Scheduler) Start(ctx context.Context, period time.Duration) error {
 	s.logger.Info("Starting Scheduler admission loop", "period", period)
 	ticker := time.NewTicker(period)
 	defer ticker.Stop()
 
 	// Initial scan immediately
-	if _, err := s.RunOnce(ctx); err != nil {
-		s.logger.Warn("Initial scheduler admission run reported error", "error", err)
+	s.tick()
+	if !s.stopAdmission.Load() {
+		if _, err := s.RunOnce(ctx); err != nil {
+			s.logger.Warn("Initial scheduler admission run reported error", "error", err)
+		}
 	}
 
 	for {
@@ -137,10 +174,20 @@ func (s *Scheduler) Start(ctx context.Context, period time.Duration) error {
 			s.logger.Info("Scheduler admission loop stopping")
 			return ctx.Err()
 		case <-ticker.C:
+			s.tick()
+			if s.stopAdmission.Load() {
+				s.logger.Info("Scheduler admission loop stopping (shutdown requested)")
+				return nil
+			}
 			if _, err := s.RunOnce(ctx); err != nil {
 				s.logger.Warn("Scheduler admission cycle reported error", "error", err)
 			}
 		case <-s.wakeCh:
+			s.tick()
+			if s.stopAdmission.Load() {
+				s.logger.Info("Scheduler admission loop stopping (shutdown requested)")
+				return nil
+			}
 			s.logger.Info("Scheduler triggered by event notification")
 			if _, err := s.RunOnce(ctx); err != nil {
 				s.logger.Warn("Scheduler event admission pass reported error", "error", err)

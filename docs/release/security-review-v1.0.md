@@ -41,6 +41,7 @@ Prior to tagging HamiCloud `v1.0.0`, an end-to-end security review was conducted
   - `capabilities.drop: ["ALL"]`
   - `seccompProfile.type: RuntimeDefault`
   - `automountServiceAccountToken: false` (except `hamicloud-executor`, which requires Kubernetes API access)
+- **Workload Non-Root Policy:** `WORKLOAD_RUN_AS_NON_ROOT` defaults `true` in production (`workload.runAsNonRoot: true` in Helm) and `false` in development so standard root demo containers function out of the box.
 - **Verification:** `services/runtime/internal/k8s/manifests_test.go` and `apps/api/tests/test_m6_v1_release.py`.
 
 ### 2.4 Network Isolation
@@ -54,6 +55,10 @@ Prior to tagging HamiCloud `v1.0.0`, an end-to-end security review was conducted
 ### 2.6 Concurrency & Split-Brain Prevention
 - **Control:** Mutating endpoints enforce `Idempotency-Key` deduplication (`200 OK` replay on identical payload, `409 Conflict` on mismatched payload). Reconciler workers acquire Redis lease locks with monotonic fencing tokens before touching Kubernetes resources.
 - **Verification:** `apps/api/tests/test_m3_resilience.py` and `docs/evidence/M5.md` crash-recovery drill.
+
+### 2.7 Health Probes and Graceful Shutdown
+- **Control:** Runtime scheduler and executor expose HTTP `/healthz` (loop tick liveness) and `/readyz` (DB pool connectivity & drain status) on `HEALTH_ADDR` (`:8081`). On SIGINT/SIGTERM, workers stop claiming work and wait for in-flight tasks via `sync.WaitGroup` up to `SHUTDOWN_TIMEOUT`.
+- **Verification:** `runtime/internal/health/server_test.go` and Helm template validation.
 
 ---
 

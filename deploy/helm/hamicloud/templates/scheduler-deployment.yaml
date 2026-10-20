@@ -24,6 +24,7 @@ spec:
     spec:
       serviceAccountName: hamicloud-scheduler
       automountServiceAccountToken: false
+      terminationGracePeriodSeconds: {{ .Values.scheduler.terminationGracePeriodSeconds | default 45 }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
@@ -35,6 +36,10 @@ spec:
         - name: scheduler
           image: "{{ .Values.scheduler.image.repository }}@{{ .Values.scheduler.image.digest }}"
           imagePullPolicy: "{{ .Values.scheduler.image.pullPolicy }}"
+          ports:
+            - name: health
+              containerPort: {{ .Values.scheduler.healthPort | default 8081 }}
+              protocol: TCP
           envFrom:
             - configMapRef:
                 name: hamicloud-config
@@ -44,12 +49,31 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.secret.existingSecret | default "hamicloud-secret" | quote }}
                   key: RUNTIME_DATABASE_URL
+            - name: HEALTH_ADDR
+              value: ":{{ .Values.scheduler.healthPort | default 8081 }}"
+            - name: SHUTDOWN_TIMEOUT
+              value: {{ .Values.scheduler.shutdownTimeout | default "30s" | quote }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:
               drop:
                 - ALL
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
           resources:
             requests:
               cpu: "{{ .Values.scheduler.resources.requests.cpu }}"
@@ -57,3 +81,6 @@ spec:
             limits:
               cpu: "{{ .Values.scheduler.resources.limits.cpu }}"
               memory: "{{ .Values.scheduler.resources.limits.memory }}"
+      volumes:
+        - name: tmp
+          emptyDir: {}

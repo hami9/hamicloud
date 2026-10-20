@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/hami9/hamicloud/runtime/internal/store"
@@ -38,6 +40,9 @@ type Executor struct {
 	workspaceIDs    []string
 	logger          *slog.Logger
 	wakeCh          chan struct{}
+	wg              *sync.WaitGroup
+	stopClaiming    atomic.Bool
+	onTick          func()
 }
 
 func NewExecutor(
@@ -81,6 +86,27 @@ func (e *Executor) SetJobReconciler(jr JobReconciler) {
 // SetBuildReconciler configures an optional BuildReconciler for processing source builds.
 func (e *Executor) SetBuildReconciler(br BuildReconciler) {
 	e.buildReconciler = br
+}
+
+// SetWaitGroup registers a WaitGroup to track in-flight reconciliations for graceful shutdown.
+func (e *Executor) SetWaitGroup(wg *sync.WaitGroup) {
+	e.wg = wg
+}
+
+// SetOnTick registers a callback that fires on each executor loop tick.
+func (e *Executor) SetOnTick(fn func()) {
+	e.onTick = fn
+}
+
+// Stop signals the executor to cease claiming new work and terminate its loop.
+func (e *Executor) Stop() {
+	e.stopClaiming.Store(true)
+}
+
+func (e *Executor) tick() {
+	if e.onTick != nil {
+		e.onTick()
+	}
 }
 
 func (e *Executor) startLeaseHeartbeat(parentCtx context.Context, intentID string, leaseEpoch int) (context.Context, context.CancelFunc) {
@@ -127,6 +153,10 @@ func (e *Executor) startLeaseHeartbeat(parentCtx context.Context, intentID strin
 // RunOnce attempts to claim and reconcile a pending build task, job attempt, or service release intent.
 // Returns true if work was claimed and processed, false if no work was available.
 func (e *Executor) RunOnce(ctx context.Context) (bool, error) {
+	if e.stopClaiming.Load() {
+		return false, nil
+	}
+
 	// 0. Try to claim and reconcile pending source build release
 	if e.buildReconciler != nil {
 		buildTask, err := e.store.ClaimNextBuildRelease(ctx, e.workerID, e.workspaceIDs...)
@@ -134,6 +164,10 @@ func (e *Executor) RunOnce(ctx context.Context) (bool, error) {
 			return false, fmt.Errorf("claim next build release: %w", err)
 		}
 		if buildTask != nil {
+			if e.wg != nil {
+				e.wg.Add(1)
+				defer e.wg.Done()
+			}
 			e.logger.Info("Claimed source build release",
 				"release_id", buildTask.ReleaseID,
 				"app_slug", buildTask.ApplicationSlug,
@@ -159,6 +193,10 @@ func (e *Executor) RunOnce(ctx context.Context) (bool, error) {
 			return false, fmt.Errorf("claim next job attempt: %w", err)
 		}
 		if jobWorkload != nil {
+			if e.wg != nil {
+				e.wg.Add(1)
+				defer e.wg.Done()
+			}
 			e.logger.Info("Claimed job attempt intent",
 				"intent_id", jobWorkload.IntentID,
 				"job_id", jobWorkload.JobID,
@@ -192,6 +230,11 @@ func (e *Executor) RunOnce(ctx context.Context) (bool, error) {
 		return false, nil // No pending intents
 	}
 
+	if e.wg != nil {
+		e.wg.Add(1)
+		defer e.wg.Done()
+	}
+
 	e.logger.Info("Claimed service release intent",
 		"intent_id", workload.IntentID,
 		"release_id", workload.ReleaseID,
@@ -223,6 +266,8 @@ func (e *Executor) Start(ctx context.Context, idlePollInterval time.Duration) er
 		"poll_interval", idlePollInterval,
 	)
 
+	e.tick()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -230,6 +275,13 @@ func (e *Executor) Start(ctx context.Context, idlePollInterval time.Duration) er
 			return ctx.Err()
 		default:
 		}
+
+		if e.stopClaiming.Load() {
+			e.logger.Info("Executor control loop stopping (shutdown requested)")
+			return nil
+		}
+
+		e.tick()
 
 		processed, err := e.RunOnce(ctx)
 		if err != nil {

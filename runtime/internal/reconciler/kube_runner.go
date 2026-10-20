@@ -98,6 +98,18 @@ func sanitizeResourceName(name string) string {
 	return s
 }
 
+// isWorkloadRunAsNonRoot returns whether workload pods and containers should enforce runAsNonRoot.
+// It defaults to true in production (ENVIRONMENT=production or unset), and false in development
+// so standard alpine/nginx root demo containers run without issues.
+// An explicit WORKLOAD_RUN_AS_NON_ROOT ("true" or "false") always takes precedence.
+func isWorkloadRunAsNonRoot() bool {
+	if val, ok := os.LookupEnv("WORKLOAD_RUN_AS_NON_ROOT"); ok && val != "" {
+		return val == "true" || val == "1"
+	}
+	env := os.Getenv("ENVIRONMENT")
+	return env != "development"
+}
+
 func hardenedContainerSecurityContext() *corev1.SecurityContext {
 	allowPrivEsc := false
 	sc := &corev1.SecurityContext{
@@ -110,7 +122,7 @@ func hardenedContainerSecurityContext() *corev1.SecurityContext {
 			Type: corev1.SeccompProfileTypeRuntimeDefault,
 		},
 	}
-	if os.Getenv("WORKLOAD_RUN_AS_NON_ROOT") == "true" {
+	if isWorkloadRunAsNonRoot() {
 		nonRoot := true
 		sc.RunAsNonRoot = &nonRoot
 	}
@@ -123,7 +135,7 @@ func workloadPodSecurityContext() *corev1.PodSecurityContext {
 			Type: corev1.SeccompProfileTypeRuntimeDefault,
 		},
 	}
-	if os.Getenv("WORKLOAD_RUN_AS_NON_ROOT") == "true" {
+	if isWorkloadRunAsNonRoot() {
 		nonRoot := true
 		psc.RunAsNonRoot = &nonRoot
 	}

@@ -127,3 +127,50 @@ func TestScheduler_Wake(t *testing.T) {
 	cancel()
 	<-done
 }
+
+func TestScheduler_GracefulShutdownAndTick(t *testing.T) {
+	st := &mockSchedulerStore{
+		unadmittedReleases: []store.UnadmittedRelease{
+			{ReleaseID: "rel-1", DesiredGeneration: 1, ApplicationSlug: "app-1"},
+		},
+	}
+	sched := NewScheduler(st, nil, nil)
+
+	var wg sync.WaitGroup
+	sched.SetWaitGroup(&wg)
+
+	ticked := false
+	sched.SetOnTick(func() {
+		ticked = true
+	})
+
+	ctx := context.Background()
+
+	// 1. RunOnce executes and increments/decrements WG
+	count, err := sched.RunOnce(ctx)
+	if err != nil {
+		t.Fatalf("unexpected RunOnce error: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 admitted, got %d", count)
+	}
+
+	// 2. Stop stops claiming
+	sched.Stop()
+	count, err = sched.RunOnce(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error after stop: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected 0 admitted after stop, got %d", count)
+	}
+
+	// 3. Start immediately returns when stopped
+	startErr := sched.Start(ctx, 100*time.Millisecond)
+	if startErr != nil {
+		t.Fatalf("expected Start to return nil when stopped, got %v", startErr)
+	}
+	if !ticked {
+		t.Fatal("expected tick callback to have fired")
+	}
+}

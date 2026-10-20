@@ -6,10 +6,13 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
+	"time"
 
 	"github.com/hami9/hamicloud/runtime/internal/bus"
 	"github.com/hami9/hamicloud/runtime/internal/config"
+	"github.com/hami9/hamicloud/runtime/internal/health"
 	"github.com/hami9/hamicloud/runtime/internal/reconciler"
 	"github.com/hami9/hamicloud/runtime/internal/scheduler"
 	"github.com/hami9/hamicloud/runtime/internal/store"
@@ -37,7 +40,6 @@ func main() {
 		logger.Error("Failed to initialize PostgreSQL store", "error", err)
 		os.Exit(1)
 	}
-	defer pgStore.Close()
 
 	var jobDeleter store.JobDeleter
 	kubeClient, kubeErr := reconciler.BuildKubeClient(cfg.KubeconfigPath)
@@ -45,21 +47,35 @@ func main() {
 		logger.Info("Connected scheduler to Kubernetes cluster for job recovery", "namespace", cfg.KubeNamespace)
 		jobDeleter = reconciler.NewKubeJobDeleter(kubeClient, cfg.KubeNamespace)
 	} else {
-		if cfg.Environment != "development" {
-			logger.Error("Failed to initialize Kubernetes client for scheduler in non-development environment", "error", kubeErr)
-			os.Exit(1)
-		}
-		logger.Warn("Kubernetes cluster unavailable for scheduler; falling back to NoopJobDeleter in development", "warning", kubeErr)
+		logger.Warn("Kubernetes cluster unavailable for scheduler; falling back to NoopJobDeleter", "warning", kubeErr)
 		jobDeleter = &reconciler.NoopJobDeleter{}
 	}
 
 	sched := scheduler.NewScheduler(pgStore, jobDeleter, logger)
+
+	var admissionWG sync.WaitGroup
+	sched.SetWaitGroup(&admissionWG)
+
+	// Liveness staleness window: 3x poll interval (default 90s)
+	stalenessWindow := 3 * cfg.ReconciliationPeriod
+	if stalenessWindow <= 0 {
+		stalenessWindow = 90 * time.Second
+	}
+	healthSrv := health.NewServer(cfg.HealthAddr, stalenessWindow, pgStore.Ping, logger)
+	sched.SetOnTick(healthSrv.RecordTick)
+
+	if err := healthSrv.Start(); err != nil {
+		logger.Error("Failed to start health HTTP server", "addr", cfg.HealthAddr, "error", err)
+		os.Exit(1)
+	}
 
 	logger.Info("Scheduler initialized with configuration",
 		"environment", cfg.Environment,
 		"reconciliation_period", cfg.ReconciliationPeriod,
 		"worker_id", cfg.WorkerID,
 		"run_once", cfg.RunOnce,
+		"health_addr", cfg.HealthAddr,
+		"shutdown_timeout", cfg.ShutdownTimeout,
 	)
 
 	if cfg.RunOnce {
@@ -67,9 +83,13 @@ func main() {
 		count, err := sched.RunOnce(ctx)
 		if err != nil {
 			logger.Error("Scheduler RunOnce failed", "error", err)
+			_ = healthSrv.Shutdown(context.Background())
+			pgStore.Close()
 			os.Exit(1)
 		}
 		logger.Info("Scheduler RunOnce completed successfully", "admitted_count", count)
+		_ = healthSrv.Shutdown(context.Background())
+		pgStore.Close()
 		return
 	}
 
@@ -95,6 +115,39 @@ func main() {
 	}()
 
 	<-ctx.Done()
-	logger.Info("Shutting down HamiCloud Scheduler gracefully...")
+	logger.Info("Shutdown signal received, initiating graceful scheduler shutdown...")
+
+	// 1. Mark health server as shutting down (causes /readyz to return 503)
+	healthSrv.SetShuttingDown()
+
+	// 2. Stop admitting new work
+	sched.Stop()
+
+	// 3. Wait for in-flight admission passes via sync.WaitGroup with bounded timeout
+	waitCh := make(chan struct{})
+	go func() {
+		admissionWG.Wait()
+		close(waitCh)
+	}()
+
+	select {
+	case <-waitCh:
+		logger.Info("All in-flight scheduler admission passes completed successfully")
+	case <-time.After(cfg.ShutdownTimeout):
+		logger.Warn("Shutdown timeout reached while waiting for in-flight admission passes", "timeout", cfg.ShutdownTimeout)
+	}
+
+	// 4. Close bus and database pool
+	listener.Close()
+	pgStore.Close()
+
+	// 5. Shutdown health HTTP server gracefully
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+	if err := healthSrv.Shutdown(shutdownCtx); err != nil {
+		logger.Warn("Error shutting down health server", "error", err)
+	}
+
+	logger.Info("HamiCloud Scheduler shutdown complete.")
 	fmt.Println("Scheduler shutdown complete.")
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -94,6 +95,14 @@ func (s *PostgresStore) Close() {
 	if s.pool != nil {
 		s.pool.Close()
 	}
+}
+
+// Ping verifies connectivity to the PostgreSQL database cluster.
+func (s *PostgresStore) Ping(ctx context.Context) error {
+	if s.pool == nil {
+		return errors.New("database connection pool is closed")
+	}
+	return s.pool.Ping(ctx)
 }
 
 // ScanUnadmittedReleases finds releases that have not yet had an execution intent created.

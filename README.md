@@ -99,6 +99,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\demos\m6_v1_release_verificat
 - **Runtime Engine (`runtime`):** Go 1.23 scheduler, NATS JetStream consumer, Redis lease fencing (`SET NX PX` + monotonic fencing tokens), Kubernetes reconciler (`client-go`), Rootless BuildKit builder, and S3/MinIO log archiver.
 - **Operator Console (`apps/web`):** Next.js 15 / React 19 dashboard for workspaces, services, canary rollouts, one-click rollbacks, batch jobs, write-only secrets, audit trails, and quota telemetry.
 - **Helm Chart (`deploy/helm/hamicloud`):** Production Kubernetes manifests enforcing `PodSecurity: restricted:latest`, `runAsNonRoot: true`, `allowPrivilegeEscalation: false`, `capabilities.drop: ["ALL"]`, and default-deny `NetworkPolicy`.
+- **Runtime Health & Workload Security:** Workload pods default to non-root execution via `WORKLOAD_RUN_AS_NON_ROOT` in production while allowing unprivileged root demo containers in development. Scheduler and executor export HTTP `/healthz` (loop tick liveness) and `/readyz` (database ping & shutdown status) endpoints on `HEALTH_ADDR` (default `:8081`).
 
 ## Benchmarks
 

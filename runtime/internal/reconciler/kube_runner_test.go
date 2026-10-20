@@ -405,13 +405,68 @@ func TestKubeWorkloadRunner_WorkspaceIsolation_NetworkPolicyAndSecurityContext(t
 }
 
 func TestKubeWorkloadRunner_WorkloadSecurity_RunAsNonRootConfigurable(t *testing.T) {
-	t.Setenv("WORKLOAD_RUN_AS_NON_ROOT", "true")
+	// 1. Explicit WORKLOAD_RUN_AS_NON_ROOT=true
+	t.Run("explicit true", func(t *testing.T) {
+		t.Setenv("WORKLOAD_RUN_AS_NON_ROOT", "true")
 
-	psc := workloadPodSecurityContext()
-	require.NotNil(t, psc.RunAsNonRoot)
-	assert.True(t, *psc.RunAsNonRoot)
+		psc := workloadPodSecurityContext()
+		require.NotNil(t, psc.RunAsNonRoot)
+		assert.True(t, *psc.RunAsNonRoot)
 
-	csc := hardenedContainerSecurityContext()
-	require.NotNil(t, csc.RunAsNonRoot)
-	assert.True(t, *csc.RunAsNonRoot)
+		csc := hardenedContainerSecurityContext()
+		require.NotNil(t, csc.RunAsNonRoot)
+		assert.True(t, *csc.RunAsNonRoot)
+	})
+
+	// 2. Default in production is true
+	t.Run("production default is true", func(t *testing.T) {
+		t.Setenv("WORKLOAD_RUN_AS_NON_ROOT", "")
+		t.Setenv("ENVIRONMENT", "production")
+
+		psc := workloadPodSecurityContext()
+		require.NotNil(t, psc.RunAsNonRoot)
+		assert.True(t, *psc.RunAsNonRoot)
+
+		csc := hardenedContainerSecurityContext()
+		require.NotNil(t, csc.RunAsNonRoot)
+		assert.True(t, *csc.RunAsNonRoot)
+	})
+
+	// 3. Default in development is false
+	t.Run("development default is false", func(t *testing.T) {
+		t.Setenv("WORKLOAD_RUN_AS_NON_ROOT", "")
+		t.Setenv("ENVIRONMENT", "development")
+
+		psc := workloadPodSecurityContext()
+		assert.Nil(t, psc.RunAsNonRoot)
+
+		csc := hardenedContainerSecurityContext()
+		assert.Nil(t, csc.RunAsNonRoot)
+	})
+
+	// 4. Explicit false in production overrides default
+	t.Run("explicit false overrides production", func(t *testing.T) {
+		t.Setenv("WORKLOAD_RUN_AS_NON_ROOT", "false")
+		t.Setenv("ENVIRONMENT", "production")
+
+		psc := workloadPodSecurityContext()
+		assert.Nil(t, psc.RunAsNonRoot)
+
+		csc := hardenedContainerSecurityContext()
+		assert.Nil(t, csc.RunAsNonRoot)
+	})
+
+	// 5. Explicit true in development overrides default
+	t.Run("explicit true overrides development", func(t *testing.T) {
+		t.Setenv("WORKLOAD_RUN_AS_NON_ROOT", "true")
+		t.Setenv("ENVIRONMENT", "development")
+
+		psc := workloadPodSecurityContext()
+		require.NotNil(t, psc.RunAsNonRoot)
+		assert.True(t, *psc.RunAsNonRoot)
+
+		csc := hardenedContainerSecurityContext()
+		require.NotNil(t, csc.RunAsNonRoot)
+		assert.True(t, *csc.RunAsNonRoot)
+	})
 }

@@ -24,6 +24,7 @@ spec:
     spec:
       serviceAccountName: hamicloud-executor
       automountServiceAccountToken: true
+      terminationGracePeriodSeconds: {{ .Values.executor.terminationGracePeriodSeconds | default 45 }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
@@ -35,6 +36,10 @@ spec:
         - name: executor
           image: "{{ .Values.executor.image.repository }}@{{ .Values.executor.image.digest }}"
           imagePullPolicy: "{{ .Values.executor.image.pullPolicy }}"
+          ports:
+            - name: health
+              containerPort: {{ .Values.executor.healthPort | default 8081 }}
+              protocol: TCP
           envFrom:
             - configMapRef:
                 name: hamicloud-config
@@ -44,12 +49,35 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.secret.existingSecret | default "hamicloud-secret" | quote }}
                   key: RUNTIME_DATABASE_URL
+            - name: HEALTH_ADDR
+              value: ":{{ .Values.executor.healthPort | default 8081 }}"
+            - name: SHUTDOWN_TIMEOUT
+              value: {{ .Values.executor.shutdownTimeout | default "30s" | quote }}
+            - name: WORKLOAD_RUN_AS_NON_ROOT
+              value: {{ .Values.workload.runAsNonRoot | quote }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:
               drop:
                 - ALL
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - name: artifacts
+              mountPath: {{ .Values.config.artifactsDir | default "/var/artifacts" }}
+            - name: tmp
+              mountPath: /tmp
           resources:
             requests:
               cpu: "{{ .Values.executor.resources.requests.cpu }}"
@@ -57,3 +85,8 @@ spec:
             limits:
               cpu: "{{ .Values.executor.resources.limits.cpu }}"
               memory: "{{ .Values.executor.resources.limits.memory }}"
+      volumes:
+        - name: artifacts
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}

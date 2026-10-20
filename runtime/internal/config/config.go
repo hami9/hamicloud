@@ -23,6 +23,8 @@ type Config struct {
 	ReconciliationPeriod time.Duration
 	RunOnce              bool
 	WorkspaceIDs         []string
+	HealthAddr           string
+	ShutdownTimeout      time.Duration
 }
 
 // LoadFromEnv loads runtime configuration from environment variables with safe defaults.
@@ -88,6 +90,14 @@ func LoadFromEnv() (*Config, error) {
 		}
 	}
 
+	healthAddr := getEnv("HEALTH_ADDR", ":8081")
+
+	shutdownTimeoutStr := getEnv("SHUTDOWN_TIMEOUT", "30s")
+	shutdownTimeout, err := parseDurationOrSeconds(shutdownTimeoutStr, 30*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("invalid SHUTDOWN_TIMEOUT: %w", err)
+	}
+
 	return &Config{
 		Environment:          env,
 		DatabaseURL:          dbURL,
@@ -101,7 +111,22 @@ func LoadFromEnv() (*Config, error) {
 		ReconciliationPeriod: time.Duration(reconSec) * time.Second,
 		RunOnce:              runOnce,
 		WorkspaceIDs:         workspaceIDs,
+		HealthAddr:           healthAddr,
+		ShutdownTimeout:      shutdownTimeout,
 	}, nil
+}
+
+func parseDurationOrSeconds(raw string, defaultVal time.Duration) (time.Duration, error) {
+	if raw == "" {
+		return defaultVal, nil
+	}
+	if d, err := time.ParseDuration(raw); err == nil {
+		return d, nil
+	}
+	if sec, err := strconv.Atoi(raw); err == nil {
+		return time.Duration(sec) * time.Second, nil
+	}
+	return 0, fmt.Errorf("invalid duration format %q", raw)
 }
 
 func getEnv(key, defaultVal string) string {

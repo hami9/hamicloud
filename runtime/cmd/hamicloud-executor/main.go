@@ -6,12 +6,14 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/hami9/hamicloud/runtime/internal/bus"
 	"github.com/hami9/hamicloud/runtime/internal/config"
 	"github.com/hami9/hamicloud/runtime/internal/executor"
+	"github.com/hami9/hamicloud/runtime/internal/health"
 	"github.com/hami9/hamicloud/runtime/internal/reconciler"
 	"github.com/hami9/hamicloud/runtime/internal/store"
 )
@@ -38,7 +40,6 @@ func main() {
 		logger.Error("Failed to initialize PostgreSQL store", "error", err)
 		os.Exit(1)
 	}
-	defer pgStore.Close()
 
 	var runner reconciler.WorkloadRunner
 	var jobRunner reconciler.JobTaskRunner
@@ -85,12 +86,26 @@ func main() {
 	exec.SetJobReconciler(jobRec)
 	exec.SetBuildReconciler(buildRec)
 
+	var reconciliationWG sync.WaitGroup
+	exec.SetWaitGroup(&reconciliationWG)
+
+	// Liveness staleness window: 30s (exceeds 3x poll interval of 2s while allowing headroom for long reconciliations)
+	healthSrv := health.NewServer(cfg.HealthAddr, 30*time.Second, pgStore.Ping, logger)
+	exec.SetOnTick(healthSrv.RecordTick)
+
+	if err := healthSrv.Start(); err != nil {
+		logger.Error("Failed to start health HTTP server", "addr", cfg.HealthAddr, "error", err)
+		os.Exit(1)
+	}
+
 	logger.Info("Executor initialized with configuration",
 		"environment", cfg.Environment,
 		"lease_duration", cfg.LeaseDuration,
 		"worker_id", cfg.WorkerID,
 		"run_once", cfg.RunOnce,
 		"workspace_ids", cfg.WorkspaceIDs,
+		"health_addr", cfg.HealthAddr,
+		"shutdown_timeout", cfg.ShutdownTimeout,
 	)
 
 	if cfg.RunOnce {
@@ -98,9 +113,13 @@ func main() {
 		processed, err := exec.RunOnce(ctx)
 		if err != nil {
 			logger.Error("Executor RunOnce failed", "error", err)
+			_ = healthSrv.Shutdown(context.Background())
+			pgStore.Close()
 			os.Exit(1)
 		}
 		logger.Info("Executor RunOnce completed successfully", "workload_processed", processed)
+		_ = healthSrv.Shutdown(context.Background())
+		pgStore.Close()
 		return
 	}
 
@@ -127,6 +146,39 @@ func main() {
 	}()
 
 	<-ctx.Done()
-	logger.Info("Shutting down HamiCloud Execution Worker gracefully...")
+	logger.Info("Shutdown signal received, initiating graceful executor shutdown...")
+
+	// 1. Mark health server as shutting down (causes /readyz to return 503)
+	healthSrv.SetShuttingDown()
+
+	// 2. Stop claiming new work
+	exec.Stop()
+
+	// 3. Wait for in-flight reconciliation goroutines via sync.WaitGroup with bounded timeout
+	waitCh := make(chan struct{})
+	go func() {
+		reconciliationWG.Wait()
+		close(waitCh)
+	}()
+
+	select {
+	case <-waitCh:
+		logger.Info("All in-flight workload reconciliations completed successfully")
+	case <-time.After(cfg.ShutdownTimeout):
+		logger.Warn("Shutdown timeout reached while waiting for in-flight reconciliations", "timeout", cfg.ShutdownTimeout)
+	}
+
+	// 4. Close bus and database pool (in-flight terminal state writes complete via detached contexts)
+	listener.Close()
+	pgStore.Close()
+
+	// 5. Shutdown health HTTP server gracefully
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+	if err := healthSrv.Shutdown(shutdownCtx); err != nil {
+		logger.Warn("Error shutting down health server", "error", err)
+	}
+
+	logger.Info("HamiCloud Execution Worker shutdown complete.")
 	fmt.Println("Executor shutdown complete.")
 }

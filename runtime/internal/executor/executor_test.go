@@ -285,3 +285,54 @@ func TestExecutor_Wake(t *testing.T) {
 	cancel()
 	<-done
 }
+
+func TestExecutor_GracefulShutdownAndTick(t *testing.T) {
+	st := &mockStore{
+		claimed: &store.ClaimedWorkload{
+			IntentID:        "intent-1",
+			ReleaseID:       "rel-1",
+			ApplicationSlug: "app-1",
+			LeaseEpoch:      1,
+		},
+	}
+	rec := &mockReconciler{}
+	exec := NewExecutor(st, rec, "worker-shutdown-test", 10*time.Second, nil)
+
+	var wg sync.WaitGroup
+	exec.SetWaitGroup(&wg)
+
+	ticked := false
+	exec.SetOnTick(func() {
+		ticked = true
+	})
+
+	ctx := context.Background()
+
+	// 1. RunOnce executes work and tracks through WaitGroup
+	processed, err := exec.RunOnce(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !processed {
+		t.Fatal("expected work to be processed")
+	}
+
+	// 2. Stop stops claiming
+	exec.Stop()
+	processed, err = exec.RunOnce(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error after stop: %v", err)
+	}
+	if processed {
+		t.Fatal("expected no work to be processed after stop")
+	}
+
+	// 3. Start immediately returns when stopped
+	startErr := exec.Start(ctx, 100*time.Millisecond)
+	if startErr != nil {
+		t.Fatalf("expected Start to return nil when stopped, got %v", startErr)
+	}
+	if !ticked {
+		t.Fatal("expected tick callback to have fired")
+	}
+}

@@ -1,0 +1,9 @@
+﻿{"time":"2026-10-20T13:16:43.6123573+03:30","level":"INFO","msg":"Starting HamiCloud Scheduler process","version":"0.1.0"}
+{"time":"2026-10-20T13:16:43.6771002+03:30","level":"INFO","msg":"Connected scheduler to Kubernetes cluster for job recovery","namespace":"default"}
+{"time":"2026-10-20T13:16:43.6771002+03:30","level":"INFO","msg":"Scheduler initialized with configuration","environment":"development","reconciliation_period":30000000000,"worker_id":"local-worker-1","run_once":true}
+{"time":"2026-10-20T13:16:43.6771002+03:30","level":"INFO","msg":"Executing single scheduler admission pass (RUN_ONCE)"}
+{"time":"2026-10-20T13:16:43.9817368+03:30","level":"INFO","msg":"Admitted job and created ExecutionIntent","intent_id":"ceb26a84-e31c-46a1-b4fd-097c84fabc4c","job_id":"2923ad35-a976-4107-8e1f-266d8f1f4b33","job_attempt_id":"a8718ac6-4ccd-4332-8d1b-40c0a4e4fb02","resource_name":"hc-job-2923ad35-a976-4107-8e1f-266d8f1f4b33-1"}
+{"time":"2026-10-20T13:16:44.1584275+03:30","level":"INFO","msg":"Admitted job and created ExecutionIntent","intent_id":"919b5c97-aecb-42f2-b7d9-48294dce45c2","job_id":"a5fdb75f-76cc-43c0-887b-8c2180f90b80","job_attempt_id":"d495b501-89e1-4924-9312-73de10431b01","resource_name":"hc-job-a5fdb75f-76cc-43c0-887b-8c2180f90b80-1"}
+{"time":"2026-10-20T13:16:44.2305058+03:30","level":"INFO","msg":"Admitted job and created ExecutionIntent","intent_id":"6873fa67-2fbf-4cc4-b9cd-cd8ff1699856","job_id":"76f15455-dbb9-43a3-9a4e-cbb97bd5fae7","job_attempt_id":"73cd00f0-111a-4a4d-a32e-c612a584e3dd","resource_name":"hc-job-76f15455-dbb9-43a3-9a4e-cbb97bd5fae7-1"}
+{"time":"2026-10-20T13:16:44.2309181+03:30","level":"INFO","msg":"Scheduler RunOnce completed successfully","admitted_count":3}
+

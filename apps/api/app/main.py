@@ -159,6 +159,8 @@ async def http_exception_handler(request: Request, exc: Exception) -> JSONRespon
         error_code = ErrorCode.CONFLICT
     elif http_exc.status_code == 422:
         error_code = ErrorCode.VALIDATION_ERROR
+    elif http_exc.status_code == 429:
+        error_code = ErrorCode.RATE_LIMITED
     elif http_exc.status_code == 501:
         error_code = ErrorCode.NOT_IMPLEMENTED
     elif http_exc.status_code == 503:

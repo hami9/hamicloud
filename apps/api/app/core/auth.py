@@ -152,7 +152,9 @@ async def get_caller(
 ROLE_RANK = {
     WorkspaceRole.VIEWER: 1,
     WorkspaceRole.DEVELOPER: 2,
-    WorkspaceRole.OWNER: 3,
+    WorkspaceRole.DEVELOPER: 2,
+    WorkspaceRole.ADMIN: 3,
+    WorkspaceRole.OWNER: 4,
 }
 
 

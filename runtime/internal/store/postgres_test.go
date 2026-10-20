@@ -1487,3 +1487,100 @@ func TestPostgresStore_BuildLifecycle_SuccessAndFailedBuildPreservesHealthyRelea
 		t.Fatalf("expected desired_generation=1 and current_release_id=%s, got gen=%d current=%s", rel1ID, appGen, currentRelID)
 	}
 }
+
+func TestPostgresStore_FairScheduler_NoisyWorkspaceDoesNotStarveQuietWorkspace(t *testing.T) {
+	ctx := context.Background()
+	st := connectTestStore(t, ctx)
+	st.SetMaxConcurrentJobsPerWorkspace(2)
+
+	// Clean any residual QUEUED or active jobs from other tests so ScanUnadmittedJobs sees a clean slate
+	_, _ = st.pool.Exec(ctx, `UPDATE jobs SET state = 'CANCELLED' WHERE state IN ('QUEUED', 'ADMITTED', 'STARTING', 'RUNNING');`)
+
+	now := time.Now().UTC()
+	wsNoisy := createTestWorkspace(t, ctx, st, "Noisy Tenant WS")
+	wsQuiet := createTestWorkspace(t, ctx, st, "Quiet Tenant WS")
+
+	// Noisy workspace floods 15 queued jobs first
+	for i := 0; i < 15; i++ {
+		jobID := NewUUID()
+		createdAt := now.Add(time.Duration(i) * time.Millisecond)
+		_, err := st.pool.Exec(ctx, `
+			INSERT INTO jobs (
+				id, workspace_id, name, image_digest, command_args, env_vars,
+				timeout_seconds, max_retries, current_attempt_number, state, created_at, updated_at
+			) VALUES ($1, $2, $3, 'sha256:dummy', '[]', '{}', 60, 1, 0, 'QUEUED', $4, $4);
+		`, jobID, wsNoisy, fmt.Sprintf("noisy-job-%02d", i), createdAt)
+		if err != nil {
+			t.Fatalf("insert noisy job %d: %v", i, err)
+		}
+	}
+
+	// Quiet workspace submits 1 queued job AFTER all 15 noisy jobs
+	quietJobID := NewUUID()
+	_, err := st.pool.Exec(ctx, `
+		INSERT INTO jobs (
+			id, workspace_id, name, image_digest, command_args, env_vars,
+			timeout_seconds, max_retries, current_attempt_number, state, created_at, updated_at
+		) VALUES ($1, $2, 'quiet-job-01', 'sha256:dummy', '[]', '{}', 60, 1, 0, 'QUEUED', $3, $3);
+	`, quietJobID, wsQuiet, now.Add(500*time.Millisecond))
+	if err != nil {
+		t.Fatalf("insert quiet job: %v", err)
+	}
+
+	// Scheduler scans unadmitted jobs:
+	// 1. Noisy workspace must be capped at 2 jobs (maxConcurrentJobsPerWS = 2)
+	// 2. Quiet workspace's job (ws_rank = 1) must be interleaved BEFORE noisy workspace's 2nd job (ws_rank = 2)
+	unadmitted, err := st.ScanUnadmittedJobs(ctx, 10)
+	if err != nil {
+		t.Fatalf("ScanUnadmittedJobs failed: %v", err)
+	}
+	if len(unadmitted) != 3 {
+		t.Fatalf("expected exactly 3 jobs (2 from noisy, 1 from quiet), got %d", len(unadmitted))
+	}
+
+	noisyCount := 0
+	quietFoundAt := -1
+	for idx, j := range unadmitted {
+		if j.WorkspaceID == wsNoisy {
+			noisyCount++
+		}
+		if j.JobID == quietJobID {
+			quietFoundAt = idx
+		}
+	}
+	if noisyCount != 2 {
+		t.Fatalf("expected noisy workspace to be capped at 2 admitted jobs, got %d", noisyCount)
+	}
+	if quietFoundAt == -1 || quietFoundAt > 1 {
+		t.Fatalf("expected quiet workspace job to be scheduled in rank-1 round-robin (index 0 or 1), got index %d", quietFoundAt)
+	}
+
+	// Admit all 3 returned jobs
+	for _, j := range unadmitted {
+		intent, admitErr := st.CreateJobAttemptIntent(ctx, j)
+		if admitErr != nil || intent == nil {
+			t.Fatalf("CreateJobAttemptIntent failed for job %s: %v", j.JobID, admitErr)
+		}
+	}
+
+	// Verify active quota_reservations for CONCURRENT_JOB were created (2 for noisy, 1 for quiet)
+	var noisyResCount int
+	err = st.pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM quota_reservations
+		WHERE workspace_id = $1 AND resource_class = 'CONCURRENT_JOB' AND status = 'ACTIVE';
+	`, wsNoisy).Scan(&noisyResCount)
+	if err != nil || noisyResCount != 2 {
+		t.Fatalf("expected 2 ACTIVE CONCURRENT_JOB reservations for noisy workspace, got %d (err=%v)", noisyResCount, err)
+	}
+
+	// Subsequent scan while noisy workspace has 2 ADMITTED jobs must return 0 noisy jobs
+	nextScan, err := st.ScanUnadmittedJobs(ctx, 10)
+	if err != nil {
+		t.Fatalf("second ScanUnadmittedJobs failed: %v", err)
+	}
+	for _, j := range nextScan {
+		if j.WorkspaceID == wsNoisy {
+			t.Fatalf("noisy workspace bypassed concurrency limit: ScanUnadmittedJobs returned %s while 2 jobs already ADMITTED", j.JobID)
+		}
+	}
+}

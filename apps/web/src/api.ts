@@ -441,3 +441,174 @@ export async function listWorkspaceDeadLetterRecords(
   }
   return res.json()
 }
+
+export type WorkspaceRole = 'OWNER' | 'ADMIN' | 'DEVELOPER' | 'VIEWER'
+
+export interface WorkspaceMember {
+  id: string
+  workspace_id: string
+  user_subject: string
+  role: WorkspaceRole
+  created_at: string
+  updated_at: string
+}
+
+export interface SecretMetadata {
+  id: string
+  workspace_id: string
+  name: string
+  key_version: number
+  created_by: string
+  created_at: string
+  updated_at: string
+}
+
+export interface QuotaUsageItem {
+  resource_class: string
+  limit: number
+  used: number
+  remaining: number
+}
+
+export interface QuotaReservationItem {
+  id: string
+  resource_class: string
+  units: number
+  status: string
+  expires_at: string
+  created_at: string
+}
+
+export interface WorkspaceQuotas {
+  workspace_id: string
+  quotas: QuotaUsageItem[]
+  active_reservations: QuotaReservationItem[]
+}
+
+export interface AuditEventRecord {
+  id: string
+  workspace_id: string
+  actor_subject: string
+  action: string
+  target_type: string
+  target_id: string
+  details?: Record<string, unknown> | null
+  created_at: string
+}
+
+export async function listWorkspaceMembers(token: string, workspaceId: string): Promise<WorkspaceMember[]> {
+  const res = await fetch(`/v1/workspaces/${workspaceId}/members`, {
+    method: 'GET',
+    headers: getHeaders(token),
+  })
+  if (!res.ok) {
+    const msg = await extractErrorMessage(res, 'Failed to list workspace members')
+    throw new Error(msg)
+  }
+  const data = await res.json()
+  return data.items || []
+}
+
+export async function upsertWorkspaceMember(
+  token: string,
+  workspaceId: string,
+  userSubject: string,
+  role: WorkspaceRole
+): Promise<WorkspaceMember> {
+  const res = await fetch(`/v1/workspaces/${workspaceId}/members`, {
+    method: 'POST',
+    headers: getHeaders(token),
+    body: JSON.stringify({ user_subject: userSubject, role }),
+  })
+  if (!res.ok) {
+    const msg = await extractErrorMessage(res, 'Failed to update workspace member')
+    throw new Error(msg)
+  }
+  return res.json()
+}
+
+export async function removeWorkspaceMember(
+  token: string,
+  workspaceId: string,
+  userSubject: string
+): Promise<void> {
+  const res = await fetch(`/v1/workspaces/${workspaceId}/members/${encodeURIComponent(userSubject)}`, {
+    method: 'DELETE',
+    headers: getHeaders(token),
+  })
+  if (!res.ok) {
+    const msg = await extractErrorMessage(res, 'Failed to remove workspace member')
+    throw new Error(msg)
+  }
+}
+
+export async function listWorkspaceSecrets(token: string, workspaceId: string): Promise<SecretMetadata[]> {
+  const res = await fetch(`/v1/workspaces/${workspaceId}/secrets`, {
+    method: 'GET',
+    headers: getHeaders(token),
+  })
+  if (!res.ok) {
+    const msg = await extractErrorMessage(res, 'Failed to list secrets')
+    throw new Error(msg)
+  }
+  const data = await res.json()
+  return data.items || []
+}
+
+export async function upsertWorkspaceSecret(
+  token: string,
+  workspaceId: string,
+  name: string,
+  value: string
+): Promise<SecretMetadata> {
+  const res = await fetch(`/v1/workspaces/${workspaceId}/secrets`, {
+    method: 'POST',
+    headers: getHeaders(token),
+    body: JSON.stringify({ name, value }),
+  })
+  if (!res.ok) {
+    const msg = await extractErrorMessage(res, 'Failed to store secret')
+    throw new Error(msg)
+  }
+  return res.json()
+}
+
+export async function deleteWorkspaceSecret(
+  token: string,
+  workspaceId: string,
+  secretName: string
+): Promise<void> {
+  const res = await fetch(`/v1/workspaces/${workspaceId}/secrets/${encodeURIComponent(secretName)}`, {
+    method: 'DELETE',
+    headers: getHeaders(token),
+  })
+  if (!res.ok) {
+    const msg = await extractErrorMessage(res, 'Failed to delete secret')
+    throw new Error(msg)
+  }
+}
+
+export async function getWorkspaceQuotas(token: string, workspaceId: string): Promise<WorkspaceQuotas> {
+  const res = await fetch(`/v1/workspaces/${workspaceId}/quotas`, {
+    method: 'GET',
+    headers: getHeaders(token),
+  })
+  if (!res.ok) {
+    const msg = await extractErrorMessage(res, 'Failed to fetch workspace quotas')
+    throw new Error(msg)
+  }
+  return res.json()
+}
+
+export async function listWorkspaceAuditEvents(token: string, workspaceId: string): Promise<AuditEventRecord[]> {
+  const res = await fetch(`/v1/workspaces/${workspaceId}/audit?limit=50`, {
+    method: 'GET',
+    headers: getHeaders(token),
+  })
+  if (!res.ok) {
+    const msg = await extractErrorMessage(res, 'Failed to export audit logs')
+    throw new Error(msg)
+  }
+  const data = await res.json()
+  return data.items || []
+}

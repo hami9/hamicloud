@@ -2,13 +2,17 @@ import os
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.audit import record_audit_event
 from app.core.auth import Caller, authorize_workspace_access, get_caller
+from app.core.quotas import enforce_workspace_quota
+from app.core.rate_limit import check_workspace_rate_limit
+from app.models.quota import QuotaResourceClass
 from app.core.config import settings
 from app.core.events import OutboxTopic, create_outbox_event
 from app.core.idempotency import (
@@ -42,6 +46,7 @@ router = APIRouter(tags=["Jobs"])
     status_code=status.HTTP_202_ACCEPTED,
 )
 async def submit_job(
+    request: Request,
     workspace_id: uuid.UUID,
     payload: SubmitJobRequest,
     idempotency_key: str = Depends(get_idempotency_key),
@@ -66,6 +71,11 @@ async def submit_job(
     if cached_response:
         return cached_response
 
+    await check_workspace_rate_limit(request, workspace_id, "jobs.submit")
+    await enforce_workspace_quota(
+        db, workspace_id, QuotaResourceClass.CONCURRENT_JOB, reserve=False
+    )
+
     # 3. Create Job, Outbox Event, and Idempotency Record in ONE atomic transaction
     job_id = uuid.uuid4()
     job = Job(
@@ -80,6 +90,15 @@ async def submit_job(
         state=JobState.QUEUED,
     )
     db.add(job)
+    record_audit_event(
+        db=db,
+        workspace_id=workspace_id,
+        actor_subject=caller.subject,
+        action="job.submitted",
+        target_type="JOB",
+        target_id=str(job_id),
+        details={"name": payload.name, "image_digest": payload.image_digest},
+    )
 
     # Prepare outbox event
     event_id = uuid.uuid4()
@@ -191,6 +210,7 @@ async def get_job(
     status_code=status.HTTP_202_ACCEPTED,
 )
 async def cancel_job(
+    request: Request,
     job_id: uuid.UUID,
     idempotency_key: str = Depends(get_idempotency_key),
     caller: Caller = Depends(get_caller),
@@ -230,6 +250,8 @@ async def cancel_job(
     if cached_response:
         return cached_response
 
+    await check_workspace_rate_limit(request, workspace_id, "jobs.cancel")
+
     # 2. State transition validation
     if job.state != JobState.CANCEL_REQUESTED:
         try:
@@ -241,6 +263,15 @@ async def cancel_job(
             ) from exc
 
         job.state = JobState.CANCEL_REQUESTED
+        record_audit_event(
+            db=db,
+            workspace_id=workspace_id,
+            actor_subject=caller.subject,
+            action="job.cancel.requested",
+            target_type="JOB",
+            target_id=str(job.id),
+            details={"name": job.name},
+        )
         event_id = uuid.uuid4()
         outbox_event = create_outbox_event(
             workspace_id=workspace_id,
@@ -286,6 +317,7 @@ async def cancel_job(
     status_code=status.HTTP_202_ACCEPTED,
 )
 async def rerun_job(
+    request: Request,
     job_id: uuid.UUID,
     idempotency_key: str = Depends(get_idempotency_key),
     caller: Caller = Depends(get_caller),
@@ -331,6 +363,11 @@ async def rerun_job(
             detail=f"Cannot rerun job while active in state '{original_job.state.value}'",
         )
 
+    await check_workspace_rate_limit(request, workspace_id, "jobs.rerun")
+    await enforce_workspace_quota(
+        db, workspace_id, QuotaResourceClass.CONCURRENT_JOB, reserve=False
+    )
+
     # Create new logical job linked to predecessor (name guaranteed <= 100 characters)
     base_name = original_job.name[:94]
     new_job_name = f"{base_name}-rerun"
@@ -348,6 +385,15 @@ async def rerun_job(
         state=JobState.QUEUED,
     )
     db.add(new_job)
+    record_audit_event(
+        db=db,
+        workspace_id=workspace_id,
+        actor_subject=caller.subject,
+        action="job.rerun.submitted",
+        target_type="JOB",
+        target_id=str(new_job_id),
+        details={"parent_job_id": str(original_job.id), "name": new_job.name},
+    )
 
     # Insert outbox event
     event_id = uuid.uuid4()

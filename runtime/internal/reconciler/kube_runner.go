@@ -17,6 +17,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	utilintstr "k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
@@ -96,6 +97,152 @@ func sanitizeResourceName(name string) string {
 	return s
 }
 
+func hardenedContainerSecurityContext() *corev1.SecurityContext {
+	allowPrivEsc := false
+	return &corev1.SecurityContext{
+		AllowPrivilegeEscalation: &allowPrivEsc,
+		Capabilities: &corev1.Capabilities{
+			Drop: []corev1.Capability{"ALL"},
+			Add:  []corev1.Capability{"NET_BIND_SERVICE", "CHOWN", "SETUID", "SETGID", "DAC_OVERRIDE"},
+		},
+		SeccompProfile: &corev1.SeccompProfile{
+			Type: corev1.SeccompProfileTypeRuntimeDefault,
+		},
+	}
+}
+
+// EnsureWorkspaceIsolation reconciles tenant NetworkPolicy and default LimitRange/ResourceQuota guardrails
+// so workloads from one workspace cannot connect to pods belonging to another workspace.
+func EnsureWorkspaceIsolation(ctx context.Context, client kubernetes.Interface, ns string, workspaceID string, workspaceSlug string) error {
+	if client == nil || workspaceID == "" {
+		return nil
+	}
+	if ns == "" {
+		ns = "default"
+	}
+
+	policyName := sanitizeResourceName(fmt.Sprintf("hc-netpol-%s", workspaceID))
+	labels := map[string]string{
+		"hamicloud.io/workspace-id": workspaceID,
+		"app.kubernetes.io/managed-by": "hamicloud-reconciler",
+	}
+	if workspaceSlug != "" {
+		labels["hamicloud.io/workspace-slug"] = sanitizeResourceName(workspaceSlug)
+	}
+
+	dnsPortUDP := utilintstr.FromInt(53)
+	protoUDP := corev1.ProtocolUDP
+	protoTCP := corev1.ProtocolTCP
+
+	desiredPolicy := &networkingv1.NetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      policyName,
+			Namespace: ns,
+			Labels:    labels,
+		},
+		Spec: networkingv1.NetworkPolicySpec{
+			PodSelector: metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					"hamicloud.io/workspace-id": workspaceID,
+				},
+			},
+			PolicyTypes: []networkingv1.PolicyType{
+				networkingv1.PolicyTypeIngress,
+				networkingv1.PolicyTypeEgress,
+			},
+			Ingress: []networkingv1.NetworkPolicyIngressRule{
+				{
+					// Allow traffic from pods within the same workspace
+					From: []networkingv1.NetworkPolicyPeer{
+						{
+							PodSelector: &metav1.LabelSelector{
+								MatchLabels: map[string]string{
+									"hamicloud.io/workspace-id": workspaceID,
+								},
+							},
+						},
+						{
+							NamespaceSelector: &metav1.LabelSelector{
+								MatchLabels: map[string]string{
+									"kubernetes.io/metadata.name": "ingress-nginx",
+								},
+							},
+						},
+					},
+				},
+			},
+			Egress: []networkingv1.NetworkPolicyEgressRule{
+				{
+					// Allow traffic to pods within the same workspace
+					To: []networkingv1.NetworkPolicyPeer{
+						{
+							PodSelector: &metav1.LabelSelector{
+								MatchLabels: map[string]string{
+									"hamicloud.io/workspace-id": workspaceID,
+								},
+							},
+						},
+					},
+				},
+				{
+					// Allow DNS resolution via kube-dns / CoreDNS
+					Ports: []networkingv1.NetworkPolicyPort{
+						{Protocol: &protoUDP, Port: &dnsPortUDP},
+						{Protocol: &protoTCP, Port: &dnsPortUDP},
+					},
+				},
+			},
+		},
+	}
+
+	existingPolicy, err := client.NetworkingV1().NetworkPolicies(ns).Get(ctx, policyName, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		if _, createErr := client.NetworkingV1().NetworkPolicies(ns).Create(ctx, desiredPolicy, metav1.CreateOptions{}); createErr != nil && !apierrors.IsAlreadyExists(createErr) {
+			return fmt.Errorf("create network policy %s: %w", policyName, createErr)
+		}
+	} else if err != nil {
+		return fmt.Errorf("get network policy %s: %w", policyName, err)
+	} else {
+		existingPolicy.Spec = desiredPolicy.Spec
+		existingPolicy.Labels = desiredPolicy.Labels
+		if _, updateErr := client.NetworkingV1().NetworkPolicies(ns).Update(ctx, existingPolicy, metav1.UpdateOptions{}); updateErr != nil {
+			return fmt.Errorf("update network policy %s: %w", policyName, updateErr)
+		}
+	}
+
+	// Ensure default container LimitRange exists in namespace
+	limitRangeName := "hc-workload-limits"
+	desiredLimits := &corev1.LimitRange{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      limitRangeName,
+			Namespace: ns,
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by": "hamicloud-reconciler",
+			},
+		},
+		Spec: corev1.LimitRangeSpec{
+			Limits: []corev1.LimitRangeItem{
+				{
+					Type: corev1.LimitTypeContainer,
+					Default: corev1.ResourceList{
+						corev1.ResourceCPU:    resource.MustParse("500m"),
+						corev1.ResourceMemory: resource.MustParse("512Mi"),
+					},
+					DefaultRequest: corev1.ResourceList{
+						corev1.ResourceCPU:    resource.MustParse("100m"),
+						corev1.ResourceMemory: resource.MustParse("128Mi"),
+					},
+				},
+			},
+		},
+	}
+	if _, lrErr := client.CoreV1().LimitRanges(ns).Get(ctx, limitRangeName, metav1.GetOptions{}); apierrors.IsNotFound(lrErr) {
+		_, _ = client.CoreV1().LimitRanges(ns).Create(ctx, desiredLimits, metav1.CreateOptions{})
+	}
+
+	return nil
+}
+
 // KubeWorkloadRunner manages Kubernetes Deployment, Service, and Ingress resources for long-running services.
 type KubeWorkloadRunner struct {
 	client        kubernetes.Interface
@@ -115,6 +262,10 @@ func NewKubeWorkloadRunner(client kubernetes.Interface, namespace string, ingres
 }
 
 func (k *KubeWorkloadRunner) Deploy(ctx context.Context, workload *store.ClaimedWorkload) (string, error) {
+	if err := EnsureWorkspaceIsolation(ctx, k.client, k.namespace, workload.WorkspaceID, workload.WorkspaceSlug); err != nil {
+		return "", fmt.Errorf("ensure workspace isolation: %w", err)
+	}
+
 	name := sanitizeResourceName(workload.DeterministicResourceName)
 	if name == "" {
 		name = sanitizeResourceName(fmt.Sprintf("hc-svc-%s-%d", workload.ApplicationID, workload.TargetGeneration))
@@ -136,8 +287,9 @@ func (k *KubeWorkloadRunner) Deploy(ctx context.Context, workload *store.Claimed
 	}
 
 	container := corev1.Container{
-		Name:  appSlug,
-		Image: workload.ImageDigest,
+		Name:            appSlug,
+		Image:           workload.ImageDigest,
+		SecurityContext: hardenedContainerSecurityContext(),
 		Ports: []corev1.ContainerPort{{
 			Name:          "http",
 			ContainerPort: port,
@@ -475,6 +627,10 @@ func NewKubeJobTaskRunner(client kubernetes.Interface, namespace string, artifac
 }
 
 func (r *KubeJobTaskRunner) RunJob(ctx context.Context, workload *store.ClaimedJobWorkload) (int, string, error) {
+	if err := EnsureWorkspaceIsolation(ctx, r.client, r.namespace, workload.WorkspaceID, workload.WorkspaceSlug); err != nil {
+		return 1, fmt.Sprintf("failed to ensure workspace isolation: %v", err), err
+	}
+
 	jobName := sanitizeResourceName(workload.DeterministicResourceName)
 	if jobName == "" {
 		jobName = sanitizeResourceName(fmt.Sprintf("hc-job-%s-%d", workload.JobID, workload.AttemptNumber))
@@ -502,9 +658,10 @@ func (r *KubeJobTaskRunner) RunJob(ctx context.Context, workload *store.ClaimedJ
 	sort.Slice(envVars, func(i, j int) bool { return envVars[i].Name < envVars[j].Name })
 
 	jobContainer := corev1.Container{
-		Name:  "job",
-		Image: workload.ImageDigest,
-		Env:   envVars,
+		Name:            "job",
+		Image:           workload.ImageDigest,
+		Env:             envVars,
+		SecurityContext: hardenedContainerSecurityContext(),
 	}
 	if len(workload.CommandArgs) > 0 {
 		jobContainer.Command = workload.CommandArgs

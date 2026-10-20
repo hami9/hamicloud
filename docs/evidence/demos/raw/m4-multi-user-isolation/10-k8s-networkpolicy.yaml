@@ -1,0 +1,39 @@
+﻿apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  creationTimestamp: "2026-10-20T09:46:48Z"
+  generation: 1
+  labels:
+    app.kubernetes.io/managed-by: hamicloud-reconciler
+    hamicloud.io/workspace-id: 2a9ea502-1597-4566-91aa-30ccd2cb9e12
+    hamicloud.io/workspace-slug: m4-alpha-13d8393a
+  name: hc-netpol-2a9ea502-1597-4566-91aa-30ccd2cb9e12
+  namespace: default
+  resourceVersion: "145205"
+  uid: 067763c0-cc41-40e1-bbb2-47e7c40382b2
+spec:
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          hamicloud.io/workspace-id: 2a9ea502-1597-4566-91aa-30ccd2cb9e12
+  - ports:
+    - port: 53
+      protocol: UDP
+    - port: 53
+      protocol: TCP
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          hamicloud.io/workspace-id: 2a9ea502-1597-4566-91aa-30ccd2cb9e12
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: ingress-nginx
+  podSelector:
+    matchLabels:
+      hamicloud.io/workspace-id: 2a9ea502-1597-4566-91aa-30ccd2cb9e12
+  policyTypes:
+  - Ingress
+  - Egress
+

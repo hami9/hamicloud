@@ -1,0 +1,9 @@
+﻿{"time":"2026-10-20T13:16:47.8296482+03:30","level":"INFO","msg":"Starting HamiCloud Execution Worker process","version":"0.1.0"}
+{"time":"2026-10-20T13:16:47.9123943+03:30","level":"INFO","msg":"Connected to Kubernetes cluster","namespace":"default","ingress_domain":"hamicloud.local"}
+{"time":"2026-10-20T13:16:47.9123943+03:30","level":"INFO","msg":"Executor initialized with configuration","environment":"development","lease_duration":60000000000,"worker_id":"local-worker-1","run_once":true,"workspace_ids":["2a9ea502-1597-4566-91aa-30ccd2cb9e12"]}
+{"time":"2026-10-20T13:16:47.9123943+03:30","level":"INFO","msg":"Executing single executor reconciliation pass (RUN_ONCE)"}
+{"time":"2026-10-20T13:16:48.0144577+03:30","level":"INFO","msg":"Claimed service release intent","intent_id":"e808ba5c-0f09-480b-9461-de1565bcc99c","release_id":"85398109-6adc-43fe-89c5-88984675b7bc","app_slug":"alpha-svc-13d8393a","worker_id":"local-worker-1","lease_epoch":1}
+{"time":"2026-10-20T13:16:48.0144791+03:30","level":"INFO","msg":"Starting reconciliation for service release","intent_id":"e808ba5c-0f09-480b-9461-de1565bcc99c","release_id":"85398109-6adc-43fe-89c5-88984675b7bc","app_slug":"alpha-svc-13d8393a","port":80,"health_path":"/","lease_epoch":1}
+{"time":"2026-10-20T13:17:00.111068+03:30","level":"INFO","msg":"Service release passed readiness probe. Marking HEALTHY.","release_id":"85398109-6adc-43fe-89c5-88984675b7bc","app_id":"9b8fa0b4-2fed-450e-bc3a-11b2b08dfaac","lease_epoch":1}
+{"time":"2026-10-20T13:17:00.2427602+03:30","level":"INFO","msg":"Executor RunOnce completed successfully","workload_processed":true}
+

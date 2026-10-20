@@ -1,0 +1,88 @@
+﻿{
+    "workspace_a_jobs":  [
+                             {
+                                 "id":  "096edcb5-a3fd-4127-98ab-a65eb70cd068",
+                                 "workspace_id":  "2a9ea502-1597-4566-91aa-30ccd2cb9e12",
+                                 "name":  "noisy-alpha-job-4",
+                                 "state":  "QUEUED",
+                                 "current_attempt_number":  0,
+                                 "attempts":  [
+
+                                              ],
+                                 "created_at":  "2026-10-20T09:46:41.083937Z"
+                             },
+                             {
+                                 "id":  "3b853bae-eccf-4379-af03-9024de1c69d3",
+                                 "workspace_id":  "2a9ea502-1597-4566-91aa-30ccd2cb9e12",
+                                 "name":  "noisy-alpha-job-3",
+                                 "state":  "QUEUED",
+                                 "current_attempt_number":  0,
+                                 "attempts":  [
+
+                                              ],
+                                 "created_at":  "2026-10-20T09:46:40.846608Z"
+                             },
+                             {
+                                 "id":  "76f15455-dbb9-43a3-9a4e-cbb97bd5fae7",
+                                 "workspace_id":  "2a9ea502-1597-4566-91aa-30ccd2cb9e12",
+                                 "name":  "noisy-alpha-job-2",
+                                 "state":  "ADMITTED",
+                                 "current_attempt_number":  1,
+                                 "attempts":  [
+                                                  {
+                                                      "attempt_number":  1,
+                                                      "state":  "ADMITTED",
+                                                      "resource_uid":  null,
+                                                      "lease_epoch":  0,
+                                                      "exit_code":  null,
+                                                      "failure_reason":  null,
+                                                      "started_at":  null,
+                                                      "finished_at":  null
+                                                  }
+                                              ],
+                                 "created_at":  "2026-10-20T09:46:40.613710Z"
+                             },
+                             {
+                                 "id":  "2923ad35-a976-4107-8e1f-266d8f1f4b33",
+                                 "workspace_id":  "2a9ea502-1597-4566-91aa-30ccd2cb9e12",
+                                 "name":  "noisy-alpha-job-1",
+                                 "state":  "ADMITTED",
+                                 "current_attempt_number":  1,
+                                 "attempts":  [
+                                                  {
+                                                      "attempt_number":  1,
+                                                      "state":  "ADMITTED",
+                                                      "resource_uid":  null,
+                                                      "lease_epoch":  0,
+                                                      "exit_code":  null,
+                                                      "failure_reason":  null,
+                                                      "started_at":  null,
+                                                      "finished_at":  null
+                                                  }
+                                              ],
+                                 "created_at":  "2026-10-20T09:46:40.348769Z"
+                             }
+                         ],
+    "workspace_b_jobs":  [
+                             {
+                                 "id":  "a5fdb75f-76cc-43c0-887b-8c2180f90b80",
+                                 "workspace_id":  "806bcc5f-f3e1-4d13-9a0c-f69852bcf135",
+                                 "name":  "quiet-beta-job-1",
+                                 "state":  "ADMITTED",
+                                 "current_attempt_number":  1,
+                                 "attempts":  [
+                                                  {
+                                                      "attempt_number":  1,
+                                                      "state":  "ADMITTED",
+                                                      "resource_uid":  null,
+                                                      "lease_epoch":  0,
+                                                      "exit_code":  null,
+                                                      "failure_reason":  null,
+                                                      "started_at":  null,
+                                                      "finished_at":  null
+                                                  }
+                                              ],
+                                 "created_at":  "2026-10-20T09:46:41.267526Z"
+                             }
+                         ]
+}

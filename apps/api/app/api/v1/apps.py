@@ -1,7 +1,11 @@
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from app.core.audit import record_audit_event
+from app.core.quotas import enforce_workspace_quota
+from app.core.rate_limit import check_workspace_rate_limit
+from app.models.quota import QuotaResourceClass
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -67,6 +71,7 @@ async def create_application(
         )
 
     app = Application(
+        id=uuid.uuid4(),
         workspace_id=workspace_id,
         name=payload.name,
         slug=payload.slug,
@@ -78,6 +83,15 @@ async def create_application(
         git_branch=payload.git_branch,
     )
     db.add(app)
+    record_audit_event(
+        db=db,
+        workspace_id=workspace_id,
+        actor_subject=caller.subject,
+        action="app.created",
+        target_type="APPLICATION",
+        target_id=str(app.id),
+        details={"slug": app.slug, "workload_type": app.workload_type.value},
+    )
     try:
         await db.commit()
     except IntegrityError as exc:
@@ -115,6 +129,7 @@ async def create_application(
     status_code=status.HTTP_202_ACCEPTED,
 )
 async def deploy_release(
+    request: Request,
     app_id: uuid.UUID,
     payload: DeployReleaseRequest,
     idempotency_key: str = Depends(get_idempotency_key),
@@ -158,6 +173,11 @@ async def deploy_release(
     if cached_response:
         return cached_response
 
+    await check_workspace_rate_limit(request, workspace_id, "apps.deploy")
+    await enforce_workspace_quota(
+        db, workspace_id, QuotaResourceClass.DEPLOYED_SERVICE, application_id=app.id, reserve=True
+    )
+
     # 2. Increment generation & determine release number (MAX(release_number) + 1 under row lock)
     rel_max_stmt = select(func.coalesce(func.max(Release.release_number), 0)).where(
         Release.application_id == app.id
@@ -186,6 +206,19 @@ async def deploy_release(
         status=ReleaseStatus.IMAGE_READY,
     )
     db.add(release)
+    record_audit_event(
+        db=db,
+        workspace_id=workspace_id,
+        actor_subject=caller.subject,
+        action="app.release.deployed",
+        target_type="RELEASE",
+        target_id=str(release_id),
+        details={
+            "application_id": str(app.id),
+            "release_number": next_release_number,
+            "image_digest": payload.image_digest,
+        },
+    )
 
     # 3. Create Outbox Event
     event_id = uuid.uuid4()
@@ -309,6 +342,19 @@ async def rollback_release(
         status=ReleaseStatus.IMAGE_READY,
     )
     db.add(rollback_release_obj)
+    record_audit_event(
+        db=db,
+        workspace_id=workspace_id,
+        actor_subject=caller.subject,
+        action="app.release.rolled_back",
+        target_type="RELEASE",
+        target_id=str(new_release_id),
+        details={
+            "application_id": str(app.id),
+            "target_release_id": str(target_rel.id),
+            "release_number": next_release_number,
+        },
+    )
 
     # Extract port and health_path from target release config
     target_config = target_rel.config_json or {}
@@ -599,6 +645,7 @@ async def update_application(
     status_code=status.HTTP_202_ACCEPTED,
 )
 async def trigger_build(
+    request: Request,
     app_id: uuid.UUID,
     payload: TriggerBuildRequest,
     caller: Caller = Depends(get_caller),
@@ -639,6 +686,11 @@ async def trigger_build(
             )
     git_ref = payload.git_ref or app.git_branch or "main"
 
+    await check_workspace_rate_limit(request, app.workspace_id, "apps.build")
+    await enforce_workspace_quota(
+        db, app.workspace_id, QuotaResourceClass.CONCURRENT_BUILD, reserve=True
+    )
+
     latest_rel_stmt = (
         select(Release)
         .where(Release.application_id == app.id)
@@ -670,7 +722,20 @@ async def trigger_build(
         status=ReleaseStatus.REQUESTED,
     )
     db.add(release)
-
+    record_audit_event(
+        db=db,
+        workspace_id=app.workspace_id,
+        actor_subject=caller.subject,
+        action="app.build.triggered",
+        target_type="RELEASE",
+        target_id=str(release.id),
+        details={
+            "application_id": str(app.id),
+            "release_number": next_release_number,
+            "commit_sha": commit_sha,
+            "git_ref": git_ref,
+        },
+    )
     outbox_evt = create_outbox_event(
         workspace_id=app.workspace_id,
         topic=OutboxTopic.APP_BUILD_REQUESTED,

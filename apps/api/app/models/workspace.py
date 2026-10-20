@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 
 class WorkspaceRole(str, enum.Enum):
     OWNER = "OWNER"
+    ADMIN = "ADMIN"
     DEVELOPER = "DEVELOPER"
     VIEWER = "VIEWER"
 

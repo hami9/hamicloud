@@ -1278,6 +1278,424 @@ paths:
         '405':
           $ref: '#/components/responses/405MethodNotAllowed'
 
+  /v1/workspaces/{workspace_id}:
+    get:
+      summary: Get workspace metadata
+      operationId: getWorkspace
+      parameters:
+        - name: workspace_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+            example: "550e8400-e29b-41d4-a716-446655440000"
+      responses:
+        '200':
+          description: Workspace metadata
+          headers:
+            X-Correlation-ID:
+              $ref: '#/components/headers/X-Correlation-ID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceResponse'
+              example:
+                id: "550e8400-e29b-41d4-a716-446655440000"
+                name: "Acme Production"
+                slug: "acme-prod"
+                created_at: "2026-09-19T12:00:00Z"
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '422':
+          $ref: '#/components/responses/422UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+        '405':
+          $ref: '#/components/responses/405MethodNotAllowed'
+
+  /v1/workspaces/{workspace_id}/members:
+    get:
+      summary: List workspace members and roles
+      operationId: listWorkspaceMembers
+      parameters:
+        - name: workspace_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+            example: "550e8400-e29b-41d4-a716-446655440000"
+      responses:
+        '200':
+          description: Workspace members
+          headers:
+            X-Correlation-ID:
+              $ref: '#/components/headers/X-Correlation-ID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceMemberListResponse'
+              example:
+                items:
+                  - id: "110e8400-e29b-41d4-a716-446655440001"
+                    workspace_id: "550e8400-e29b-41d4-a716-446655440000"
+                    user_subject: "user-alice"
+                    role: "OWNER"
+                    created_at: "2026-09-19T12:00:00Z"
+                    updated_at: "2026-09-19T12:00:00Z"
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '422':
+          $ref: '#/components/responses/422UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+        '405':
+          $ref: '#/components/responses/405MethodNotAllowed'
+    post:
+      summary: Add or update workspace member role
+      operationId: upsertWorkspaceMember
+      parameters:
+        - name: workspace_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+            example: "550e8400-e29b-41d4-a716-446655440000"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkspaceMemberUpsertRequest'
+            example:
+              user_subject: "user-bob"
+              role: "DEVELOPER"
+      responses:
+        '201':
+          description: Workspace member added or updated
+          headers:
+            X-Correlation-ID:
+              $ref: '#/components/headers/X-Correlation-ID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceMemberResponse'
+              example:
+                id: "110e8400-e29b-41d4-a716-446655440002"
+                workspace_id: "550e8400-e29b-41d4-a716-446655440000"
+                user_subject: "user-bob"
+                role: "DEVELOPER"
+                created_at: "2026-09-19T12:00:00Z"
+                updated_at: "2026-09-19T12:00:00Z"
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '422':
+          $ref: '#/components/responses/422UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+        '405':
+          $ref: '#/components/responses/405MethodNotAllowed'
+
+  /v1/workspaces/{workspace_id}/members/{user_subject}:
+    delete:
+      summary: Remove a member from a workspace
+      operationId: removeWorkspaceMember
+      parameters:
+        - name: workspace_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+            example: "550e8400-e29b-41d4-a716-446655440000"
+        - name: user_subject
+          in: path
+          required: true
+          schema:
+            type: string
+            example: "user-bob"
+      responses:
+        '204':
+          description: Member removed
+          headers:
+            X-Correlation-ID:
+              $ref: '#/components/headers/X-Correlation-ID'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '409':
+          $ref: '#/components/responses/409Conflict'
+        '422':
+          $ref: '#/components/responses/422UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+        '405':
+          $ref: '#/components/responses/405MethodNotAllowed'
+
+  /v1/workspaces/{workspace_id}/secrets:
+    get:
+      summary: List workspace secrets (metadata only, never plaintext)
+      operationId: listSecrets
+      parameters:
+        - name: workspace_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+            example: "550e8400-e29b-41d4-a716-446655440000"
+      responses:
+        '200':
+          description: Secret metadata list
+          headers:
+            X-Correlation-ID:
+              $ref: '#/components/headers/X-Correlation-ID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SecretListResponse'
+              example:
+                items:
+                  - id: "220e8400-e29b-41d4-a716-446655440001"
+                    workspace_id: "550e8400-e29b-41d4-a716-446655440000"
+                    name: "DATABASE_API_KEY"
+                    key_version: 1
+                    created_by: "user-alice"
+                    created_at: "2026-09-19T12:00:00Z"
+                    updated_at: "2026-09-19T12:00:00Z"
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '422':
+          $ref: '#/components/responses/422UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+        '405':
+          $ref: '#/components/responses/405MethodNotAllowed'
+    post:
+      summary: Create or rotate an encrypted workspace secret
+      operationId: upsertSecret
+      parameters:
+        - name: workspace_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+            example: "550e8400-e29b-41d4-a716-446655440000"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpsertSecretRequest'
+            example:
+              name: "DATABASE_API_KEY"
+              value: "sk_live_secret_value"
+      responses:
+        '201':
+          description: Secret encrypted and stored (metadata returned, never plaintext)
+          headers:
+            X-Correlation-ID:
+              $ref: '#/components/headers/X-Correlation-ID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SecretMetadataResponse'
+              example:
+                id: "220e8400-e29b-41d4-a716-446655440001"
+                workspace_id: "550e8400-e29b-41d4-a716-446655440000"
+                name: "DATABASE_API_KEY"
+                key_version: 1
+                created_by: "user-alice"
+                created_at: "2026-09-19T12:00:00Z"
+                updated_at: "2026-09-19T12:00:00Z"
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '422':
+          $ref: '#/components/responses/422UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+        '405':
+          $ref: '#/components/responses/405MethodNotAllowed'
+
+  /v1/workspaces/{workspace_id}/secrets/{secret_name}:
+    delete:
+      summary: Delete an encrypted workspace secret
+      operationId: deleteSecret
+      parameters:
+        - name: workspace_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+            example: "550e8400-e29b-41d4-a716-446655440000"
+        - name: secret_name
+          in: path
+          required: true
+          schema:
+            type: string
+            example: "DATABASE_API_KEY"
+      responses:
+        '204':
+          description: Secret deleted
+          headers:
+            X-Correlation-ID:
+              $ref: '#/components/headers/X-Correlation-ID'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '422':
+          $ref: '#/components/responses/422UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+        '405':
+          $ref: '#/components/responses/405MethodNotAllowed'
+
+  /v1/workspaces/{workspace_id}/quotas:
+    get:
+      summary: Inspect workspace resource quotas and active reservations
+      operationId: getWorkspaceQuotas
+      parameters:
+        - name: workspace_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+            example: "550e8400-e29b-41d4-a716-446655440000"
+      responses:
+        '200':
+          description: Workspace quota summary and active reservations
+          headers:
+            X-Correlation-ID:
+              $ref: '#/components/headers/X-Correlation-ID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceQuotaResponse'
+              example:
+                workspace_id: "550e8400-e29b-41d4-a716-446655440000"
+                quotas:
+                  - resource_class: "CONCURRENT_JOB"
+                    limit: 2
+                    used: 1
+                    remaining: 1
+                  - resource_class: "CONCURRENT_BUILD"
+                    limit: 1
+                    used: 0
+                    remaining: 1
+                  - resource_class: "DEPLOYED_SERVICE"
+                    limit: 3
+                    used: 1
+                    remaining: 2
+                  - resource_class: "PENDING_OPERATIONS"
+                    limit: 100
+                    used: 1
+                    remaining: 99
+                active_reservations: []
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '422':
+          $ref: '#/components/responses/422UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+        '405':
+          $ref: '#/components/responses/405MethodNotAllowed'
+
+  /v1/workspaces/{workspace_id}/audit:
+    get:
+      summary: Export workspace audit trail (ADMIN or OWNER role required)
+      operationId: exportWorkspaceAuditLogs
+      parameters:
+        - name: workspace_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+            example: "550e8400-e29b-41d4-a716-446655440000"
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+            example: 50
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+            example: "MjAyNi0wOS0xOVQxMjowMDowMHwzMzBlODQwMC1lMjliLTQxZDQtYTcxNi00NDY2NTU0NDAwMDE="
+        - name: action
+          in: query
+          required: false
+          schema:
+            type: string
+            example: "secret.created"
+      responses:
+        '200':
+          description: Paginated audit trail events
+          headers:
+            X-Correlation-ID:
+              $ref: '#/components/headers/X-Correlation-ID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditEventListResponse'
+              example:
+                items:
+                  - id: "330e8400-e29b-41d4-a716-446655440001"
+                    workspace_id: "550e8400-e29b-41d4-a716-446655440000"
+                    actor_subject: "user-alice"
+                    action: "secret.created"
+                    target_type: "SECRET"
+                    target_id: "220e8400-e29b-41d4-a716-446655440001"
+                    details:
+                      name: "DATABASE_API_KEY"
+                      key_version: 1
+                    created_at: "2026-09-19T12:00:00Z"
+                next_cursor: null
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '422':
+          $ref: '#/components/responses/422UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+        '405':
+          $ref: '#/components/responses/405MethodNotAllowed'
+
 components:
   securitySchemes:
     BearerAuth:
@@ -1531,6 +1949,8 @@ components:
             - NOT_IMPLEMENTED
             - INTERNAL_SERVER_ERROR
             - IMAGE_POLICY_VIOLATION
+            - RATE_LIMITED
+            - QUOTA_EXCEEDED
           example: "NOT_FOUND"
         message:
           type: string
@@ -2260,3 +2680,311 @@ components:
         commit_sha: "7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b"
         git_ref: "main"
         commit_message: "feat: add user authentication"
+
+    WorkspaceMemberUpsertRequest:
+      type: object
+      required: [user_subject, role]
+      properties:
+        user_subject:
+          type: string
+          minLength: 1
+          maxLength: 255
+          example: "user-bob"
+        role:
+          type: string
+          enum: [OWNER, ADMIN, DEVELOPER, VIEWER]
+          example: "DEVELOPER"
+      example:
+        user_subject: "user-bob"
+        role: "DEVELOPER"
+
+    WorkspaceMemberResponse:
+      type: object
+      required: [id, workspace_id, user_subject, role, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: "110e8400-e29b-41d4-a716-446655440002"
+        workspace_id:
+          type: string
+          format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        user_subject:
+          type: string
+          example: "user-bob"
+        role:
+          type: string
+          enum: [OWNER, ADMIN, DEVELOPER, VIEWER]
+          example: "DEVELOPER"
+        created_at:
+          type: string
+          format: date-time
+          example: "2026-09-19T12:00:00Z"
+        updated_at:
+          type: string
+          format: date-time
+          example: "2026-09-19T12:00:00Z"
+      example:
+        id: "110e8400-e29b-41d4-a716-446655440002"
+        workspace_id: "550e8400-e29b-41d4-a716-446655440000"
+        user_subject: "user-bob"
+        role: "DEVELOPER"
+        created_at: "2026-09-19T12:00:00Z"
+        updated_at: "2026-09-19T12:00:00Z"
+
+    WorkspaceMemberListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkspaceMemberResponse'
+      example:
+        items:
+          - id: "110e8400-e29b-41d4-a716-446655440001"
+            workspace_id: "550e8400-e29b-41d4-a716-446655440000"
+            user_subject: "user-alice"
+            role: "OWNER"
+            created_at: "2026-09-19T12:00:00Z"
+            updated_at: "2026-09-19T12:00:00Z"
+
+    UpsertSecretRequest:
+      type: object
+      required: [name, value]
+      properties:
+        name:
+          type: string
+          pattern: '^[A-Za-z_][A-Za-z0-9_]*$'
+          minLength: 1
+          maxLength: 100
+          example: "DATABASE_API_KEY"
+        value:
+          type: string
+          minLength: 1
+          maxLength: 65536
+          example: "sk_live_secret_value"
+      example:
+        name: "DATABASE_API_KEY"
+        value: "sk_live_secret_value"
+
+    SecretMetadataResponse:
+      type: object
+      required: [id, workspace_id, name, key_version, created_by, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: "220e8400-e29b-41d4-a716-446655440001"
+        workspace_id:
+          type: string
+          format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        name:
+          type: string
+          example: "DATABASE_API_KEY"
+        key_version:
+          type: integer
+          example: 1
+        created_by:
+          type: string
+          example: "user-alice"
+        created_at:
+          type: string
+          format: date-time
+          example: "2026-09-19T12:00:00Z"
+        updated_at:
+          type: string
+          format: date-time
+          example: "2026-09-19T12:00:00Z"
+      example:
+        id: "220e8400-e29b-41d4-a716-446655440001"
+        workspace_id: "550e8400-e29b-41d4-a716-446655440000"
+        name: "DATABASE_API_KEY"
+        key_version: 1
+        created_by: "user-alice"
+        created_at: "2026-09-19T12:00:00Z"
+        updated_at: "2026-09-19T12:00:00Z"
+
+    SecretListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SecretMetadataResponse'
+      example:
+        items:
+          - id: "220e8400-e29b-41d4-a716-446655440001"
+            workspace_id: "550e8400-e29b-41d4-a716-446655440000"
+            name: "DATABASE_API_KEY"
+            key_version: 1
+            created_by: "user-alice"
+            created_at: "2026-09-19T12:00:00Z"
+            updated_at: "2026-09-19T12:00:00Z"
+
+    QuotaUsageItem:
+      type: object
+      required: [resource_class, limit, used, remaining]
+      properties:
+        resource_class:
+          type: string
+          example: "CONCURRENT_JOB"
+        limit:
+          type: integer
+          example: 2
+        used:
+          type: integer
+          example: 1
+        remaining:
+          type: integer
+          example: 1
+      example:
+        resource_class: "CONCURRENT_JOB"
+        limit: 2
+        used: 1
+        remaining: 1
+
+    QuotaReservationItem:
+      type: object
+      required: [id, resource_class, units, status, expires_at, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: "440e8400-e29b-41d4-a716-446655440001"
+        resource_class:
+          type: string
+          example: "CONCURRENT_JOB"
+        units:
+          type: integer
+          example: 1
+        status:
+          type: string
+          enum: [ACTIVE, RELEASED, EXPIRED]
+          example: "ACTIVE"
+        expires_at:
+          type: string
+          format: date-time
+          example: "2026-09-19T12:10:00Z"
+        created_at:
+          type: string
+          format: date-time
+          example: "2026-09-19T12:00:00Z"
+      example:
+        id: "440e8400-e29b-41d4-a716-446655440001"
+        resource_class: "CONCURRENT_JOB"
+        units: 1
+        status: "ACTIVE"
+        expires_at: "2026-09-19T12:10:00Z"
+        created_at: "2026-09-19T12:00:00Z"
+
+    WorkspaceQuotaResponse:
+      type: object
+      required: [workspace_id, quotas, active_reservations]
+      properties:
+        workspace_id:
+          type: string
+          format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        quotas:
+          type: array
+          items:
+            $ref: '#/components/schemas/QuotaUsageItem'
+        active_reservations:
+          type: array
+          items:
+            $ref: '#/components/schemas/QuotaReservationItem'
+      example:
+        workspace_id: "550e8400-e29b-41d4-a716-446655440000"
+        quotas:
+          - resource_class: "CONCURRENT_JOB"
+            limit: 2
+            used: 1
+            remaining: 1
+          - resource_class: "CONCURRENT_BUILD"
+            limit: 1
+            used: 0
+            remaining: 1
+          - resource_class: "DEPLOYED_SERVICE"
+            limit: 3
+            used: 1
+            remaining: 2
+          - resource_class: "PENDING_OPERATIONS"
+            limit: 100
+            used: 1
+            remaining: 99
+        active_reservations: []
+
+    AuditEventItem:
+      type: object
+      required: [id, workspace_id, actor_subject, action, target_type, target_id, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: "330e8400-e29b-41d4-a716-446655440001"
+        workspace_id:
+          type: string
+          format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        actor_subject:
+          type: string
+          example: "user-alice"
+        action:
+          type: string
+          example: "secret.created"
+        target_type:
+          type: string
+          example: "SECRET"
+        target_id:
+          type: string
+          example: "220e8400-e29b-41d4-a716-446655440001"
+        details:
+          type: [object, 'null']
+          additionalProperties: true
+          example:
+            name: "DATABASE_API_KEY"
+            key_version: 1
+        created_at:
+          type: string
+          format: date-time
+          example: "2026-09-19T12:00:00Z"
+      example:
+        id: "330e8400-e29b-41d4-a716-446655440001"
+        workspace_id: "550e8400-e29b-41d4-a716-446655440000"
+        actor_subject: "user-alice"
+        action: "secret.created"
+        target_type: "SECRET"
+        target_id: "220e8400-e29b-41d4-a716-446655440001"
+        details:
+          name: "DATABASE_API_KEY"
+          key_version: 1
+        created_at: "2026-09-19T12:00:00Z"
+
+    AuditEventListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditEventItem'
+        next_cursor:
+          type: [string, 'null']
+          example: null
+      example:
+        items:
+          - id: "330e8400-e29b-41d4-a716-446655440001"
+            workspace_id: "550e8400-e29b-41d4-a716-446655440000"
+            actor_subject: "user-alice"
+            action: "secret.created"
+            target_type: "SECRET"
+            target_id: "220e8400-e29b-41d4-a716-446655440001"
+            details:
+              name: "DATABASE_API_KEY"
+              key_version: 1
+            created_at: "2026-09-19T12:00:00Z"
+        next_cursor: null

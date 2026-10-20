@@ -54,12 +54,19 @@ type JobDeleter interface {
 }
 
 type PostgresStore struct {
-	pool       *pgxpool.Pool
-	jobDeleter JobDeleter
+	pool                   *pgxpool.Pool
+	jobDeleter             JobDeleter
+	maxConcurrentJobsPerWS int
 }
 
 func (s *PostgresStore) SetJobDeleter(d JobDeleter) {
 	s.jobDeleter = d
+}
+
+func (s *PostgresStore) SetMaxConcurrentJobsPerWorkspace(n int) {
+	if n > 0 {
+		s.maxConcurrentJobsPerWS = n
+	}
 }
 
 func NewPostgresStore(ctx context.Context, dbURL string) (*PostgresStore, error) {
@@ -80,7 +87,7 @@ func NewPostgresStore(ctx context.Context, dbURL string) (*PostgresStore, error)
 		return nil, fmt.Errorf("failed to ping postgres: %w", err)
 	}
 
-	return &PostgresStore{pool: pool}, nil
+	return &PostgresStore{pool: pool, maxConcurrentJobsPerWS: 2}, nil
 }
 
 func (s *PostgresStore) Close() {
@@ -504,18 +511,38 @@ func (s *PostgresStore) RenewLease(ctx context.Context, intentID string, current
 	return nil
 }
 
-// ScanUnadmittedJobs finds jobs in QUEUED state awaiting admission.
+// ScanUnadmittedJobs finds jobs in QUEUED state awaiting admission, enforcing fair per-workspace concurrency limits
+// and round-robin workspace interleaving so a noisy tenant cannot starve other workspaces.
 func (s *PostgresStore) ScanUnadmittedJobs(ctx context.Context, limit int) ([]UnadmittedJob, error) {
+	maxPerWS := s.maxConcurrentJobsPerWS
+	if maxPerWS <= 0 {
+		maxPerWS = 2
+	}
 	query := `
-		SELECT j.id, j.workspace_id, w.slug, j.name, j.image_digest, j.command_args, j.env_vars,
-		       j.timeout_seconds, j.max_retries, j.current_attempt_number, j.state
-		FROM jobs j
-		JOIN workspaces w ON w.id = j.workspace_id
-		WHERE j.state = 'QUEUED'
-		ORDER BY j.created_at ASC
+		WITH ws_active AS (
+			SELECT workspace_id, COUNT(*) AS active_jobs
+			FROM jobs
+			WHERE state IN ('ADMITTED', 'STARTING', 'RUNNING')
+			GROUP BY workspace_id
+		),
+		ranked_queued AS (
+			SELECT j.id, j.workspace_id, w.slug, j.name, j.image_digest, j.command_args, j.env_vars,
+			       j.timeout_seconds, j.max_retries, j.current_attempt_number, j.state, j.created_at,
+			       COALESCE(wa.active_jobs, 0) AS active_jobs,
+			       ROW_NUMBER() OVER (PARTITION BY j.workspace_id ORDER BY j.created_at ASC) AS ws_rank
+			FROM jobs j
+			JOIN workspaces w ON w.id = j.workspace_id
+			LEFT JOIN ws_active wa ON wa.workspace_id = j.workspace_id
+			WHERE j.state = 'QUEUED'
+		)
+		SELECT id, workspace_id, slug, name, image_digest, command_args, env_vars,
+		       timeout_seconds, max_retries, current_attempt_number, state
+		FROM ranked_queued
+		WHERE (active_jobs + ws_rank) <= $2
+		ORDER BY ws_rank ASC, created_at ASC
 		LIMIT $1;
 	`
-	rows, err := s.pool.Query(ctx, query, limit)
+	rows, err := s.pool.Query(ctx, query, limit, maxPerWS)
 	if err != nil {
 		return nil, fmt.Errorf("query unadmitted jobs: %w", err)
 	}
@@ -629,6 +656,22 @@ func (s *PostgresStore) CreateJobAttemptIntent(ctx context.Context, job Unadmitt
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("commit admission tx: %w", err)
 	}
+
+	// Best-effort quota reservation accounting for CONCURRENT_JOB
+	ttlSec := job.TimeoutSeconds
+	if ttlSec <= 0 {
+		ttlSec = 600
+	}
+	expiresAt := now.Add(time.Duration(ttlSec) * time.Second)
+	_, _ = s.pool.Exec(ctx, `
+		UPDATE quota_reservations
+		SET status = 'EXPIRED', updated_at = $2
+		WHERE workspace_id = $1 AND status = 'ACTIVE' AND expires_at <= $2;
+	`, job.WorkspaceID, now)
+	_, _ = s.pool.Exec(ctx, `
+		INSERT INTO quota_reservations (id, workspace_id, resource_class, units, status, expires_at, created_at, updated_at)
+		VALUES ($1, $2, 'CONCURRENT_JOB', 1, 'ACTIVE', $3, $4, $4);
+	`, NewUUID(), job.WorkspaceID, expiresAt, now)
 
 	return &intent, nil
 }
@@ -897,6 +940,17 @@ func (s *PostgresStore) ConfirmJobRecovery(ctx context.Context, jobID string, sh
 			return fmt.Errorf("insert recovery dead letter record: %w", err)
 		}
 	}
+
+	_, _ = tx.Exec(ctx, `
+		UPDATE quota_reservations
+		SET status = 'RELEASED', updated_at = $2
+		WHERE id = (
+			SELECT id FROM quota_reservations
+			WHERE workspace_id = $1 AND resource_class = 'CONCURRENT_JOB' AND status = 'ACTIVE'
+			ORDER BY created_at ASC
+			LIMIT 1
+		);
+	`, wsID, now)
 
 	return tx.Commit(ctx)
 }
@@ -1209,6 +1263,18 @@ func (s *PostgresStore) MarkJobAttemptSucceeded(ctx context.Context, intentID, a
 		return fmt.Errorf("failed to transition job %s: expected 1 row affected, got %d (job not in active state)", jobID, cmdJob.RowsAffected())
 	}
 
+	_, _ = tx.Exec(ctx, `
+		UPDATE quota_reservations
+		SET status = 'RELEASED', updated_at = $2
+		WHERE id = (
+			SELECT qr.id FROM quota_reservations qr
+			JOIN jobs j ON j.workspace_id = qr.workspace_id
+			WHERE j.id = $1 AND qr.resource_class = 'CONCURRENT_JOB' AND qr.status = 'ACTIVE'
+			ORDER BY qr.created_at ASC
+			LIMIT 1
+		);
+	`, jobID, now)
+
 	return tx.Commit(ctx)
 }
 
@@ -1289,6 +1355,17 @@ func (s *PostgresStore) MarkJobAttemptFailed(ctx context.Context, intentID, atte
 		}
 	}
 
+	_, _ = tx.Exec(ctx, `
+		UPDATE quota_reservations
+		SET status = 'RELEASED', updated_at = $2
+		WHERE id = (
+			SELECT id FROM quota_reservations
+			WHERE workspace_id = $1 AND resource_class = 'CONCURRENT_JOB' AND status = 'ACTIVE'
+			ORDER BY created_at ASC
+			LIMIT 1
+		);
+	`, wsID, now)
+
 	return tx.Commit(ctx)
 }
 
@@ -1344,6 +1421,18 @@ func (s *PostgresStore) MarkJobAttemptCancelled(ctx context.Context, intentID, a
 	if cmdJob.RowsAffected() != 1 {
 		return fmt.Errorf("failed to transition job %s to CANCELLED: expected 1 row affected, got %d", jobID, cmdJob.RowsAffected())
 	}
+
+	_, _ = tx.Exec(ctx, `
+		UPDATE quota_reservations
+		SET status = 'RELEASED', updated_at = $2
+		WHERE id = (
+			SELECT qr.id FROM quota_reservations qr
+			JOIN jobs j ON j.workspace_id = qr.workspace_id
+			WHERE j.id = $1 AND qr.resource_class = 'CONCURRENT_JOB' AND qr.status = 'ACTIVE'
+			ORDER BY qr.created_at ASC
+			LIMIT 1
+		);
+	`, jobID, now)
 
 	return tx.Commit(ctx)
 }
@@ -1531,6 +1620,17 @@ func (s *PostgresStore) MarkBuildSucceeded(ctx context.Context, releaseID string
 		return fmt.Errorf("insert build completed outbox event: %w", err)
 	}
 
+	_, _ = tx.Exec(ctx, `
+		UPDATE quota_reservations
+		SET status = 'RELEASED', updated_at = $2
+		WHERE id = (
+			SELECT id FROM quota_reservations
+			WHERE workspace_id = $1 AND resource_class = 'CONCURRENT_BUILD' AND status = 'ACTIVE'
+			ORDER BY created_at ASC
+			LIMIT 1
+		);
+	`, workspaceID, now)
+
 	return tx.Commit(ctx)
 }
 
@@ -1594,6 +1694,17 @@ func (s *PostgresStore) MarkBuildFailed(ctx context.Context, releaseID string, r
 	if err != nil {
 		return fmt.Errorf("insert build failed outbox event: %w", err)
 	}
+
+	_, _ = tx.Exec(ctx, `
+		UPDATE quota_reservations
+		SET status = 'RELEASED', updated_at = $2
+		WHERE id = (
+			SELECT id FROM quota_reservations
+			WHERE workspace_id = $1 AND resource_class = 'CONCURRENT_BUILD' AND status = 'ACTIVE'
+			ORDER BY created_at ASC
+			LIMIT 1
+		);
+	`, workspaceID, now)
 
 	return tx.Commit(ctx)
 }

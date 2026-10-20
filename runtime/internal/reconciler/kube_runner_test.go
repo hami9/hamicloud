@@ -323,3 +323,74 @@ func TestKubeWorkloadRunner_TeardownSupersededGenerations(t *testing.T) {
 	require.NoError(t, err, "current generation 2 must survive teardown")
 	assert.Equal(t, "hc-svc-"+appID+"-2", d2After.Name)
 }
+
+func TestKubeWorkloadRunner_WorkspaceIsolation_NetworkPolicyAndSecurityContext(t *testing.T) {
+	ctx := context.Background()
+	fakeClient := fake.NewSimpleClientset()
+	ns := "test-ns"
+
+	runner := NewKubeWorkloadRunner(fakeClient, ns, "hamicloud.local")
+
+	wsA := "ws-tenant-alpha"
+	wsB := "ws-tenant-beta"
+
+	workloadA := &store.ClaimedWorkload{
+		WorkspaceID:               wsA,
+		WorkspaceSlug:             "alpha",
+		ApplicationID:             "app-alpha",
+		ApplicationSlug:           "alpha-api",
+		ReleaseID:                 "rel-a1",
+		ReleaseNumber:             1,
+		ImageDigest:               "registry.example.com/alpha:v1",
+		Port:                      8080,
+		TargetGeneration:          1,
+		DeterministicResourceName: "hc-svc-app-alpha-1",
+	}
+	workloadB := &store.ClaimedWorkload{
+		WorkspaceID:               wsB,
+		WorkspaceSlug:             "beta",
+		ApplicationID:             "app-beta",
+		ApplicationSlug:           "beta-api",
+		ReleaseID:                 "rel-b1",
+		ReleaseNumber:             1,
+		ImageDigest:               "registry.example.com/beta:v1",
+		Port:                      8080,
+		TargetGeneration:          1,
+		DeterministicResourceName: "hc-svc-app-beta-1",
+	}
+
+	_, err := runner.Deploy(ctx, workloadA)
+	require.NoError(t, err)
+	_, err = runner.Deploy(ctx, workloadB)
+	require.NoError(t, err)
+
+	// 1. Verify NetworkPolicy created for Workspace A and Workspace B isolating pods by hamicloud.io/workspace-id
+	npA, err := fakeClient.NetworkingV1().NetworkPolicies(ns).Get(ctx, "hc-netpol-"+wsA, metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, wsA, npA.Spec.PodSelector.MatchLabels["hamicloud.io/workspace-id"])
+	require.NotEmpty(t, npA.Spec.Ingress)
+	assert.Equal(t, wsA, npA.Spec.Ingress[0].From[0].PodSelector.MatchLabels["hamicloud.io/workspace-id"])
+	require.NotEmpty(t, npA.Spec.Egress)
+	assert.Equal(t, wsA, npA.Spec.Egress[0].To[0].PodSelector.MatchLabels["hamicloud.io/workspace-id"])
+
+	npB, err := fakeClient.NetworkingV1().NetworkPolicies(ns).Get(ctx, "hc-netpol-"+wsB, metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, wsB, npB.Spec.PodSelector.MatchLabels["hamicloud.io/workspace-id"])
+
+	// 2. Verify LimitRange exists in namespace
+	lr, err := fakeClient.CoreV1().LimitRanges(ns).Get(ctx, "hc-workload-limits", metav1.GetOptions{})
+	require.NoError(t, err)
+	require.Len(t, lr.Spec.Limits, 1)
+
+	// 3. Verify hardened container SecurityContext on deployed service pods
+	deployA, err := fakeClient.AppsV1().Deployments(ns).Get(ctx, "hc-svc-app-alpha-1", metav1.GetOptions{})
+	require.NoError(t, err)
+	sc := deployA.Spec.Template.Spec.Containers[0].SecurityContext
+	require.NotNil(t, sc)
+	require.NotNil(t, sc.AllowPrivilegeEscalation)
+	assert.False(t, *sc.AllowPrivilegeEscalation)
+	require.NotNil(t, sc.Capabilities)
+	assert.Contains(t, sc.Capabilities.Drop, corev1.Capability("ALL"))
+	require.NotNil(t, sc.SeccompProfile)
+	assert.Equal(t, corev1.SeccompProfileTypeRuntimeDefault, sc.SeccompProfile.Type)
+}

@@ -1,5 +1,17 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
-import type { Workspace, Application, Release, JobDetails, Repository, DeadLetterRecord } from './api'
+import type {
+  Workspace,
+  Application,
+  Release,
+  JobDetails,
+  Repository,
+  DeadLetterRecord,
+  WorkspaceMember,
+  WorkspaceRole,
+  SecretMetadata,
+  WorkspaceQuotas,
+  AuditEventRecord,
+} from './api'
 import {
   createWorkspace,
   createApplication,
@@ -17,6 +29,14 @@ import {
   downloadJobOutput,
   rerunJob,
   listWorkspaceDeadLetterRecords,
+  listWorkspaceMembers,
+  upsertWorkspaceMember,
+  removeWorkspaceMember,
+  listWorkspaceSecrets,
+  upsertWorkspaceSecret,
+  deleteWorkspaceSecret,
+  getWorkspaceQuotas,
+  listWorkspaceAuditEvents,
 } from './api'
 import {
   mergeDlqRecords,
@@ -33,7 +53,17 @@ export default function App() {
   const [wsSlug, setWsSlug] = useState('')
   const [showNewWsForm, setShowNewWsForm] = useState(false)
 
-  const [activeTab, setActiveTab] = useState<'services' | 'jobs' | 'dlq'>('services')
+  const [activeTab, setActiveTab] = useState<'services' | 'jobs' | 'dlq' | 'governance'>('services')
+
+  // Governance & Security state (Milestone M4)
+  const [members, setMembers] = useState<WorkspaceMember[]>([])
+  const [newMemberSub, setNewMemberSub] = useState('test_user_bob')
+  const [newMemberRole, setNewMemberRole] = useState<WorkspaceRole>('DEVELOPER')
+  const [secrets, setSecrets] = useState<SecretMetadata[]>([])
+  const [newSecretName, setNewSecretName] = useState('DATABASE_API_KEY')
+  const [newSecretValue, setNewSecretValue] = useState('')
+  const [workspaceQuotas, setWorkspaceQuotas] = useState<WorkspaceQuotas | null>(null)
+  const [auditEvents, setAuditEvents] = useState<AuditEventRecord[]>([])
 
   // Services state
   const [apps, setApps] = useState<Application[]>([])
@@ -126,6 +156,60 @@ export default function App() {
       ignore = true
     }
   }, [activeWorkspace, token])
+
+  // Fetch governance & security data when activeWorkspace or governance tab is active
+  const refreshGovernanceData = async (wsId: string) => {
+    try {
+      const [mList, sList, qData] = await Promise.all([
+        listWorkspaceMembers(token, wsId),
+        listWorkspaceSecrets(token, wsId),
+        getWorkspaceQuotas(token, wsId),
+      ])
+      setMembers(mList)
+      setSecrets(sList)
+      setWorkspaceQuotas(qData)
+    } catch (err: unknown) {
+      setErrorMsg((err as Error).message)
+    }
+    try {
+      const aList = await listWorkspaceAuditEvents(token, wsId)
+      setAuditEvents(aList)
+    } catch {
+      // Non-ADMIN/OWNER roles cannot export audit trail; leave empty
+      setAuditEvents([])
+    }
+  }
+
+  useEffect(() => {
+    if (!activeWorkspace || activeTab !== 'governance') return
+    let ignore = false
+    const load = async () => {
+      try {
+        const [mList, sList, qData] = await Promise.all([
+          listWorkspaceMembers(token, activeWorkspace.id),
+          listWorkspaceSecrets(token, activeWorkspace.id),
+          getWorkspaceQuotas(token, activeWorkspace.id),
+        ])
+        if (!ignore) {
+          setMembers(mList)
+          setSecrets(sList)
+          setWorkspaceQuotas(qData)
+        }
+      } catch (err: unknown) {
+        if (!ignore) setErrorMsg((err as Error).message)
+      }
+      try {
+        const aList = await listWorkspaceAuditEvents(token, activeWorkspace.id)
+        if (!ignore) setAuditEvents(aList)
+      } catch {
+        if (!ignore) setAuditEvents([])
+      }
+    }
+    load()
+    return () => {
+      ignore = true
+    }
+  }, [activeWorkspace, activeTab, token])
 
   // Poll releases when selected application changes
   useEffect(() => {
@@ -515,6 +599,58 @@ export default function App() {
     }
   }
 
+  const handleUpsertMember = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!activeWorkspace || !newMemberSub.trim()) return
+    setErrorMsg(null)
+    try {
+      await upsertWorkspaceMember(token, activeWorkspace.id, newMemberSub.trim(), newMemberRole)
+      setNoticeMsg(`Workspace member '${newMemberSub.trim()}' updated to ${newMemberRole}.`)
+      setNewMemberSub('')
+      await refreshGovernanceData(activeWorkspace.id)
+    } catch (err: unknown) {
+      setErrorMsg((err as Error).message)
+    }
+  }
+
+  const handleRemoveMember = async (userSubject: string) => {
+    if (!activeWorkspace) return
+    setErrorMsg(null)
+    try {
+      await removeWorkspaceMember(token, activeWorkspace.id, userSubject)
+      setNoticeMsg(`Member '${userSubject}' removed from workspace.`)
+      await refreshGovernanceData(activeWorkspace.id)
+    } catch (err: unknown) {
+      setErrorMsg((err as Error).message)
+    }
+  }
+
+  const handleUpsertSecret = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!activeWorkspace || !newSecretName.trim() || !newSecretValue) return
+    setErrorMsg(null)
+    try {
+      const meta = await upsertWorkspaceSecret(token, activeWorkspace.id, newSecretName.trim(), newSecretValue)
+      setNoticeMsg(`Secret '${meta.name}' encrypted (AES-256-GCM, key v${meta.key_version}).`)
+      setNewSecretValue('')
+      await refreshGovernanceData(activeWorkspace.id)
+    } catch (err: unknown) {
+      setErrorMsg((err as Error).message)
+    }
+  }
+
+  const handleDeleteSecret = async (secretName: string) => {
+    if (!activeWorkspace) return
+    setErrorMsg(null)
+    try {
+      await deleteWorkspaceSecret(token, activeWorkspace.id, secretName)
+      setNoticeMsg(`Secret '${secretName}' deleted.`)
+      await refreshGovernanceData(activeWorkspace.id)
+    } catch (err: unknown) {
+      setErrorMsg((err as Error).message)
+    }
+  }
+
   const filteredApps = apps.filter(
     (a) =>
       a.name.toLowerCase().includes(filterQuery.toLowerCase()) ||
@@ -711,6 +847,13 @@ export default function App() {
             <span className={`tab-pill-count ${deadLetterRecords.length > 0 ? 'dlq-badge' : ''}`}>
               {deadLetterRecords.length}{dlqNextCursor ? '+' : ''}
             </span>
+          </button>
+          <button
+            className={`tab-nav-item ${activeTab === 'governance' ? 'active' : ''}`}
+            onClick={() => setActiveTab('governance')}
+          >
+            <span>Governance & Security</span>
+            <span className="tab-pill-count">{secrets.length}</span>
           </button>
         </div>
 
@@ -970,9 +1113,271 @@ export default function App() {
           </div>
         </aside>
 
-        {/* Right Detail Panel */}
+          {/* Right Detail Panel */}
         <section className="detail-view-panel">
-          {activeTab === 'services' ? (
+          {activeTab === 'governance' ? (
+            !activeWorkspace ? (
+              <div className="empty-placeholder-card">
+                <span className="placeholder-icon">🔐</span>
+                <span style={{ fontWeight: 600, color: '#92400e' }}>No Workspace Selected</span>
+                <p style={{ maxWidth: '360px', fontSize: '0.875rem' }}>
+                  Create or select a workspace to manage RBAC roles, AES-256-GCM encrypted secrets, quotas, and audit logs.
+                </p>
+              </div>
+            ) : (
+              <>
+                {/* Workspace Quotas Card */}
+                <div className="content-card">
+                  <div className="card-top-row">
+                    <div className="detail-header-meta">
+                      <h2 className="detail-headline">Workspace Quotas & Admission Guardrails</h2>
+                      <div className="detail-tags-row">
+                        <span className="meta-tag">Fair Scheduler: Active</span>
+                        <span className="meta-tag">K8s NetworkPolicy: hc-netpol-{activeWorkspace.id.slice(0, 8)}</span>
+                      </div>
+                    </div>
+                    <button
+                      className="btn-action-secondary"
+                      onClick={() => refreshGovernanceData(activeWorkspace.id)}
+                    >
+                      ↻ Refresh
+                    </button>
+                  </div>
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                      gap: '0.85rem',
+                      marginTop: '0.75rem',
+                    }}
+                  >
+                    {(workspaceQuotas?.quotas || []).map((q) => (
+                      <div
+                        key={q.resource_class}
+                        style={{
+                          border: '1px solid rgba(37, 99, 235, 0.2)',
+                          borderRadius: '8px',
+                          padding: '0.85rem',
+                          backgroundColor: '#ffffff',
+                        }}
+                      >
+                        <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#92400e' }}>
+                          {q.resource_class}
+                        </div>
+                        <div style={{ fontSize: '1.35rem', fontWeight: 700, color: '#2563eb', marginTop: '0.25rem' }}>
+                          {q.used} / {q.limit}
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: '#10b981', marginTop: '0.15rem' }}>
+                          {q.remaining} remaining
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Encrypted Secrets (AES-256-GCM) Card */}
+                <div className="content-card">
+                  <h3 style={{ fontSize: '1rem', fontWeight: 700, color: '#92400e', marginBottom: '0.5rem' }}>
+                    Encrypted Secrets (AES-256-GCM Envelope Encryption)
+                  </h3>
+                  <form onSubmit={handleUpsertSecret} className="form-grid-layout" style={{ marginBottom: '1rem' }}>
+                    <div className="input-field-group">
+                      <label className="input-label-clean">Secret Name (ENV_VAR)</label>
+                      <input
+                        className="input-control-clean"
+                        type="text"
+                        value={newSecretName}
+                        onChange={(e) => setNewSecretName(e.target.value)}
+                        placeholder="DATABASE_API_KEY"
+                        required
+                      />
+                    </div>
+                    <div className="input-field-group">
+                      <label className="input-label-clean">Plaintext Value (Encrypted at Rest)</label>
+                      <input
+                        className="input-control-clean"
+                        type="password"
+                        value={newSecretValue}
+                        onChange={(e) => setNewSecretValue(e.target.value)}
+                        placeholder="Enter secret value..."
+                        required
+                      />
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'flex-end' }}>
+                      <button type="submit" className="btn-action-primary">
+                        Encrypt & Store Secret
+                      </button>
+                    </div>
+                  </form>
+
+                  <div className="table-container-clean">
+                    <table className="clean-table">
+                      <thead>
+                        <tr>
+                          <th>Secret Name</th>
+                          <th>Key Version</th>
+                          <th>Created By</th>
+                          <th>Updated At</th>
+                          <th>Action</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {secrets.length === 0 ? (
+                          <tr>
+                            <td colSpan={5} style={{ textAlign: 'center', color: '#92400e' }}>
+                              No secrets stored in this workspace.
+                            </td>
+                          </tr>
+                        ) : (
+                          secrets.map((sec) => (
+                            <tr key={sec.id}>
+                              <td>
+                                <code>{sec.name}</code>
+                              </td>
+                              <td>
+                                <span className="meta-tag">v{sec.key_version} (AES-256-GCM)</span>
+                              </td>
+                              <td>{sec.created_by}</td>
+                              <td>{new Date(sec.updated_at).toLocaleString()}</td>
+                              <td>
+                                <button
+                                  className="btn-action-secondary"
+                                  style={{ padding: '0.2rem 0.6rem', fontSize: '0.75rem' }}
+                                  onClick={() => handleDeleteSecret(sec.name)}
+                                >
+                                  Delete
+                                </button>
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Workspace Members (RBAC) Card */}
+                <div className="content-card">
+                  <h3 style={{ fontSize: '1rem', fontWeight: 700, color: '#92400e', marginBottom: '0.5rem' }}>
+                    Workspace Members & 4-Role RBAC
+                  </h3>
+                  <form onSubmit={handleUpsertMember} className="form-grid-layout" style={{ marginBottom: '1rem' }}>
+                    <div className="input-field-group">
+                      <label className="input-label-clean">User Subject</label>
+                      <input
+                        className="input-control-clean"
+                        type="text"
+                        value={newMemberSub}
+                        onChange={(e) => setNewMemberSub(e.target.value)}
+                        placeholder="test_user_bob"
+                        required
+                      />
+                    </div>
+                    <div className="input-field-group">
+                      <label className="input-label-clean">Workspace Role</label>
+                      <select
+                        className="input-control-clean"
+                        value={newMemberRole}
+                        onChange={(e) => setNewMemberRole(e.target.value as WorkspaceRole)}
+                      >
+                        <option value="VIEWER">VIEWER (Read-only)</option>
+                        <option value="DEVELOPER">DEVELOPER (Deploy & Submit Jobs)</option>
+                        <option value="ADMIN">ADMIN (Manage Secrets, Members & Audit)</option>
+                        <option value="OWNER">OWNER (Full Workspace Control)</option>
+                      </select>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'flex-end' }}>
+                      <button type="submit" className="btn-action-primary">
+                        Assign Role
+                      </button>
+                    </div>
+                  </form>
+
+                  <div className="table-container-clean">
+                    <table className="clean-table">
+                      <thead>
+                        <tr>
+                          <th>Subject</th>
+                          <th>Role</th>
+                          <th>Updated At</th>
+                          <th>Action</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {members.map((m) => (
+                          <tr key={m.id}>
+                            <td>
+                              <strong>{m.user_subject}</strong>
+                            </td>
+                            <td>
+                              <span className="status-pill-clean healthy">{m.role}</span>
+                            </td>
+                            <td>{new Date(m.updated_at).toLocaleString()}</td>
+                            <td>
+                              <button
+                                className="btn-action-secondary"
+                                style={{ padding: '0.2rem 0.6rem', fontSize: '0.75rem' }}
+                                onClick={() => handleRemoveMember(m.user_subject)}
+                              >
+                                Remove
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Audit Trail Export Card */}
+                <div className="content-card">
+                  <h3 style={{ fontSize: '1rem', fontWeight: 700, color: '#92400e', marginBottom: '0.5rem' }}>
+                    Workspace Audit Trail Export (ADMIN / OWNER)
+                  </h3>
+                  <div className="table-container-clean">
+                    <table className="clean-table">
+                      <thead>
+                        <tr>
+                          <th>Timestamp</th>
+                          <th>Actor</th>
+                          <th>Action</th>
+                          <th>Target Type</th>
+                          <th>Target ID</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {auditEvents.length === 0 ? (
+                          <tr>
+                            <td colSpan={5} style={{ textAlign: 'center', color: '#92400e' }}>
+                              No audit events available (requires ADMIN or OWNER role).
+                            </td>
+                          </tr>
+                        ) : (
+                          auditEvents.map((ev) => (
+                            <tr key={ev.id}>
+                              <td style={{ fontSize: '0.78rem' }}>{new Date(ev.created_at).toLocaleString()}</td>
+                              <td>
+                                <code>{ev.actor_subject}</code>
+                              </td>
+                              <td>
+                                <strong>{ev.action}</strong>
+                              </td>
+                              <td>
+                                <span className="meta-tag">{ev.target_type}</span>
+                              </td>
+                              <td>
+                                <code>{ev.target_id.slice(0, 12)}</code>
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </>
+            )
+          ) : activeTab === 'services' ? (
             !selectedApp ? (
               <div className="empty-placeholder-card">
                 <span className="placeholder-icon">🚀</span>

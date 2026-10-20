@@ -1,0 +1,58 @@
+groups:
+  - name: hamicloud-operational-alerts
+    interval: 15s
+    rules:
+      - alert: HamiCloudApiHigh5xxRate
+        expr: (hamicloud_http_requests_total{status_class="5xx"} / clamp_min(sum(hamicloud_http_requests_total), 1)) > 0.01
+        for: 5m
+        labels:
+          severity: critical
+          component: control-plane-api
+        annotations:
+          summary: "HamiCloud API 5xx error rate exceeds 1% for 5 minutes"
+          description: "The Control Plane API 5xx HTTP response ratio has remained above 1% over the last 5-minute window."
+          runbook_url: "docs/runbooks/api-5xx-errors.md"
+
+      - alert: HamiCloudStalledAcceptedWork
+        expr: hamicloud_oldest_queued_job_age_seconds > 60 or hamicloud_outbox_pending_total > 50
+        for: 1m
+        labels:
+          severity: critical
+          component: runtime-scheduler
+        annotations:
+          summary: "Accepted HamiCloud work has stalled in QUEUED or outbox PENDING state"
+          description: "Oldest QUEUED job age exceeds 60 seconds or pending outbox backlog exceeds 50 events."
+          runbook_url: "docs/runbooks/stalled-operations.md"
+
+      - alert: HamiCloudJobRetryStorm
+        expr: hamicloud_job_retry_ratio > 0.25 or hamicloud_dead_letter_total > 10
+        for: 5m
+        labels:
+          severity: warning
+          component: runtime-executor
+        annotations:
+          summary: "Elevated job retry ratio or dead-letter queue accumulation"
+          description: "More than 25% of job attempts are retries or dead-letter records exceed threshold."
+          runbook_url: "docs/runbooks/retry-storms.md"
+
+      - alert: HamiCloudPersistentDiskPressure
+        expr: kubelet_volume_stats_available_bytes / clamp_min(kubelet_volume_stats_capacity_bytes, 1) < 0.15
+        for: 5m
+        labels:
+          severity: critical
+          component: storage
+        annotations:
+          summary: "Persistent volume available storage below 15% capacity"
+          description: "PostgreSQL, MinIO, or OCI registry persistent storage has less than 15% free space remaining."
+          runbook_url: "docs/runbooks/disk-pressure.md"
+
+      - alert: HamiCloudBackupRestoreVerificationFailed
+        expr: hamicloud_backup_restore_last_verify_success == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: backup-restore
+        annotations:
+          summary: "Automated PostgreSQL + MinIO backup/restore verification drill failed"
+          description: "The most recent scheduled backup and restore verification drill failed or exceeded the 60-minute RTO target."
+          runbook_url: "docs/runbooks/disaster-restore.md"

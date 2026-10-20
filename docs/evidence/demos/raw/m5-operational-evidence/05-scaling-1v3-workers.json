@@ -1,0 +1,22 @@
+{
+  "benchmark": "executor_horizontal_scaling_1_vs_3_workers",
+  "single_worker_run": {
+    "worker_count": 1,
+    "jobs_dispatched": 3,
+    "jobs_succeeded": 3,
+    "max_lease_epoch": 1,
+    "double_claims": 0,
+    "wall_clock_seconds": 29.63
+  },
+  "three_concurrent_workers_run": {
+    "worker_count": 3,
+    "jobs_dispatched": 3,
+    "jobs_succeeded": 3,
+    "max_lease_epoch": 1,
+    "double_claims": 0,
+    "wall_clock_seconds": 20.24
+  },
+  "concurrency_speedup_factor": 1.46,
+  "status": "PASS",
+  "measured_at": "2026-10-20T10:24:17.647912+00:00"
+}

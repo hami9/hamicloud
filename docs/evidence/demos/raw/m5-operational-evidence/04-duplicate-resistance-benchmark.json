@@ -1,0 +1,14 @@
+{
+  "benchmark": "duplicate_delivery_and_idempotency_resistance",
+  "workspace_id": "a9863f94-355f-4f2c-92db-8476633f5de3",
+  "replayed_api_submissions": 10,
+  "repeated_scheduler_scans": 3,
+  "distinct_operation_ids": 1,
+  "jobs_created": 1,
+  "job_attempts_created": 1,
+  "execution_intents_created": 1,
+  "duplicate_attempts": 0,
+  "duplicate_intents": 0,
+  "status": "PASS",
+  "measured_at": "2026-10-20T10:23:00.458111+00:00"
+}

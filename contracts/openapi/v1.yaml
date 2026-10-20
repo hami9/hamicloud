@@ -1696,6 +1696,60 @@ paths:
         '405':
           $ref: '#/components/responses/405MethodNotAllowed'
 
+  /v1/workspaces/{workspace_id}/telemetry:
+    get:
+      summary: Inspect workspace operational telemetry and queue metrics
+      operationId: getWorkspaceTelemetry
+      parameters:
+        - name: workspace_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+            example: "550e8400-e29b-41d4-a716-446655440000"
+      responses:
+        '200':
+          description: Workspace operational telemetry snapshot
+          headers:
+            X-Correlation-ID:
+              $ref: '#/components/headers/X-Correlation-ID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceTelemetryResponse'
+              example:
+                workspace_id: "550e8400-e29b-41d4-a716-446655440000"
+                requests_total: 120
+                status_2xx: 118
+                status_4xx: 2
+                status_5xx: 0
+                error_rate_5xx: 0.0
+                latency_p50_ms: 4.12
+                latency_p95_ms: 14.85
+                latency_p99_ms: 28.4
+                outbox_pending_total: 0
+                active_leases_total: 1
+                queued_jobs_total: 0
+                oldest_queued_job_age_seconds: 0.0
+                running_jobs_total: 1
+                healthy_services_total: 2
+                job_retry_ratio: 0.0
+                dead_letter_total: 0
+                collected_at: "2026-10-20T10:00:00Z"
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '422':
+          $ref: '#/components/responses/422UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+        '405':
+          $ref: '#/components/responses/405MethodNotAllowed'
+
 components:
   securitySchemes:
     BearerAuth:
@@ -2988,3 +3042,101 @@ components:
               key_version: 1
             created_at: "2026-09-19T12:00:00Z"
         next_cursor: null
+
+    WorkspaceTelemetryResponse:
+      type: object
+      required:
+        - workspace_id
+        - requests_total
+        - status_2xx
+        - status_4xx
+        - status_5xx
+        - error_rate_5xx
+        - latency_p50_ms
+        - latency_p95_ms
+        - latency_p99_ms
+        - outbox_pending_total
+        - active_leases_total
+        - queued_jobs_total
+        - oldest_queued_job_age_seconds
+        - running_jobs_total
+        - healthy_services_total
+        - job_retry_ratio
+        - dead_letter_total
+        - collected_at
+      properties:
+        workspace_id:
+          type: string
+          format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        requests_total:
+          type: integer
+          example: 120
+        status_2xx:
+          type: integer
+          example: 118
+        status_4xx:
+          type: integer
+          example: 2
+        status_5xx:
+          type: integer
+          example: 0
+        error_rate_5xx:
+          type: number
+          example: 0.0
+        latency_p50_ms:
+          type: number
+          example: 4.12
+        latency_p95_ms:
+          type: number
+          example: 14.85
+        latency_p99_ms:
+          type: number
+          example: 28.4
+        outbox_pending_total:
+          type: integer
+          example: 0
+        active_leases_total:
+          type: integer
+          example: 1
+        queued_jobs_total:
+          type: integer
+          example: 0
+        oldest_queued_job_age_seconds:
+          type: number
+          example: 0.0
+        running_jobs_total:
+          type: integer
+          example: 1
+        healthy_services_total:
+          type: integer
+          example: 2
+        job_retry_ratio:
+          type: number
+          example: 0.0
+        dead_letter_total:
+          type: integer
+          example: 0
+        collected_at:
+          type: string
+          format: date-time
+          example: "2026-10-20T10:00:00Z"
+      example:
+        workspace_id: "550e8400-e29b-41d4-a716-446655440000"
+        requests_total: 120
+        status_2xx: 118
+        status_4xx: 2
+        status_5xx: 0
+        error_rate_5xx: 0.0
+        latency_p50_ms: 4.12
+        latency_p95_ms: 14.85
+        latency_p99_ms: 28.4
+        outbox_pending_total: 0
+        active_leases_total: 1
+        queued_jobs_total: 0
+        oldest_queued_job_age_seconds: 0.0
+        running_jobs_total: 1
+        healthy_services_total: 2
+        job_retry_ratio: 0.0
+        dead_letter_total: 0
+        collected_at: "2026-10-20T10:00:00Z"

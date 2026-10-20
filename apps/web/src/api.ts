@@ -612,3 +612,36 @@ export async function listWorkspaceAuditEvents(token: string, workspaceId: strin
   const data = await res.json()
   return data.items || []
 }
+
+export interface WorkspaceTelemetry {
+  workspace_id: string
+  requests_total: number
+  status_2xx: number
+  status_4xx: number
+  status_5xx: number
+  error_rate_5xx: number
+  latency_p50_ms: number
+  latency_p95_ms: number
+  latency_p99_ms: number
+  outbox_pending_total: number
+  active_leases_total: number
+  queued_jobs_total: number
+  oldest_queued_job_age_seconds: number
+  running_jobs_total: number
+  healthy_services_total: number
+  job_retry_ratio: number
+  dead_letter_total: number
+  collected_at: string
+}
+
+export async function getWorkspaceTelemetry(token: string, workspaceId: string): Promise<WorkspaceTelemetry> {
+  const res = await fetch(`/v1/workspaces/${workspaceId}/telemetry`, {
+    method: 'GET',
+    headers: getHeaders(token),
+  })
+  if (!res.ok) {
+    const msg = await extractErrorMessage(res, 'Failed to fetch workspace telemetry')
+    throw new Error(msg)
+  }
+  return res.json()
+}

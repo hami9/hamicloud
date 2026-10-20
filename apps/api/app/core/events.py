@@ -2,6 +2,7 @@ import enum
 from typing import Any, Dict, Optional, Union
 import uuid
 
+from app.core.telemetry import get_trace_context
 from app.models.outbox import OutboxEvent, OutboxStatus
 
 
@@ -25,8 +26,12 @@ def create_outbox_event(
     schema_version: int = 1,
     event_id: Optional[uuid.UUID] = None,
 ) -> OutboxEvent:
-    """Central outbox event helper ensuring schema_version and workspace_id are set at every producer (T16)."""
+    """Central outbox event helper ensuring schema_version, workspace_id, and trace headers are set at every producer (T16/M5)."""
     topic_str = topic.value if hasattr(topic, "value") else str(topic)
+    merged_headers: Dict[str, str] = {}
+    merged_headers.update(get_trace_context())
+    if headers is not None:
+        merged_headers.update(headers)
     model = OutboxEvent
     evt = model(
         id=uuid.uuid4(),
@@ -34,13 +39,10 @@ def create_outbox_event(
         workspace_id=workspace_id,
         schema_version=schema_version,
         payload_json=payload,
-        headers_json=headers if headers is not None else {},
+        headers_json=merged_headers,
         status=OutboxStatus.PENDING,
         retry_count=0,
         published_at=None,
     )
     evt.topic = topic_str
     return evt
-
-
-

@@ -1,0 +1,30 @@
+{
+  "benchmark": "control_plane_api_latency",
+  "workspace_id": "b31e6adf-ecdd-4a5a-b6d9-596430390dc2",
+  "total_requests": 40,
+  "status_counts": {
+    "2xx": 40,
+    "4xx": 0,
+    "5xx": 0
+  },
+  "error_rate_5xx": 0.0,
+  "read_latency_ms": {
+    "count": 30,
+    "p50": 31.28,
+    "p95": 114.5,
+    "p99": 116.75,
+    "target_p95_ms": 250.0,
+    "target_p99_ms": 600.0,
+    "status": "PASS"
+  },
+  "write_latency_ms": {
+    "count": 10,
+    "p50": 73.21,
+    "p95": 256.92,
+    "p99": 256.92,
+    "target_p95_ms": 400.0,
+    "target_p99_ms": 900.0,
+    "status": "PASS"
+  },
+  "measured_at": "2026-10-20T10:21:27.068165+00:00"
+}

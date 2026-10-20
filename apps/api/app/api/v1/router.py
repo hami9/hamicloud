@@ -9,6 +9,7 @@ from app.api.v1.webhooks import router as webhooks_router
 from app.api.v1.secrets import router as secrets_router
 from app.api.v1.quotas import router as quotas_router
 from app.api.v1.audit import router as audit_router
+from app.api.v1.metrics import router as metrics_router
 
 api_v1_router = APIRouter()
 
@@ -21,3 +22,4 @@ api_v1_router.include_router(webhooks_router)
 api_v1_router.include_router(secrets_router)
 api_v1_router.include_router(quotas_router)
 api_v1_router.include_router(audit_router)
+api_v1_router.include_router(metrics_router)

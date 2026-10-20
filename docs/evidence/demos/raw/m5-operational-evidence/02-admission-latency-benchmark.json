@@ -1,0 +1,14 @@
+{
+  "benchmark": "scheduler_admission_latency",
+  "jobs_submitted": 6,
+  "jobs_admitted": 6,
+  "end_to_end_admission_ms": {
+    "p50": 279.09,
+    "p95": 345.29,
+    "p99": 345.29,
+    "target_p95_ms": 2000.0,
+    "target_p99_ms": 5000.0,
+    "status": "PASS"
+  },
+  "measured_at": "2026-10-20T10:27:44.130604+00:00"
+}

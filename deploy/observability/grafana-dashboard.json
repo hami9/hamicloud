@@ -1,0 +1,73 @@
+{
+  "title": "HamiCloud Operational Overview (M5)",
+  "uid": "hamicloud-m5-overview",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "tags": ["hamicloud", "m5", "runtime", "control-plane"],
+  "panels": [
+    {
+      "id": 1,
+      "title": "Platform Overview — HTTP Request Rate & 5xx Error Ratio",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        { "expr": "hamicloud_http_requests_total{status_class=\"2xx\"}", "legendFormat": "2xx OK" },
+        { "expr": "hamicloud_http_requests_total{status_class=\"4xx\"}", "legendFormat": "4xx Client Error" },
+        { "expr": "hamicloud_http_requests_total{status_class=\"5xx\"}", "legendFormat": "5xx Server Error" }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Platform Overview — API Latency p50 / p95 / p99 (ms)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        { "expr": "hamicloud_http_request_duration_ms_p50", "legendFormat": "p50 (ms)" },
+        { "expr": "hamicloud_http_request_duration_ms_p95", "legendFormat": "p95 (ms)" },
+        { "expr": "hamicloud_http_request_duration_ms_p99", "legendFormat": "p99 (ms)" }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Job Operations — Queue Depth, Oldest Queued Age (s) & Active Leases",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        { "expr": "hamicloud_queued_jobs_total", "legendFormat": "Queued Jobs" },
+        { "expr": "hamicloud_oldest_queued_job_age_seconds", "legendFormat": "Oldest Queued Age (s)" },
+        { "expr": "hamicloud_active_leases_total", "legendFormat": "Active Worker Leases" }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Job Operations — Retry Ratio & Dead-Letter Queue",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        { "expr": "hamicloud_job_retry_ratio", "legendFormat": "Job Retry Ratio" },
+        { "expr": "hamicloud_dead_letter_total", "legendFormat": "DLQ Records" }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Deployment Operations — Healthy Services & Transactional Outbox Backlog",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "targets": [
+        { "expr": "hamicloud_healthy_services_total", "legendFormat": "Healthy Services" },
+        { "expr": "hamicloud_outbox_pending_total", "legendFormat": "Outbox Pending Events" }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Resource Usage — Running Jobs & Active Intents",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "targets": [
+        { "expr": "hamicloud_running_jobs_total", "legendFormat": "Running Jobs" },
+        { "expr": "hamicloud_active_leases_total", "legendFormat": "Claimed Intents" }
+      ]
+    }
+  ]
+}

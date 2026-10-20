@@ -1,0 +1,33 @@
+{
+  "drill": "controller_executor_crash_and_lease_recovery",
+  "workspace_id": "2582cbd7-41cc-4ded-a426-2abfd5bd2623",
+  "job_id": "5fdacac6-d80d-48eb-a843-74e64d9805f1",
+  "final_job_state": "SUCCEEDED",
+  "total_attempts": 2,
+  "attempts": [
+    {
+      "attempt_number": 1,
+      "state": "FAILED",
+      "resource_uid": null,
+      "lease_epoch": 1,
+      "exit_code": -1,
+      "failure_reason": "Worker lease expired; executor lost",
+      "started_at": "2026-10-20T10:31:08.788984Z",
+      "finished_at": "2026-10-20T10:31:10.061457Z"
+    },
+    {
+      "attempt_number": 2,
+      "state": "SUCCEEDED",
+      "resource_uid": null,
+      "lease_epoch": 1,
+      "exit_code": 0,
+      "failure_reason": null,
+      "started_at": "2026-10-20T10:31:11.087481Z",
+      "finished_at": "2026-10-20T10:31:24.622476Z"
+    }
+  ],
+  "measured_recovery_seconds": 15.81,
+  "target_recovery_seconds": 60.0,
+  "status": "PASS",
+  "measured_at": "2026-10-20T10:31:24.780162+00:00"
+}

@@ -1,0 +1,21 @@
+{
+  "benchmark": "kubernetes_warm_rollout_and_job_execution",
+  "workspace_id": "c6332306-e102-4b34-bcef-6612a9bcc542",
+  "warm_service_rollout": {
+    "application_id": "0d77629c-8c22-4893-857c-3487085f2d2f",
+    "release_id": "d38964fa-9e54-4868-a426-f0f7213867ff",
+    "final_status": "HEALTHY",
+    "duration_seconds": 12.28,
+    "target_p95_seconds": 60.0,
+    "status": "PASS"
+  },
+  "warm_job_execution": {
+    "job_id": "44e9efa8-d519-4cbc-9f63-04ebdc9b4dbd",
+    "final_state": "SUCCEEDED",
+    "duration_seconds": 13.97,
+    "cold_pull_duration_seconds": 44.01,
+    "target_p95_seconds": 15.0,
+    "status": "PASS"
+  },
+  "measured_at": "2026-10-20T10:28:11.564823+00:00"
+}

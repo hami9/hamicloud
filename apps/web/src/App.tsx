@@ -11,6 +11,7 @@ import type {
   SecretMetadata,
   WorkspaceQuotas,
   AuditEventRecord,
+  WorkspaceTelemetry,
 } from './api'
 import {
   createWorkspace,
@@ -37,6 +38,7 @@ import {
   deleteWorkspaceSecret,
   getWorkspaceQuotas,
   listWorkspaceAuditEvents,
+  getWorkspaceTelemetry,
 } from './api'
 import {
   mergeDlqRecords,
@@ -64,6 +66,7 @@ export default function App() {
   const [newSecretValue, setNewSecretValue] = useState('')
   const [workspaceQuotas, setWorkspaceQuotas] = useState<WorkspaceQuotas | null>(null)
   const [auditEvents, setAuditEvents] = useState<AuditEventRecord[]>([])
+  const [workspaceTelemetry, setWorkspaceTelemetry] = useState<WorkspaceTelemetry | null>(null)
 
   // Services state
   const [apps, setApps] = useState<Application[]>([])
@@ -160,14 +163,16 @@ export default function App() {
   // Fetch governance & security data when activeWorkspace or governance tab is active
   const refreshGovernanceData = async (wsId: string) => {
     try {
-      const [mList, sList, qData] = await Promise.all([
+      const [mList, sList, qData, tData] = await Promise.all([
         listWorkspaceMembers(token, wsId),
         listWorkspaceSecrets(token, wsId),
         getWorkspaceQuotas(token, wsId),
+        getWorkspaceTelemetry(token, wsId),
       ])
       setMembers(mList)
       setSecrets(sList)
       setWorkspaceQuotas(qData)
+      setWorkspaceTelemetry(tData)
     } catch (err: unknown) {
       setErrorMsg((err as Error).message)
     }
@@ -185,15 +190,17 @@ export default function App() {
     let ignore = false
     const load = async () => {
       try {
-        const [mList, sList, qData] = await Promise.all([
+        const [mList, sList, qData, tData] = await Promise.all([
           listWorkspaceMembers(token, activeWorkspace.id),
           listWorkspaceSecrets(token, activeWorkspace.id),
           getWorkspaceQuotas(token, activeWorkspace.id),
+          getWorkspaceTelemetry(token, activeWorkspace.id),
         ])
         if (!ignore) {
           setMembers(mList)
           setSecrets(sList)
           setWorkspaceQuotas(qData)
+          setWorkspaceTelemetry(tData)
         }
       } catch (err: unknown) {
         if (!ignore) setErrorMsg((err as Error).message)
@@ -1174,6 +1181,51 @@ export default function App() {
                     ))}
                   </div>
                 </div>
+
+                {/* Operational Telemetry & SLO Metrics Card (M5) */}
+                {workspaceTelemetry && (
+                  <div className="content-card">
+                    <h3 style={{ fontSize: '1rem', fontWeight: 700, color: '#92400e', marginBottom: '0.5rem' }}>
+                      Operational Telemetry & Runtime Metrics (W3C Trace + Prometheus)
+                    </h3>
+                    <div
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+                        gap: '0.75rem',
+                      }}
+                    >
+                      <div style={{ border: '1px solid rgba(37, 99, 235, 0.2)', borderRadius: '8px', padding: '0.75rem', backgroundColor: '#ffffff' }}>
+                        <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#92400e' }}>API Latency (p95)</div>
+                        <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#2563eb', marginTop: '0.2rem' }}>
+                          {workspaceTelemetry.latency_p95_ms.toFixed(1)} ms
+                        </div>
+                        <div style={{ fontSize: '0.72rem', color: '#10b981' }}>p50: {workspaceTelemetry.latency_p50_ms.toFixed(1)} ms</div>
+                      </div>
+                      <div style={{ border: '1px solid rgba(37, 99, 235, 0.2)', borderRadius: '8px', padding: '0.75rem', backgroundColor: '#ffffff' }}>
+                        <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#92400e' }}>Active Worker Leases</div>
+                        <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#2563eb', marginTop: '0.2rem' }}>
+                          {workspaceTelemetry.active_leases_total}
+                        </div>
+                        <div style={{ fontSize: '0.72rem', color: '#10b981' }}>Queued Jobs: {workspaceTelemetry.queued_jobs_total}</div>
+                      </div>
+                      <div style={{ border: '1px solid rgba(37, 99, 235, 0.2)', borderRadius: '8px', padding: '0.75rem', backgroundColor: '#ffffff' }}>
+                        <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#92400e' }}>Outbox Pending</div>
+                        <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#2563eb', marginTop: '0.2rem' }}>
+                          {workspaceTelemetry.outbox_pending_total}
+                        </div>
+                        <div style={{ fontSize: '0.72rem', color: '#10b981' }}>Healthy Services: {workspaceTelemetry.healthy_services_total}</div>
+                      </div>
+                      <div style={{ border: '1px solid rgba(37, 99, 235, 0.2)', borderRadius: '8px', padding: '0.75rem', backgroundColor: '#ffffff' }}>
+                        <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#92400e' }}>Job Retry Ratio</div>
+                        <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#2563eb', marginTop: '0.2rem' }}>
+                          {(workspaceTelemetry.job_retry_ratio * 100).toFixed(1)}%
+                        </div>
+                        <div style={{ fontSize: '0.72rem', color: '#10b981' }}>5xx Error Rate: {(workspaceTelemetry.error_rate_5xx * 100).toFixed(2)}%</div>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {/* Encrypted Secrets (AES-256-GCM) Card */}
                 <div className="content-card">

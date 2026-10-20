@@ -1,0 +1,14 @@
+{
+  "exercise": "alert_to_runbook_stalled_accepted_work",
+  "alert_name": "HamiCloudStalledAcceptedWork",
+  "alert_expr": "hamicloud_oldest_queued_job_age_seconds > 60 or hamicloud_outbox_pending_total > 50",
+  "runbook_url": "docs/runbooks/stalled-operations.md",
+  "job_id": "519916ae-6491-4b70-b862-1f815f9e03f2",
+  "oldest_queued_job_age_seconds_before_mitigation": 125.034,
+  "alert_firing_before_mitigation": true,
+  "mitigation_executed": "hamicloud-scheduler --run-once",
+  "oldest_queued_job_age_seconds_after_mitigation": 0.0,
+  "alert_resolved_after_mitigation": true,
+  "status": "PASS",
+  "measured_at": "2026-10-20T10:31:29.840276+00:00"
+}

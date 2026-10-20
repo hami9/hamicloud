@@ -1,0 +1,30 @@
+{
+  "drill": "postgresql_and_artifact_disaster_restore",
+  "workspace_id": "94f72b03-7ae6-4484-998b-3bc4bca9c9b3",
+  "source_row_counts": {
+    "workspaces": 1,
+    "applications": 0,
+    "releases": 0,
+    "jobs": 0,
+    "secret_references": 1,
+    "audit_events": 2
+  },
+  "restored_row_counts": {
+    "workspaces": 1,
+    "applications": 0,
+    "releases": 0,
+    "jobs": 0,
+    "secret_references": 1,
+    "audit_events": 2
+  },
+  "row_counts_match": true,
+  "artifact_sha256_before": "8cc9612b22b038930ac4bb78c125da4e24d1554e8c97e9a8ae3a5beb3df69c31",
+  "artifact_sha256_after": "8cc9612b22b038930ac4bb78c125da4e24d1554e8c97e9a8ae3a5beb3df69c31",
+  "artifact_checksum_match": true,
+  "measured_rto_seconds": 18.68,
+  "target_rto_seconds": 3600.0,
+  "measured_rpo_seconds": 0.0,
+  "target_rpo_seconds": 900.0,
+  "status": "PASS",
+  "measured_at": "2026-10-20T10:28:31.794737+00:00"
+}

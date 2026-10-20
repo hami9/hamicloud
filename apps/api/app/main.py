@@ -1,20 +1,26 @@
 import asyncio
-import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+import time
 from typing import Any, AsyncGenerator, Awaitable, Callable
+import uuid
 from fastapi import FastAPI, HTTPException, Request, Response, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 import redis.asyncio as aioredis
 from sqlalchemy import text
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.v1.router import api_v1_router
 from app.core.config import settings
+from app.core.telemetry import (
+    parse_or_create_traceparent,
+    set_trace_context,
+    telemetry_collector,
+)
 from app.db.session import AsyncSessionLocal, engine
 from app.schemas.common import ErrorCode, ErrorResponse, HealthResponse, ReadinessResponse
 from app.workers.outbox_dispatcher import OutboxDispatcher
@@ -97,15 +103,31 @@ app.add_middleware(
 )
 
 
-# Correlation ID Middleware
+# Correlation ID, W3C Trace Propagation & Telemetry Middleware
 @app.middleware("http")
 async def correlation_id_middleware(
     request: Request, call_next: Callable[[Request], Awaitable[Response]]
 ) -> Response:
     correlation_id = request.headers.get("X-Correlation-ID") or f"req_{uuid.uuid4().hex}"
+    trace_id, traceparent = parse_or_create_traceparent(
+        request.headers.get("traceparent"),
+        request.headers.get("X-Trace-ID"),
+    )
     request.state.correlation_id = correlation_id
+    request.state.trace_id = trace_id
+    request.state.traceparent = traceparent
+    set_trace_context(correlation_id, trace_id, traceparent)
+
+    t0 = time.perf_counter()
     response: Response = await call_next(request)
+    duration_ms = (time.perf_counter() - t0) * 1000.0
+
+    if request.url.path != "/metrics":
+        telemetry_collector.record_request(response.status_code, duration_ms)
+
     response.headers["X-Correlation-ID"] = correlation_id
+    response.headers["X-Trace-ID"] = trace_id
+    response.headers["traceparent"] = traceparent
     return response
 
 
@@ -113,6 +135,13 @@ async def correlation_id_middleware(
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
     correlation_id = getattr(request.state, "correlation_id", "unknown")
+    trace_id = getattr(request.state, "trace_id", "")
+    traceparent = getattr(request.state, "traceparent", "")
+    headers = {"X-Correlation-ID": correlation_id}
+    if trace_id:
+        headers["X-Trace-ID"] = trace_id
+    if traceparent:
+        headers["traceparent"] = traceparent
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         content=ErrorResponse(
@@ -121,7 +150,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
             correlation_id=correlation_id,
             details={"errors": jsonable_encoder(exc.errors())},
         ).model_dump(exclude_none=True),
-        headers={"X-Correlation-ID": correlation_id},
+        headers=headers,
     )
 
 
@@ -130,6 +159,8 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     correlation_id = getattr(request.state, "correlation_id", "unknown")
+    trace_id = getattr(request.state, "trace_id", "")
+    traceparent = getattr(request.state, "traceparent", "")
     http_exc: StarletteHTTPException = exc if isinstance(exc, StarletteHTTPException) else exc  # type: ignore[assignment]
 
     message = str(http_exc.detail)
@@ -169,6 +200,10 @@ async def http_exception_handler(request: Request, exc: Exception) -> JSONRespon
         error_code = ErrorCode.INTERNAL_SERVER_ERROR
 
     resp_headers: dict[str, str] = {"X-Correlation-ID": correlation_id}
+    if trace_id:
+        resp_headers["X-Trace-ID"] = trace_id
+    if traceparent:
+        resp_headers["traceparent"] = traceparent
     exc_headers = getattr(http_exc, "headers", None)
     if isinstance(exc_headers, dict):
         for k, v in exc_headers.items():
@@ -190,6 +225,13 @@ async def http_exception_handler(request: Request, exc: Exception) -> JSONRespon
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     correlation_id = getattr(request.state, "correlation_id", "unknown")
+    trace_id = getattr(request.state, "trace_id", "")
+    traceparent = getattr(request.state, "traceparent", "")
+    headers = {"X-Correlation-ID": correlation_id}
+    if trace_id:
+        headers["X-Trace-ID"] = trace_id
+    if traceparent:
+        headers["traceparent"] = traceparent
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content=ErrorResponse(
@@ -197,11 +239,11 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
             message="An unexpected internal platform error occurred.",
             correlation_id=correlation_id,
         ).model_dump(exclude_none=True),
-        headers={"X-Correlation-ID": correlation_id},
+        headers=headers,
     )
 
 
-# Probes
+# Probes & Prometheus Metrics
 @app.get("/healthz", response_model=HealthResponse, tags=["Observability"])
 async def healthz() -> HealthResponse:
     """Liveness probe: verifies the HTTP control API is running."""
@@ -247,6 +289,18 @@ async def readyz(request: Request) -> ReadinessResponse:
         database=db_ok,
         redis=redis_ok,
         timestamp=datetime.now(timezone.utc),
+    )
+
+
+@app.get("/metrics", include_in_schema=False)
+async def prometheus_metrics() -> PlainTextResponse:
+    """Prometheus text exposition endpoint for platform operational metrics (M5)."""
+    async with AsyncSessionLocal() as session:
+        data = await telemetry_collector.collect_metrics(db=session, workspace_id=None)
+    body = telemetry_collector.render_prometheus(data)
+    return PlainTextResponse(
+        content=body,
+        media_type="text/plain; version=0.0.4; charset=utf-8",
     )
 
 

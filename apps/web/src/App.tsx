@@ -281,7 +281,7 @@ export default function App() {
       listWorkspaceDeadLetterRecords(token, targetWorkspaceId)
         .then((data) => {
           if (ignore) return
-          if (activeWorkspace.id !== currentDlqWorkspaceIdRef.current && currentDlqWorkspaceIdRef.current !== null) {
+          if (activeWorkspace.id !== targetWorkspaceId) {
             return
           }
           const isNewWorkspace = currentDlqWorkspaceIdRef.current !== targetWorkspaceId
@@ -346,7 +346,7 @@ export default function App() {
     const targetWorkspaceId = activeWorkspace.id
     try {
       const data = await listWorkspaceJobs(token, targetWorkspaceId)
-      if (activeWorkspace.id !== currentDlqWorkspaceIdRef.current) return
+      if (activeWorkspace.id !== targetWorkspaceId) return
       setJobs(data)
       if (selectedJob) {
         const fresh = data.find((j) => j.id === selectedJob.id)
@@ -354,12 +354,13 @@ export default function App() {
       }
       hasLoadedMoreDlqRef.current = false
       const dlqData = await listWorkspaceDeadLetterRecords(token, targetWorkspaceId)
-      if (activeWorkspace.id !== currentDlqWorkspaceIdRef.current) return
+      if (activeWorkspace.id !== targetWorkspaceId) return
+      currentDlqWorkspaceIdRef.current = targetWorkspaceId
       setDeadLetterRecords(dlqData.items || [])
       setDlqNextCursor(dlqData.next_cursor || null)
       setNoticeMsg('Jobs and DLQ refreshed.')
     } catch (err: unknown) {
-      if (activeWorkspace.id === currentDlqWorkspaceIdRef.current) {
+      if (activeWorkspace.id === targetWorkspaceId) {
         setErrorMsg((err as Error).message)
       }
     }

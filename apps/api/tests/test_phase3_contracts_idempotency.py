@@ -1434,6 +1434,75 @@ def test_integrity_create_application_non_slug_violation_returns_500_not_409(cli
     assert_unmapped_integrity_500(resp)
 
 
+def test_integrity_webhook_delivery_non_unique_violation_returns_500_not_200(client: TestClient, clean_db):
+    """A constraint other than uq_webhook_deliveries_repo_delivery must not be reported as DUPLICATE 200."""
+    import hashlib
+    import hmac
+    ws_id, _, auth_headers = create_test_workspace_and_app(client)
+    r = client.post(
+        f"/v1/workspaces/{ws_id}/repositories",
+        json={
+            "name": "tmp-wh-repo",
+            "repo_url": "https://github.com/org/tmp-wh.git",
+            "webhook_secret": "wh-secret-12345",
+            "default_branch": "main",
+        },
+        headers=auth_headers,
+    )
+    repo_id = r.json()["id"]
+
+    client.post(
+        f"/v1/workspaces/{ws_id}/apps",
+        json={
+            "name": "Wh App",
+            "slug": f"wh-app-{uuid.uuid4().hex[:6]}",
+            "repository_id": repo_id,
+            "git_branch": "main",
+        },
+        headers=auth_headers,
+    )
+
+    body = b'{"ref": "refs/heads/main", "after": "0123456789abcdef0123456789abcdef01234567"}'
+    sig = "sha256=" + hmac.new(b"wh-secret-12345", body, hashlib.sha256).hexdigest()
+
+    with temporary_check_constraint("webhook_deliveries", "chk_tmp_wh_event", "length(event_type) > 100"):
+        resp = client.post(
+            f"/v1/webhooks/github/{repo_id}",
+            content=body,
+            headers={
+                "X-GitHub-Delivery": str(uuid.uuid4()),
+                "X-GitHub-Event": "push",
+                "X-Hub-Signature-256": sig,
+                "Content-Type": "application/json",
+            },
+        )
+    assert_unmapped_integrity_500(resp)
+
+
+def test_integrity_upsert_workspace_member_non_user_violation_returns_500_not_409(client: TestClient, clean_db):
+    """A constraint other than uq_workspace_membership_user must not be reported as 409."""
+    ws_id, _, auth_headers = create_test_workspace_and_app(client)
+    with temporary_check_constraint("workspace_memberships", "chk_tmp_ws_member_role", "user_subject != 'some-user'"):
+        resp = client.post(
+            f"/v1/workspaces/{ws_id}/members",
+            json={"user_subject": "some-user", "role": "DEVELOPER"},
+            headers=auth_headers,
+        )
+    assert_unmapped_integrity_500(resp)
+
+
+def test_integrity_upsert_secret_non_name_violation_returns_500_not_409(client: TestClient, clean_db):
+    """A constraint other than uq_secret_reference_workspace_name must not be reported as 409."""
+    ws_id, _, auth_headers = create_test_workspace_and_app(client)
+    with temporary_check_constraint("secret_references", "chk_tmp_sec_ver", "key_version > 100"):
+        resp = client.post(
+            f"/v1/workspaces/{ws_id}/secrets",
+            json={"name": "SOME_SECRET", "value": "topsecret"},
+            headers=auth_headers,
+        )
+    assert_unmapped_integrity_500(resp)
+
+
 def test_violated_constraint_reads_only_the_driver_reported_name():
     """The helper reads the driver's attribute and never parses the error text."""
 

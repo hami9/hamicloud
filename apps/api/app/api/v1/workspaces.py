@@ -175,6 +175,9 @@ async def upsert_workspace_member(
                 detail="Only workspace OWNER can modify an existing OWNER membership",
             )
         if existing.role == WorkspaceRole.OWNER and payload.role != WorkspaceRole.OWNER:
+            await db.execute(
+                select(Workspace.id).where(Workspace.id == workspace_id).with_for_update()
+            )
             owner_count = (
                 await db.execute(
                     select(func.count())
@@ -211,7 +214,16 @@ async def upsert_workspace_member(
         details={"user_subject": payload.user_subject.strip(), "role": payload.role.value},
     )
 
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        if violated_constraint(exc) == "uq_workspace_membership_user":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Membership for '{payload.user_subject.strip()}' already exists in this workspace",
+            ) from exc
+        raise unexpected_integrity_error(exc, "upsertWorkspaceMember") from exc
     await db.refresh(member)
 
     return WorkspaceMemberResponse(
@@ -255,6 +267,9 @@ async def remove_workspace_member(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Only workspace OWNER can remove an OWNER member",
             )
+        await db.execute(
+            select(Workspace.id).where(Workspace.id == workspace_id).with_for_update()
+        )
         owner_count = (
             await db.execute(
                 select(func.count())

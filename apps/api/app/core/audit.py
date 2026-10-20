@@ -16,6 +16,14 @@ _SENSITIVE_KEY_MARKERS = (
 )
 
 
+def _sanitize_audit_value(v: Any) -> Any:
+    if isinstance(v, dict):
+        return sanitize_audit_details(v)
+    elif isinstance(v, list):
+        return [_sanitize_audit_value(item) for item in v]
+    return v
+
+
 def sanitize_audit_details(details: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """Ensure secret values, tokens, or credentials are never stored in audit details."""
     if not details:
@@ -27,6 +35,8 @@ def sanitize_audit_details(details: Optional[Dict[str, Any]]) -> Dict[str, Any]:
             cleaned[k] = "[REDACTED]"
         elif isinstance(v, dict):
             cleaned[k] = sanitize_audit_details(v)
+        elif isinstance(v, list):
+            cleaned[k] = [_sanitize_audit_value(item) for item in v]
         else:
             cleaned[k] = v
     return cleaned

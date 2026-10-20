@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.db_errors import unexpected_integrity_error, violated_constraint
 from app.core.events import OutboxTopic, create_outbox_event
 from app.db.session import get_db
 from app.models.application import Application
@@ -168,6 +169,7 @@ async def handle_github_webhook(
 
     # 7. Find applications linked to this repository and branch
     apps_stmt = select(Application).where(
+        Application.workspace_id == repo.workspace_id,
         Application.repository_id == repository_id,
         (Application.git_branch == branch) | (Application.git_branch.is_(None)),
     )
@@ -262,16 +264,18 @@ async def handle_github_webhook(
 
     try:
         await db.commit()
-    except IntegrityError:
+    except IntegrityError as exc:
         await db.rollback()
         # In case of concurrent delivery race on uq_webhook_deliveries_repo_delivery
-        response.status_code = status.HTTP_200_OK
-        return WebhookDeliveryResponse(
-            delivery_id=x_github_delivery,
-            status="DUPLICATE",
-            event_type=x_github_event or "push",
-            processed_at=datetime.now(timezone.utc),
-        )
+        if violated_constraint(exc) == "uq_webhook_deliveries_repo_delivery":
+            response.status_code = status.HTTP_200_OK
+            return WebhookDeliveryResponse(
+                delivery_id=x_github_delivery,
+                status="DUPLICATE",
+                event_type=x_github_event or "push",
+                processed_at=datetime.now(timezone.utc),
+            )
+        raise unexpected_integrity_error(exc, "webhookDelivery") from exc
 
     return WebhookDeliveryResponse(
         delivery_id=x_github_delivery,

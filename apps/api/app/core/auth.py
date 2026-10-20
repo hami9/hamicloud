@@ -1,3 +1,4 @@
+import asyncio
 from dataclasses import dataclass
 import logging
 from typing import Any, Optional
@@ -42,11 +43,11 @@ class Caller:
     username: Optional[str] = None
 
 
-def decode_oidc_token(token: str) -> dict[str, Any]:
+async def decode_oidc_token(token: str) -> dict[str, Any]:
     """Validate and decode an OIDC JWT Bearer token using JWKS public keys."""
     jwks_client = get_jwks_client()
     try:
-        signing_key = jwks_client.get_signing_key_from_jwt(token)
+        signing_key = await asyncio.to_thread(jwks_client.get_signing_key_from_jwt, token)
         decode_kwargs: dict[str, Any] = {
             "algorithms": settings.OIDC_ALGORITHMS,
             "issuer": settings.OIDC_ISSUER_URL,
@@ -117,7 +118,7 @@ async def get_caller(
         parts = authorization.split(" ", 1)
         if len(parts) == 2 and parts[0].lower() == "bearer" and parts[1].strip():
             token = parts[1].strip()
-            payload = decode_oidc_token(token)
+            payload = await decode_oidc_token(token)
             sub = payload.get("sub")
             if not sub:
                 raise HTTPException(

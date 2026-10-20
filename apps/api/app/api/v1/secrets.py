@@ -1,7 +1,10 @@
 import uuid
 from fastapi import APIRouter, Depends, HTTPException, Path, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.db_errors import unexpected_integrity_error, violated_constraint
 
 from app.core.audit import record_audit_event
 from app.core.auth import Caller, authorize_workspace_access, get_caller
@@ -66,7 +69,16 @@ async def upsert_workspace_secret(
         details={"name": payload.name, "key_version": secret_ref.key_version},
     )
 
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        if violated_constraint(exc) == "uq_secret_reference_workspace_name":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Secret '{payload.name}' already exists in this workspace",
+            ) from exc
+        raise unexpected_integrity_error(exc, "upsertSecret") from exc
     await db.refresh(secret_ref)
 
     return SecretMetadataResponse(

@@ -588,6 +588,43 @@ export async function deleteWorkspaceSecret(
   }
 }
 
+export function mapWorkspaceQuotasResponse(raw: any): WorkspaceQuotas {
+  if (raw && !Array.isArray(raw.quotas) && typeof raw.concurrent_jobs_limit === 'number') {
+    const quotas: QuotaUsageItem[] = [
+      {
+        resource_class: 'CONCURRENT_JOB',
+        limit: raw.concurrent_jobs_limit,
+        used: raw.concurrent_jobs_used,
+        remaining: Math.max(0, raw.concurrent_jobs_limit - raw.concurrent_jobs_used),
+      },
+      {
+        resource_class: 'CONCURRENT_BUILD',
+        limit: raw.concurrent_builds_limit,
+        used: raw.concurrent_builds_used,
+        remaining: Math.max(0, raw.concurrent_builds_limit - raw.concurrent_builds_used),
+      },
+      {
+        resource_class: 'DEPLOYED_SERVICE',
+        limit: raw.deployed_services_limit,
+        used: raw.deployed_services_used,
+        remaining: Math.max(0, raw.deployed_services_limit - raw.deployed_services_used),
+      },
+      {
+        resource_class: 'PENDING_OPERATIONS',
+        limit: raw.pending_operations_limit,
+        used: raw.pending_operations_used,
+        remaining: Math.max(0, raw.pending_operations_limit - raw.pending_operations_used),
+      },
+    ]
+    return {
+      workspace_id: raw.workspace_id,
+      quotas,
+      active_reservations: raw.reservations || raw.active_reservations || [],
+    }
+  }
+  return raw as WorkspaceQuotas
+}
+
 export async function getWorkspaceQuotas(token: string, workspaceId: string): Promise<WorkspaceQuotas> {
   const res = await fetch(`/v1/workspaces/${workspaceId}/quotas`, {
     method: 'GET',
@@ -597,7 +634,8 @@ export async function getWorkspaceQuotas(token: string, workspaceId: string): Pr
     const msg = await extractErrorMessage(res, 'Failed to fetch workspace quotas')
     throw new Error(msg)
   }
-  return res.json()
+  const raw = await res.json()
+  return mapWorkspaceQuotasResponse(raw)
 }
 
 export async function listWorkspaceAuditEvents(token: string, workspaceId: string): Promise<AuditEventRecord[]> {

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import type { DeadLetterRecord } from './api.ts'
+import { mapWorkspaceQuotasResponse, type DeadLetterRecord } from './api.ts'
 import {
   mergeDlqRecords,
   appendDlqPage,
@@ -154,4 +154,59 @@ test('deriveSelectedDlqRecord: derives record by ID, verifies workspace, handles
   // Null selectedId or null activeWorkspace returns null
   assert.equal(deriveSelectedDlqRecord(null, [rec1, rec2], 'ws-1'), null)
   assert.equal(deriveSelectedDlqRecord('rec-1', [rec1, rec2], null), null)
+})
+
+test('mapWorkspaceQuotasResponse: maps backend flattened response into frontend WorkspaceQuotas shape', () => {
+  const backendResponse = {
+    workspace_id: '550e8400-e29b-41d4-a716-446655440000',
+    concurrent_jobs_limit: 2,
+    concurrent_jobs_used: 1,
+    concurrent_builds_limit: 1,
+    concurrent_builds_used: 0,
+    deployed_services_limit: 2,
+    deployed_services_used: 1,
+    pending_operations_limit: 100,
+    pending_operations_used: 5,
+    reservations: [
+      {
+        id: 'res-1',
+        workspace_id: '550e8400-e29b-41d4-a716-446655440000',
+        resource_class: 'CONCURRENT_BUILD',
+        units: 1,
+        status: 'ACTIVE',
+        expires_at: '2026-10-20T12:00:00Z',
+        created_at: '2026-10-20T11:00:00Z',
+      },
+    ],
+  }
+
+  const mapped = mapWorkspaceQuotasResponse(backendResponse)
+  assert.equal(mapped.workspace_id, '550e8400-e29b-41d4-a716-446655440000')
+  assert.equal(mapped.quotas.length, 4)
+  assert.deepEqual(mapped.quotas[0], {
+    resource_class: 'CONCURRENT_JOB',
+    limit: 2,
+    used: 1,
+    remaining: 1,
+  })
+  assert.deepEqual(mapped.quotas[1], {
+    resource_class: 'CONCURRENT_BUILD',
+    limit: 1,
+    used: 0,
+    remaining: 1,
+  })
+  assert.deepEqual(mapped.quotas[2], {
+    resource_class: 'DEPLOYED_SERVICE',
+    limit: 2,
+    used: 1,
+    remaining: 1,
+  })
+  assert.deepEqual(mapped.quotas[3], {
+    resource_class: 'PENDING_OPERATIONS',
+    limit: 100,
+    used: 5,
+    remaining: 95,
+  })
+  assert.equal(mapped.active_reservations.length, 1)
+  assert.equal(mapped.active_reservations[0].id, 'res-1')
 })

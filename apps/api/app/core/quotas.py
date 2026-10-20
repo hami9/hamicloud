@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Tuple
 from fastapi import HTTPException, status
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -111,7 +111,7 @@ async def get_workspace_quota_summary(
     ).scalar() or 0
 
     effective_jobs = max(int(running_jobs_count), res_units[QuotaResourceClass.CONCURRENT_JOB])
-    effective_builds = int(active_builds_count)
+    effective_builds = max(int(active_builds_count), res_units[QuotaResourceClass.CONCURRENT_BUILD])
     effective_services = max(int(deployed_apps_count), res_units[QuotaResourceClass.DEPLOYED_SERVICE])
     effective_pending = int(pending_jobs_count) + int(active_builds_count)
 
@@ -132,6 +132,10 @@ async def enforce_workspace_quota(
     reserve: bool = True,
 ) -> Optional[QuotaReservation]:
     """Verify workspace quota limits and optionally stage an ACTIVE QuotaReservation."""
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:ws))"),
+        {"ws": str(workspace_id)},
+    )
     (
         effective_jobs,
         effective_builds,

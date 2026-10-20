@@ -4,6 +4,9 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+DEFAULT_SECRET_ENCRYPTION_KEY = "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE="
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -48,7 +51,7 @@ class Settings(BaseSettings):
 
     # Secret Encryption (32-byte url-safe base64 key for AES-GCM)
     SECRET_ENCRYPTION_KEY: str = Field(
-        default="MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE="
+        default=DEFAULT_SECRET_ENCRYPTION_KEY
     )
 
     # Admission Defaults
@@ -122,6 +125,10 @@ class Settings(BaseSettings):
             if not self.effective_artifacts_dir:
                 raise RuntimeError(
                     "ARTIFACTS_DIR is required when ENVIRONMENT is not development"
+                )
+            if self.SECRET_ENCRYPTION_KEY == DEFAULT_SECRET_ENCRYPTION_KEY:
+                raise RuntimeError(
+                    "SECRET_ENCRYPTION_KEY must be changed from the default when ENVIRONMENT is not development"
                 )
 
 

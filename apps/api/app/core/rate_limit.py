@@ -28,9 +28,11 @@ async def check_workspace_rate_limit(
     key = f"hc:ratelimit:{workspace_id}:{route_class}:{bucket}"
 
     try:
-        current = int(await redis_client.incr(key))
-        if current == 1:
-            await redis_client.expire(key, 60)
+        pipe = redis_client.pipeline(transaction=True)
+        pipe.incr(key)
+        pipe.expire(key, 60, nx=True)
+        results = await pipe.execute()
+        current = int(results[0])
     except Exception as exc:
         if settings.REDIS_FAIL_CLOSED or settings.ENVIRONMENT != "development":
             raise HTTPException(

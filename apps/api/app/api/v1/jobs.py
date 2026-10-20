@@ -3,6 +3,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -559,15 +560,10 @@ async def get_job_output(
             detail="Job output artifact not found",
         )
 
-    with open(artifact_path, "r", encoding="utf-8", errors="replace") as f:
-        content = f.read()
-
-    return Response(
-        content=content,
+    return FileResponse(
+        path=artifact_path,
         media_type="text/plain; charset=utf-8",
-        headers={
-            "Content-Disposition": f'attachment; filename="job-{job.id}-output.txt"'
-        },
+        filename=f"job-{job.id}-output.txt",
     )
 
 

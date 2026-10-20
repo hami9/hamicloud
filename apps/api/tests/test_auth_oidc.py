@@ -407,7 +407,20 @@ def test_production_missing_artifacts_dir_raises_startup_error(monkeypatch):
             pass
 
 
-def test_non_development_missing_oidc_audience_returns_401(mock_rsa_keys, monkeypatch):
+def test_production_default_secret_encryption_key_raises_startup_error(monkeypatch):
+    """Verify that default SECRET_ENCRYPTION_KEY in non-development environment causes a startup error."""
+    from app.core.config import DEFAULT_SECRET_ENCRYPTION_KEY
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
+    monkeypatch.setattr(settings, "OIDC_AUDIENCE", "hamicloud-api")
+    monkeypatch.setattr(settings, "ARTIFACTS_DIR", "/var/artifacts")
+    monkeypatch.setattr(settings, "SECRET_ENCRYPTION_KEY", DEFAULT_SECRET_ENCRYPTION_KEY)
+
+    with pytest.raises(RuntimeError, match="SECRET_ENCRYPTION_KEY must be changed from the default"):
+        settings.validate_runtime_environment()
+
+
+@pytest.mark.asyncio
+async def test_non_development_missing_oidc_audience_returns_401(mock_rsa_keys, monkeypatch):
     """Verify that in non-development environment, missing OIDC_AUDIENCE at request-time raises 401."""
     from fastapi import HTTPException
     from app.core.auth import decode_oidc_token
@@ -428,7 +441,7 @@ def test_non_development_missing_oidc_audience_returns_401(mock_rsa_keys, monkey
         token = jwt.encode(claims, private_pem, algorithm="RS256", headers={"kid": "mock-key-1"})
 
         with pytest.raises(HTTPException) as exc_info:
-            decode_oidc_token(token)
+            await decode_oidc_token(token)
         assert exc_info.value.status_code == 401
         assert "OIDC_AUDIENCE is required in non-development environment" in exc_info.value.detail
     finally:

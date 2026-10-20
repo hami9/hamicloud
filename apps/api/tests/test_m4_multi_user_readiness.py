@@ -375,3 +375,128 @@ def test_m4_noisy_workspace_quota_and_redis_rate_limit_isolation(client: TestCli
         cur.execute("UPDATE jobs SET state = 'CANCELLED' WHERE state = 'QUEUED'")
     conn.commit()
     conn.close()
+
+
+def test_m4_concurrent_build_reservation_enforced(client: TestClient, clean_db):
+    """Verify that an active CONCURRENT_BUILD QuotaReservation blocks build admission."""
+    ws_id, headers = create_workspace(client, "build-tenant", "build-ws")
+    conn = psycopg2.connect(TEST_DATABASE_URL_SYNC)
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO quota_reservations (id, workspace_id, resource_class, units, status, expires_at, created_at, updated_at)
+            VALUES (%s, %s, 'CONCURRENT_BUILD', 1, 'ACTIVE', NOW() + INTERVAL '1 hour', NOW(), NOW())
+            """,
+            (str(uuid.uuid4()), ws_id),
+        )
+    conn.commit()
+    conn.close()
+
+    quota_res = client.get(f"/v1/workspaces/{ws_id}/quotas", headers=headers)
+    assert quota_res.status_code == 200
+    assert quota_res.json()["concurrent_builds_used"] == 1
+
+
+def test_m4_rollback_rate_limit_and_quota_enforcement(client: TestClient, clean_db, monkeypatch):
+    """Verify that rollback enforces rate limits and DEPLOYED_SERVICE quota."""
+    ws_id, headers = create_workspace(client, "rb-tenant", "rb-ws")
+    digest = "registry.example.com/app@sha256:" + "f" * 64
+
+    # Create app 1 with 2 releases
+    app1 = client.post(
+        f"/v1/workspaces/{ws_id}/apps",
+        json={"name": "App 1", "slug": "app-1", "workload_type": "HTTP_SERVICE"},
+        headers=headers,
+    ).json()
+    dep1 = client.post(
+        f"/v1/apps/{app1['id']}/deployments",
+        json={"image_digest": digest, "port": 8080},
+        headers={"Idempotency-Key": f"dep-1-{uuid.uuid4().hex[:6]}", **headers},
+    ).json()
+    dep2 = client.post(
+        f"/v1/apps/{app1['id']}/deployments",
+        json={"image_digest": digest, "port": 8080},
+        headers={"Idempotency-Key": f"dep-2-{uuid.uuid4().hex[:6]}", **headers},
+    ).json()
+
+    # Create and deploy app 2 (reaching limit of 2 distinct deployed services)
+    app2 = client.post(
+        f"/v1/workspaces/{ws_id}/apps",
+        json={"name": "App 2", "slug": "app-2", "workload_type": "HTTP_SERVICE"},
+        headers=headers,
+    ).json()
+    client.post(
+        f"/v1/apps/{app2['id']}/deployments",
+        json={"image_digest": digest, "port": 8080},
+        headers={"Idempotency-Key": f"dep-3-{uuid.uuid4().hex[:6]}", **headers},
+    )
+
+    # Create app 3 (not deployed yet, distinct services cap is reached by app1 and app2)
+    app3 = client.post(
+        f"/v1/workspaces/{ws_id}/apps",
+        json={"name": "App 3", "slug": "app-3", "workload_type": "HTTP_SERVICE"},
+        headers=headers,
+    ).json()
+    rel_app3_id = str(uuid.uuid4())
+    conn = psycopg2.connect(TEST_DATABASE_URL_SYNC)
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO releases (id, application_id, workspace_id, release_number, image_digest, config_json, status, created_at, updated_at)
+            VALUES (%s, %s, %s, 1, %s, '{"port": 8080}', 'SUPERSEDED', NOW(), NOW())
+            """,
+            (rel_app3_id, app3["id"], ws_id, digest),
+        )
+    conn.commit()
+    conn.close()
+
+    # Attempting rollback on app3 should fail quota check (2 distinct services already deployed)
+    rb_fail = client.post(
+        f"/v1/apps/{app3['id']}/rollbacks",
+        json={"target_release_id": rel_app3_id},
+        headers={"Idempotency-Key": f"rb-quota-{uuid.uuid4().hex[:6]}", **headers},
+    )
+    assert rb_fail.status_code == 429
+    assert rb_fail.json()["error_code"] == "QUOTA_EXCEEDED"
+
+    # Rollback on already-deployed app1 should succeed under quota
+    rb_ok = client.post(
+        f"/v1/apps/{app1['id']}/rollbacks",
+        json={"target_release_id": dep1["operation_id"]},
+        headers={"Idempotency-Key": f"rb-ok-{uuid.uuid4().hex[:6]}", **headers},
+    )
+    assert rb_ok.status_code == 202
+
+    # Now test rate limiting on rollback
+    monkeypatch.setattr(settings, "RATE_LIMIT_REQUESTS_PER_MINUTE", 1)
+    rb_rl = client.post(
+        f"/v1/apps/{app1['id']}/rollbacks",
+        json={"target_release_id": dep2["operation_id"]},
+        headers={"Idempotency-Key": f"rb-rl-{uuid.uuid4().hex[:6]}", **headers},
+    )
+    assert rb_rl.status_code == 429
+    assert rb_rl.json()["error_code"] == "RATE_LIMITED"
+
+
+def test_sanitize_audit_details_recursively_redacts_lists_and_nested_dicts():
+    from app.core.audit import sanitize_audit_details
+    details = {
+        "safe_key": "safe_val",
+        "nested_dict": {"secret_token": "shh", "other": "ok"},
+        "list_of_dicts": [
+            {"password": "pw1", "user": "u1"},
+            {"api_key": "k2", "user": "u2"},
+            {"tags": ["admin", {"private_key": "pk"}]},
+        ],
+        "list_of_strings": ["foo", "bar"],
+    }
+    cleaned = sanitize_audit_details(details)
+    assert cleaned["safe_key"] == "safe_val"
+    assert cleaned["nested_dict"]["secret_token"] == "[REDACTED]"
+    assert cleaned["nested_dict"]["other"] == "ok"
+    assert cleaned["list_of_dicts"][0]["password"] == "[REDACTED]"
+    assert cleaned["list_of_dicts"][0]["user"] == "u1"
+    assert cleaned["list_of_dicts"][1]["api_key"] == "[REDACTED]"
+    assert cleaned["list_of_dicts"][2]["tags"][0] == "admin"
+    assert cleaned["list_of_dicts"][2]["tags"][1]["private_key"] == "[REDACTED]"
+    assert cleaned["list_of_strings"] == ["foo", "bar"]

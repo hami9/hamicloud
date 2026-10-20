@@ -25,6 +25,7 @@ from app.core.pagination import decode_cursor, encode_cursor
 from app.db.session import get_db
 from app.models.application import Application
 from app.models.release import Release, ReleaseStatus
+from app.models.repository import Repository
 from app.models.workspace import WorkspaceRole
 from app.schemas.application import (
     ApplicationListResponse,
@@ -69,6 +70,21 @@ async def create_application(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Application with slug '{payload.slug}' already exists in this workspace",
         )
+
+    if payload.repository_id is not None:
+        repo = (
+            await db.execute(
+                select(Repository).where(
+                    Repository.id == payload.repository_id,
+                    Repository.workspace_id == workspace_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if not repo:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Repository not found in this workspace",
+            )
 
     app = Application(
         id=uuid.uuid4(),
@@ -272,6 +288,7 @@ async def deploy_release(
     status_code=status.HTTP_202_ACCEPTED,
 )
 async def rollback_release(
+    request: Request,
     app_id: uuid.UUID,
     payload: RollbackRequest,
     idempotency_key: str = Depends(get_idempotency_key),
@@ -321,6 +338,11 @@ async def rollback_release(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Target release not found for this application",
         )
+
+    await check_workspace_rate_limit(request, workspace_id, "apps.rollback")
+    await enforce_workspace_quota(
+        db, workspace_id, QuotaResourceClass.DEPLOYED_SERVICE, application_id=app.id, reserve=True
+    )
 
     # 2. Increment generation & determine release number
     app.desired_generation += 1
@@ -651,18 +673,25 @@ async def trigger_build(
     caller: Caller = Depends(get_caller),
     db: AsyncSession = Depends(get_db),
 ) -> ReleaseResponse:
-    app = (
-        await db.execute(select(Application).where(Application.id == app_id))
-    ).scalar_one_or_none()
-    if not app:
+    ws_stmt = select(Application.workspace_id).where(Application.id == app_id)
+    workspace_id = (await db.execute(ws_stmt)).scalar_one_or_none()
+    if not workspace_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Application not found",
         )
 
     await authorize_workspace_access(
-        db, caller, app.workspace_id, min_role=WorkspaceRole.DEVELOPER, not_found_detail="Application not found"
+        db, caller, workspace_id, min_role=WorkspaceRole.DEVELOPER, not_found_detail="Application not found"
     )
+
+    lock_stmt = (
+        select(Application)
+        .where(Application.id == app_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    app = (await db.execute(lock_stmt)).scalar_one()
 
     if not app.repository_id:
         raise HTTPException(

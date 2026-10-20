@@ -570,6 +570,7 @@ async def test_m3_failed_build_preserves_currently_serving_application():
     from app.db.session import AsyncSessionLocal
     from app.models.application import Application
     from app.models.release import Release
+    from app.models.quota import QuotaReservation, QuotaStatus
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -647,6 +648,14 @@ async def test_m3_failed_build_preserves_currently_serving_application():
                     current_release_id=uuid.UUID(rel1_id),
                 )
             )
+            await session.execute(
+                update(QuotaReservation)
+                .where(
+                    QuotaReservation.workspace_id == uuid.UUID(ws_id),
+                    QuotaReservation.status == QuotaStatus.ACTIVE,
+                )
+                .values(status=QuotaStatus.RELEASED)
+            )
             await session.commit()
 
         # 2. Trigger Release 2 for broken Commit 2
@@ -691,4 +700,111 @@ async def test_m3_failed_build_preserves_currently_serving_application():
         assert rels_after[1]["id"] == rel1_id
         assert rels_after[1]["status"] == ReleaseStatus.HEALTHY.value
         assert rels_after[1]["image_digest"] == digest_1
+
+
+@pytest.mark.anyio
+async def test_m3_create_app_invalid_or_foreign_repository_returns_404():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Create workspace 1
+        ws1_resp = await client.post(
+            "/v1/workspaces",
+            json={"name": "WS1", "slug": f"ws1-{uuid.uuid4().hex[:6]}"},
+            headers={"X-Dev-Subject": "alice"},
+        )
+        ws1_id = ws1_resp.json()["id"]
+
+        # Create workspace 2
+        ws2_resp = await client.post(
+            "/v1/workspaces",
+            json={"name": "WS2", "slug": f"ws2-{uuid.uuid4().hex[:6]}"},
+            headers={"X-Dev-Subject": "alice"},
+        )
+        ws2_id = ws2_resp.json()["id"]
+
+        # Connect repo in WS2
+        repo_resp = await client.post(
+            f"/v1/workspaces/{ws2_id}/repositories",
+            json={
+                "name": "sample-ws2-repo",
+                "repo_url": "https://github.com/org/sample-ws2.git",
+                "webhook_secret": SECRET_KEY,
+                "default_branch": "main",
+            },
+            headers={"X-Dev-Subject": "alice"},
+        )
+        ws2_repo_id = repo_resp.json()["id"]
+
+        # 1. Non-existent repository ID
+        resp = await client.post(
+            f"/v1/workspaces/{ws1_id}/apps",
+            json={
+                "name": "App Bad Repo",
+                "slug": f"app-bad-{uuid.uuid4().hex[:6]}",
+                "repository_id": str(uuid.uuid4()),
+            },
+            headers={"X-Dev-Subject": "alice"},
+        )
+        assert resp.status_code == 404
+        assert "Repository not found in this workspace" in resp.json()["message"]
+
+        # 2. Repository belonging to WS2 attempted in WS1
+        resp = await client.post(
+            f"/v1/workspaces/{ws1_id}/apps",
+            json={
+                "name": "App Cross Repo",
+                "slug": f"app-cross-{uuid.uuid4().hex[:6]}",
+                "repository_id": ws2_repo_id,
+            },
+            headers={"X-Dev-Subject": "alice"},
+        )
+        assert resp.status_code == 404
+        assert "Repository not found in this workspace" in resp.json()["message"]
+
+
+@pytest.mark.anyio
+async def test_m3_webhook_tenant_isolation_by_workspace():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Create WS1 with app1 and repo1
+        ws1_resp = await client.post(
+            "/v1/workspaces",
+            json={"name": "WS1", "slug": f"ws1-{uuid.uuid4().hex[:6]}"},
+            headers={"X-Dev-Subject": "alice"},
+        )
+        ws1_id = ws1_resp.json()["id"]
+        repo1_resp = await client.post(
+            f"/v1/workspaces/{ws1_id}/repositories",
+            json={
+                "name": "repo1",
+                "repo_url": "https://github.com/org/repo1.git",
+                "webhook_secret": SECRET_KEY,
+                "default_branch": "main",
+            },
+            headers={"X-Dev-Subject": "alice"},
+        )
+        repo1_id = repo1_resp.json()["id"]
+        app1_resp = await client.post(
+            f"/v1/workspaces/{ws1_id}/apps",
+            json={"name": "App 1", "slug": f"app1-{uuid.uuid4().hex[:6]}", "repository_id": repo1_id, "git_branch": "main"},
+            headers={"X-Dev-Subject": "alice"},
+        )
+        assert app1_resp.status_code == 201
+
+        # Deliver webhook to repo1
+        body = json.dumps({"ref": "refs/heads/main", "after": "0123456789abcdef0123456789abcdef01234567"}).encode()
+        sig = create_signature(body, SECRET_KEY)
+        delivery_id = str(uuid.uuid4())
+        wh_res = await client.post(
+            f"/v1/webhooks/github/{repo1_id}",
+            content=body,
+            headers={
+                "X-GitHub-Delivery": delivery_id,
+                "X-GitHub-Event": "push",
+                "X-Hub-Signature-256": sig,
+                "Content-Type": "application/json",
+            },
+        )
+        assert wh_res.status_code == 202
+        assert wh_res.json()["status"] == "PROCESSED"
 

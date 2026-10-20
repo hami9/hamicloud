@@ -1,6 +1,7 @@
 import json
 import os
 import re
+from typing import Any
 import uuid
 import psycopg2
 from fastapi.testclient import TestClient
@@ -31,7 +32,7 @@ def _cleanup_test_rows() -> None:
     conn.close()
 
 
-def test_m5_prometheus_metrics_and_live_db_counters(client: TestClient, clean_db):
+def test_m5_prometheus_metrics_and_live_db_counters(client: TestClient, clean_db: Any) -> None:
     """Verify /metrics exposes Prometheus gauges/counters reflecting live HTTP and database state."""
     ws_id, headers = _create_workspace(client, "m5-metrics", "alice")
     job_digest = "registry.example.com/worker@sha256:" + "a" * 64
@@ -78,7 +79,7 @@ def test_m5_prometheus_metrics_and_live_db_counters(client: TestClient, clean_db
     _cleanup_test_rows()
 
 
-def test_m5_workspace_telemetry_rbac_and_isolation(client: TestClient, clean_db):
+def test_m5_workspace_telemetry_rbac_and_isolation(client: TestClient, clean_db: Any) -> None:
     """Verify /v1/workspaces/{workspace_id}/telemetry enforces VIEWER+ access and isolates workspace counts."""
     ws_a, alice_headers = _create_workspace(client, "m5-tele-a", "alice")
     ws_b, bob_headers = _create_workspace(client, "m5-tele-b", "bob")
@@ -129,7 +130,7 @@ def test_m5_workspace_telemetry_rbac_and_isolation(client: TestClient, clean_db)
     _cleanup_test_rows()
 
 
-def test_m5_w3c_traceparent_propagation_to_headers_and_outbox(client: TestClient, clean_db):
+def test_m5_w3c_traceparent_propagation_to_headers_and_outbox(client: TestClient, clean_db: Any) -> None:
     """Verify W3C traceparent and X-Correlation-ID propagate to HTTP response headers and outbox event headers."""
     ws_id, alice_headers = _create_workspace(client, "m5-trace", "alice")
     trace_id = "4bf92f3577b34da6a3ce929d0e0e4736"
@@ -174,7 +175,7 @@ def test_m5_w3c_traceparent_propagation_to_headers_and_outbox(client: TestClient
     _cleanup_test_rows()
 
 
-def test_m5_observability_alerts_and_runbooks_contract():
+def test_m5_observability_alerts_and_runbooks_contract() -> None:
     """Verify deploy/observability/alerts.yml, grafana-dashboard.json, and docs/runbooks/*.md are complete."""
     alerts_path = os.path.join(REPO_ROOT, "deploy", "observability", "alerts.yml")
     dashboard_path = os.path.join(REPO_ROOT, "deploy", "observability", "grafana-dashboard.json")

@@ -4,7 +4,7 @@ Single tracking file for both projects. It links the two roadmaps, fixes the exe
 
 **Status legend:** `[ ]` not started · `[~]` in progress · `[x]` closed with a committed evidence record
 
-**Current position:** HamiCloud M1 — open.
+**Current position:** HamiCloud M4 — open.
 
 ---
 
@@ -82,11 +82,10 @@ A closed milestone that later turns out to be wrong does not get its old checkli
 - **Closed Date:** 2026-10-19
 - **Evidence Record:** [`docs/evidence/M2.md`](docs/evidence/M2.md)
 
-## A.4 M3 — Source-to-URL `[ ]`
+## A.4 M3 — Source-to-URL `[x]`
 
-- **Status:** Reopened
-- **Reopened Date:** 2026-10-01
-- **Reason:** Closure rejected in engineering review. BuildService was a simulator inventing digests/logs and writing HEALTHY and current_release_id via API; remove simulator, enforce repo allowlist, real BuildKit task, and registry push.
+- **Status:** Closed
+- **Closed Date:** 2026-10-20
 - **Evidence Record:** [`docs/evidence/M3.md`](docs/evidence/M3.md)
 
 ## A.5 M4 — Multi-user readiness `[ ]`

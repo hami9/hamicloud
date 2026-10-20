@@ -2000,3 +2000,26 @@ Following project review of `18a3a4e..816cc4a`, all required fixes were implemen
      - Web dashboard: `oxlint` 0 errors, `npm run build` clean.
      - Next milestone: **M3 — Source-to-URL**.
 
+### [2026-10-20T06:15:00Z] Phase 3 / Milestone M3: Real Isolated Source-to-URL Build Pipeline, Registry Push, Live Kubernetes Verification & Milestone Closure
+
+- **Status:** COMPLETED & VERIFIED (Milestone M3 formally CLOSED)
+- **Milestone:** P3 / M3 — Source-to-URL (`[x]` Closed)
+- **Key Deliverables & Actions:**
+  1. **Local OCI Registry & BuildKit Infrastructure (`deploy/compose/`):**
+     - Added `registry` (`registry:2` on port `5000`) and `buildkit` (`moby/buildkit:latest` on port `1234` with `deploy/compose/buildkitd.toml`) to `deploy/compose/docker-compose.yml`.
+     - Connected `hamicloud-registry` to the Kind network and configured `/etc/containerd/certs.d/localhost:5000/hosts.toml` on `desktop-control-plane` so Kubernetes pods pull built images by `@sha256:...` digest directly from the local registry.
+  2. **Go Runtime Store & Isolated Build Reconciler (`runtime/internal/`):**
+     - Added `ClaimedBuildTask` model (`runtime/internal/store/models.go`) and implemented `ClaimNextBuildRelease`, `MarkBuildSucceeded`, and `MarkBuildFailed` in `runtime/internal/store/postgres.go`.
+     - Updated `ScanUnadmittedReleases` subquery (`AND r2.image_digest != 'pending'`) so pending or `BUILD_FAILED` source builds never block or supersede active deployable releases.
+     - Implemented `BuildReconciler` and `IsolatedBuildKitRunner` in `runtime/internal/reconciler/build_reconciler.go` with isolated temporary Git cloning, detached commit SHA verification, strict repository root path traversal checks (`verifyPathWithinRoot`), OCI image build & registry push, `@sha256:...` digest extraction, and secret log redaction (`redactBuildLogs`).
+     - Wired `BuildReconciler` into `Executor.RunOnce` (`runtime/internal/executor/executor.go`) and `runtime/cmd/hamicloud-executor/main.go`.
+  3. **Live End-to-End M3 Source-to-URL Demo on Kubernetes (`scripts/demos/m3_source_to_url.ps1`):**
+     - **Commit 1** (`23b43db154d2f0e27c420b6fb019673baf61821b`) -> Release 1 (`7fd3f352-c99f-4622-8b08-6e3d2f343880`) -> built & pushed `localhost:5000/m3-live-19be1ded/m3-web-19be1ded@sha256:e2e2503c715a3633076f8838100cafcf6d88eb9a14dc992de20959f6a92b868b` -> deployed to Kubernetes pod `10.244.0.3` -> verified HTTP response `"HamiCloud M3 Commit 1"` -> `HEALTHY`.
+     - **Commit 2** (`b5b98ec00c0e0f1f79448cf3354812e34c6107f9`) -> triggered via signed GitHub `push` webhook (with replay returning `DUPLICATE`) -> Release 2 (`17ad1f69-d4b6-43b2-adfc-129406af19dc`) -> built & pushed `localhost:5000/m3-live-19be1ded/m3-web-19be1ded@sha256:a8648530fb397b1320c549e04ca02c7beab08e1dae73dded4987130f734345f5` -> deployed to Kubernetes pod `10.244.0.4` -> verified HTTP response `"HamiCloud M3 Commit 2"` -> `HEALTHY` (Release 1 `SUPERSEDED`).
+     - **Commit 3** (`9ee38be281e0ed42a7588818e66638a201d16891`, broken `Dockerfile`) -> Release 3 (`4ac300b7-91ba-46f4-87bb-0e629a9aea0a`) -> `BUILD_FAILED` with captured reason and logs, while `current_release_id` remained Release 2 (`17ad1f69-d4b6-43b2-adfc-129406af19dc`, `HEALTHY`) and pod `10.244.0.4` continued serving `"HamiCloud M3 Commit 2"`.
+     - Raw outputs saved in `docs/evidence/demos/raw/m3-source-to-url/`.
+     - Updated `docs/evidence/M3.md` and collapsed M3 in `MASTER-PLAN.md` §A.4 (`Current position: HamiCloud M4 — open`).
+  4. **Verification Gates:**
+     - `pytest apps/api/tests/test_m3_source_to_url.py apps/api/tests/test_contracts.py`: **15 passed**.
+     - `go test -count=1 ./...` in `runtime/`: **100% pass across all 7 packages**.
+     - Next milestone: **M4 — Multi-user readiness**.

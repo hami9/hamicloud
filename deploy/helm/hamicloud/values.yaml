@@ -80,4 +80,5 @@ config:
 
 secret:
   existingSecret: ""
-  runtimeDatabaseUrl: "postgres://hamicloud:hamicloud_secret@postgres.hamicloud-system.svc.cluster.local:5432/hamicloud?sslmode=disable"
+  # Required unless existingSecret is set, e.g. postgres://user:pass@host:5432/hamicloud?sslmode=require
+  runtimeDatabaseUrl: ""

@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: hamicloud-api
+  namespace: "{{ .Values.global.namespace }}"
+  labels:
+    app.kubernetes.io/name: hamicloud-api
+    app.kubernetes.io/instance: "{{ .Release.Name }}"
+    app.kubernetes.io/component: control-plane-api
+    app.kubernetes.io/part-of: hamicloud
+spec:
+  type: "{{ .Values.api.service.type }}"
+  ports:
+    - port: 8000
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    app.kubernetes.io/name: hamicloud-api
+    app.kubernetes.io/instance: "{{ .Release.Name }}"

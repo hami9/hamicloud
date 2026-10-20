@@ -1,0 +1,17 @@
+﻿{
+    "version":  "1.0.0",
+    "timestamp":  "2026-10-20T10:47:02Z",
+    "milestones_verified":  [
+                                "M0",
+                                "M1",
+                                "M2",
+                                "M3",
+                                "M4",
+                                "M5",
+                                "M6"
+                            ],
+    "helm_chart":  "deploy/helm/hamicloud (v1.0.0)",
+    "security_review_high_open":  0,
+    "security_review_critical_open":  0,
+    "status":  "PASS"
+}

@@ -1,0 +1,14 @@
+apiVersion: v2
+name: hamicloud
+description: Single-Tenant Cloud Runtime & Orchestration Platform (Control Plane, Scheduler, and Runtime Executor)
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+keywords:
+  - hamicloud
+  - paas
+  - kubernetes
+  - orchestration
+  - runtime
+maintainers:
+  - name: HamiCloud Engineering

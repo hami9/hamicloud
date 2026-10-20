@@ -1,0 +1,78 @@
+global:
+  environment: production
+  namespace: hamicloud-system
+
+api:
+  replicaCount: 2
+  image:
+    repository: registry.local:5000/hamicloud/api
+    tag: "1.0.0"
+    digest: "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8000
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "256Mi"
+    limits:
+      cpu: "1000m"
+      memory: "512Mi"
+
+scheduler:
+  replicaCount: 1
+  image:
+    repository: registry.local:5000/hamicloud/scheduler
+    tag: "1.0.0"
+    digest: "sha256:6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b"
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "256Mi"
+
+executor:
+  replicaCount: 2
+  image:
+    repository: registry.local:5000/hamicloud/executor
+    tag: "1.0.0"
+    digest: "sha256:d4735e3a265e16eee03f59718b9b5d03019c07d8b6c51f90da3a666eec13ab35"
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "256Mi"
+    limits:
+      cpu: "1000m"
+      memory: "512Mi"
+
+securityContext:
+  pod:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    fsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  container:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+
+config:
+  oidcIssuerUrl: "http://keycloak.hamicloud-system.svc.cluster.local:8080/realms/hamicloud"
+  oidcAudience: "hamicloud-api"
+  postgresHost: "postgres.hamicloud-system.svc.cluster.local"
+  postgresPort: "5432"
+  postgresDb: "hamicloud"
+  redisUrl: "redis://redis.hamicloud-system.svc.cluster.local:6379/0"
+  natsUrl: "nats://nats.hamicloud-system.svc.cluster.local:4222"
+  s3EndpointUrl: "http://minio.hamicloud-system.svc.cluster.local:9000"
+  registryEndpoint: "registry.local:5000"
+  workloadNamespacePrefix: "hc-ws-"

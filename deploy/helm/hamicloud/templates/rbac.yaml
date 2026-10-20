@@ -1,0 +1,66 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: hamicloud-api
+  namespace: "{{ .Values.global.namespace }}"
+  labels:
+    app.kubernetes.io/name: hamicloud-api
+    app.kubernetes.io/part-of: hamicloud
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: hamicloud-scheduler
+  namespace: "{{ .Values.global.namespace }}"
+  labels:
+    app.kubernetes.io/name: hamicloud-scheduler
+    app.kubernetes.io/part-of: hamicloud
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: hamicloud-executor
+  namespace: "{{ .Values.global.namespace }}"
+  labels:
+    app.kubernetes.io/name: hamicloud-executor
+    app.kubernetes.io/part-of: hamicloud
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: hamicloud-executor-role
+  labels:
+    app.kubernetes.io/name: hamicloud-executor
+    app.kubernetes.io/part-of: hamicloud
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces", "pods", "pods/log", "services", "resourcequotas", "limitranges", "configmaps", "secrets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies", "ingresses"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: hamicloud-executor-binding
+  labels:
+    app.kubernetes.io/name: hamicloud-executor
+    app.kubernetes.io/part-of: hamicloud
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: hamicloud-executor-role
+subjects:
+  - kind: ServiceAccount
+    name: hamicloud-executor
+    namespace: "{{ .Values.global.namespace }}"

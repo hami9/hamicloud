@@ -91,6 +91,7 @@ apps/web/.vite/
 Thumbs.db
 
 # Platform data
+data/
 postgres_data/
 redis_data/
 nats_data/

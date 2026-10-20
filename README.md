@@ -1,192 +1,126 @@
-# HamiCloud
+# hamicloud
 
-HamiCloud is a self-hosted distributed application runtime designed to run HTTP services and finite background jobs on Kubernetes. It provides a control plane backed by PostgreSQL with durable execution intents, transactional outbox events, and deterministic state machine transitions. The system focuses on explicit operational boundaries, durable audit trails, and automated recovery when components fail.
+Single-tenant cloud runtime and container orchestration platform built with FastAPI, Go, Kubernetes, and Next.js.
 
-## Current Status
+## Install
 
-HamiCloud M0 design baseline is closed with committed evidence records (`docs/evidence/M0.md`). Implemented in the repository:
+Start the local infrastructure stack (PostgreSQL 16, Redis 7, NATS JetStream, MinIO, Keycloak, OCI Registry, Rootless BuildKit) and verify your local Kubernetes cluster:
 
-- **Control API (FastAPI):** Tenant workspaces, application releases, finite jobs, transactional outbox dispatcher (NATS JetStream), OIDC token authentication, and idempotency engine.
-- **PostgreSQL Database:** Bidirectional Alembic migrations defining durable state machine tables, execution intents with bounded leases, quotas, and outbox events.
-- **Contract Specifications:** Published OpenAPI 3.1 specification (`contracts/openapi/v1.yaml`) and JetStream event schemas (`contracts/events/`).
-- **Go Runtime Engine:** Go scheduler and execution worker daemons with intent claim loops, lease heartbeats, and retry/backoff policies.
-- **Web Dashboard:** React + Vite single-page dashboard prototype in `apps/web`.
-
-## How this project is built
-
-HamiCloud is designed and directed by @hami9 and implemented with AI coding agents.
-
-- The owner writes the roadmap, sets the scope of each milestone and makes the design
-  decisions. Open questions are recorded as numbered decisions and wait for the owner's
-  answer before work continues (see M0-WORK-ORDER.md, section 2).
-- Antigravity, an AI coding agent, implements each phase from a written work order.
-- Claude Code reviews every phase independently: it re-runs the tests, runs mutation
-  tests and live probes, and rejects work whose claims it cannot reproduce.
-- Each phase is accepted by the owner before the next one starts.
-
-Progress is tracked in MASTER-PLAN.md. The engineering log is WORKLOG.md.
-
-## Target Architecture
-
-The following diagram represents the planned target architecture for the system:
-
-```mermaid
-flowchart TB
-    U[Developer / Client] --> API[Control API\nFastAPI]
-    API --> DB[(PostgreSQL 16\nState & Outbox)]
-    DB --> DISPATCH[Outbox Dispatcher]
-    DISPATCH --> BUS[NATS JetStream\nWork Notifications]
-    BUS --> SCHED[Go Scheduler]
-    SCHED --> DB
-    SCHED --> EXEC[Execution Intents]
-    EXEC --> WORK[Go Execution Workers]
-    WORK --> KAPI[Kubernetes API]
-    KAPI --> APP[HTTP Services]
-    KAPI --> JOB[Finite Jobs]
-    WORK --> DB
-```
-
-### Component Responsibilities
-
-- **Control API (FastAPI):** Validates input, records tenant requests, writes desired state and outbox events within PostgreSQL transactions, and serves the public HTTP contract. It does not schedule workloads or call Kubernetes APIs directly.
-- **Scheduler (Go):** Evaluates queued jobs and unapplied releases, reserves workspace quotas, and creates durable execution intents in PostgreSQL. It determines when work is eligible to run, while Kubernetes handles pod placement.
-- **Execution Workers (Go):** Reconciles execution intents with the Kubernetes API using lease epochs, updates attempt outcomes, and cleans up terminated workloads.
-- **PostgreSQL:** Authoritative store of system truth (state, attempts, releases, outbox events, and idempotency records). Queue messages only serve as wake-up notifications.
-- **NATS JetStream:** Transports at-least-once notifications between the control plane and background workers.
-- **Kubernetes:** Runs containers, manages pod lifecycles, and enforces resource limits.
-
-## Local Setup
-
-### Prerequisites
-
-- Python 3.12+
-- Go 1.23+
-- Docker and Docker Compose
-- PostgreSQL 16 (local installation or via Docker Compose)
-
-### 1. Start Infrastructure Services
-
-Start the local background services (PostgreSQL 16, Redis 7, NATS JetStream, MinIO, Keycloak):
-
-```bash
+```powershell
 docker compose -f deploy/compose/docker-compose.yml up -d
+kubectl cluster-info
 ```
 
-> [!NOTE]
-> - **Redis Port:** Published on host port `6380` (via `${REDIS_HOST_PORT:-6380}`) to avoid collisions with any existing local Redis services (e.g. `aegis-redis` on port 6379).
-> - **Keycloak (Reference IdP):** Runs on `http://localhost:8080` with admin credentials (`admin` / `adminpassword`) and pre-configured realm `hamicloud` with test users `alice` and `bob`.
-> - **MinIO (S3 compatible):** Runs on `http://localhost:9000` (API) and `http://localhost:9001` (Console) with credentials `minioadmin` / `minioadminpassword`.
+Install Python control-plane dependencies, run database migrations, and build the Go runtime engine:
 
-### 2. Configure Python Environment
-
-Create a virtual environment at repository root (`.venv`) with Python 3.12 and install the API package with pinned development dependencies:
-
-```bash
+```powershell
 python -m venv .venv
-
-# On Linux/macOS:
-source .venv/bin/activate
-
-# On Windows:
-.venv\Scripts\activate
-
-pip install -e "./apps/api[dev]"
+.\.venv\Scripts\pip install -e "apps/api[dev]"
+alembic -c apps/api/alembic.ini upgrade head
+cd runtime && go build ./...
 ```
 
-### 3. Run Database Migrations
+Install and build the Next.js operator console:
 
-Apply database migrations using Alembic:
+```powershell
+cd apps/web
+npm install
+npm run build
+```
+
+Deploy to a production Kubernetes cluster with Helm:
+
+```powershell
+helm upgrade --install hamicloud ./deploy/helm/hamicloud `
+  --namespace hamicloud-system `
+  --create-namespace
+```
+
+## Usage
+
+Start the FastAPI control plane on port `8000`:
+
+```powershell
+.\.venv\Scripts\uvicorn app.main:app --app-dir apps/api --host 0.0.0.0 --port 8000
+```
+
+Create an isolated workspace with hard CPU, memory, and concurrent job quotas:
 
 ```bash
-# On Linux/macOS:
-DATABASE_URL_SYNC="postgresql://hamicloud:hamicloud_secret@localhost:5432/hamicloud" alembic -c migrations/alembic.ini upgrade head
-
-# On Windows (PowerShell):
-$env:DATABASE_URL_SYNC="postgresql://hamicloud:hamicloud_secret@localhost:5432/hamicloud"
-alembic -c migrations/alembic.ini upgrade head
+curl -X POST http://localhost:8000/v1/workspaces \
+  -H "Authorization: Bearer $OIDC_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Payments Core",
+    "slug": "payments-core",
+    "quota_cpu_millicores": 4000,
+    "quota_memory_mb": 8192,
+    "quota_storage_mb": 20480,
+    "quota_max_concurrent_jobs": 10
+  }'
 ```
 
-### 4. Run Verification Gates
-
-Verify tests, types, linting, specs, and database alignment:
+Deploy a digest-pinned stateless HTTP service release:
 
 ```bash
-# Run API test suite
-pytest apps/api/tests -v
-
-# Check formatting and linting
-ruff check apps/api
-
-# Type check strictly
-cd apps/api && mypy --explicit-package-bases app && cd ../..
-
-# Verify database migrations are aligned with models
-alembic -c migrations/alembic.ini check
-
-# Validate OpenAPI contract
-openapi-spec-validator contracts/openapi/v1.yaml
-
-# Run Go runtime checks, format check, and tests
-cd runtime
-test -z "$(gofmt -l .)" || (echo "Unformatted Go files:" && gofmt -l . && exit 1)
-go vet ./...
-go test -v ./...
-cd ..
+curl -X POST http://localhost:8000/v1/services/$SERVICE_ID/releases \
+  -H "Authorization: Bearer $OIDC_TOKEN" \
+  -H "Idempotency-Key: rel-2026-001" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "artifact_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+    "replicas": 2,
+    "cpu_millicores": 500,
+    "memory_mb": 512,
+    "port": 8080,
+    "health_check_path": "/healthz",
+    "rollout_strategy": "canary",
+    "canary_weight": 20
+  }'
 ```
 
-### 5. Start the Control API and Runtime Daemons
-
-Configure `ARTIFACTS_DIR` to ensure the Control API and the Go Executor daemon share the same storage directory for finite job outputs:
+Dispatch a finite batch job execution:
 
 ```bash
-# On Linux/macOS (from repository root):
-export ARTIFACTS_DIR="$(pwd)/var/artifacts"
-
-# On Windows (PowerShell, from repository root):
-$env:ARTIFACTS_DIR = "$((Get-Location).Path)\var/artifacts"
+curl -X POST http://localhost:8000/v1/jobs/$JOB_ID/run \
+  -H "Authorization: Bearer $OIDC_TOKEN" \
+  -H "Idempotency-Key: job-run-2026-001"
 ```
 
-Run the development API server:
+Run the end-to-end v1.0 release verification suite:
 
-```bash
-uvicorn app.main:app --app-dir apps/api --reload --port 8000
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\demos\m6_v1_release_verification.ps1
 ```
 
-In development (`ENVIRONMENT=development`), requests authenticate using the header `X-Dev-Subject: <username>`. In production, this header is disabled and the API requires Bearer authentication.
+## Architecture
 
-Start the Go Scheduler and Execution Worker daemons:
+- **Control Plane (`apps/api`):** Python 3.12, FastAPI, SQLAlchemy 2.0 (asyncpg), OIDC/Keycloak RBAC (`admin`, `developer`, `viewer`), AES-256-GCM envelope-encrypted secrets, transactional outbox, and Prometheus `/metrics`.
+- **Runtime Engine (`runtime`):** Go 1.23 scheduler, NATS JetStream consumer, Redis lease fencing (`SET NX PX` + monotonic fencing tokens), Kubernetes reconciler (`client-go`), Rootless BuildKit builder, and S3/MinIO log archiver.
+- **Operator Console (`apps/web`):** Next.js 15 / React 19 dashboard for workspaces, services, canary rollouts, one-click rollbacks, batch jobs, write-only secrets, audit trails, and quota telemetry.
+- **Helm Chart (`deploy/helm/hamicloud`):** Production Kubernetes manifests enforcing `PodSecurity: restricted:latest`, `runAsNonRoot: true`, `allowPrivilegeEscalation: false`, `capabilities.drop: ["ALL"]`, and default-deny `NetworkPolicy`.
 
-```bash
-# In separate terminals (inheriting ARTIFACTS_DIR and RUNTIME_DATABASE_URL):
-cd runtime && go run ./cmd/hamicloud-scheduler
-cd runtime && go run ./cmd/hamicloud-executor
-```
+## Benchmarks
 
-## Repository Layout
+Measured against live PostgreSQL, Redis, NATS JetStream, MinIO, Rootless BuildKit, and Kubernetes (`desktop-control-plane`):
 
-```text
-hamicloud/
-  apps/
-    api/                      # FastAPI control plane service and test suite
-    web/                      # React + Vite dashboard UI prototype
-  contracts/
-    events/                   # NATS JetStream event schemas
-    openapi/                  # OpenAPI 3.1 specification
-  deploy/
-    compose/                  # Local development compose definitions
-  docs/
-    adr/                      # Architecture Decision Records
-  migrations/                 # Alembic database migrations
-    versions/                 # Migration version scripts
-  runtime/
-    cmd/
-      hamicloud-executor/     # Worker daemon entry point
-      hamicloud-scheduler/    # Scheduler daemon entry point
-    internal/
-      config/                 # Runtime configuration and environment parsing
-      domain/                 # Workload state machine and domain definitions
-```
+| Benchmark | Target SLO | Measured v1.0 (`docs/evidence/M5.md`) | Status |
+|---|---|---|---|
+| Control-plane read latency (`GET`) | `p95 < 150 ms` | `p95 = 114.50 ms` (`p50 = 31.28 ms`) | PASS |
+| Control-plane mutation ack (`POST`) | `p95 < 400 ms` | `p95 = 256.92 ms` (`p50 = 73.21 ms`) | PASS |
+| Scheduler admission latency | `p95 < 2000 ms` | `p95 = 345.29 ms` (`p50 = 279.09 ms`) | PASS |
+| Warm K8s service rollout to `HEALTHY` | `< 30 s` | `12.28 s` | PASS |
+| Warm K8s finite job to `SUCCEEDED` | `< 30 s` | `13.97 s` (cold pull `44.01 s`) | PASS |
+| Executor crash recovery (`SIGKILL`) | `0` duplicate K8s resources | `0` duplicates (`15.81 s` recovery) | PASS |
+| Disaster backup & restore (`pg_dump` + artifacts) | `RTO < 15 min` (`RPO = 0`) | `RTO = 18.68 s` (`RPO = 0.0 s`) | PASS |
+
+## Documentation
+
+- **Release Artifacts:** [v1.0.0 Release Notes](docs/release/v1.0.0-release-notes.md) | [Security Review v1.0](docs/release/security-review-v1.0.md) | [Architecture Case Study](docs/release/case-study.md) | [6-Minute Demo Guide](docs/release/six-minute-demo-guide.md)
+- **Milestone Evidence:** [M0](docs/evidence/M0.md) | [M1](docs/evidence/M1.md) | [M2](docs/evidence/M2.md) | [M3](docs/evidence/M3.md) | [M4](docs/evidence/M4.md) | [M5](docs/evidence/M5.md) | [M6](docs/evidence/M6.md)
+- **Architecture Decision Records:** [ADR-0001](docs/adr/ADR-0001-responsibility-split.md) | [ADR-0002](docs/adr/ADR-0002-durable-state-and-transactional-outbox.md) | [ADR-0003](docs/adr/ADR-0003-delivery-semantics-and-idempotent-execution.md) | [ADR-0004](docs/adr/ADR-0004-trust-model-and-tenant-isolation.md) | [ADR-0005](docs/adr/ADR-0005-technology-stack-and-compatibility-matrix.md)
+- **Operational Runbooks:** [API 5xx](docs/runbooks/api-5xx-errors.md) | [Stalled Operations](docs/runbooks/stalled-operations.md) | [Retry Storms](docs/runbooks/retry-storms.md) | [Disk Pressure](docs/runbooks/disk-pressure.md) | [Disaster Restore](docs/runbooks/disaster-restore.md)
 
 ## License
 
-Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.
+MIT

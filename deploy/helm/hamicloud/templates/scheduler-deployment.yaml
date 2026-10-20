@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hamicloud-scheduler
+  namespace: "{{ .Values.global.namespace }}"
+  labels:
+    app.kubernetes.io/name: hamicloud-scheduler
+    app.kubernetes.io/instance: "{{ .Release.Name }}"
+    app.kubernetes.io/version: "{{ .Chart.AppVersion }}"
+    app.kubernetes.io/component: scheduler
+    app.kubernetes.io/part-of: hamicloud
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: hamicloud-scheduler
+      app.kubernetes.io/instance: "{{ .Release.Name }}"
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: hamicloud-scheduler
+        app.kubernetes.io/instance: "{{ .Release.Name }}"
+        app.kubernetes.io/component: scheduler
+    spec:
+      serviceAccountName: hamicloud-scheduler
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: scheduler
+          image: "{{ .Values.scheduler.image.repository }}@{{ .Values.scheduler.image.digest }}"
+          imagePullPolicy: "{{ .Values.scheduler.image.pullPolicy }}"
+          envFrom:
+            - configMapRef:
+                name: hamicloud-config
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: "{{ .Values.scheduler.resources.requests.cpu }}"
+              memory: "{{ .Values.scheduler.resources.requests.memory }}"
+            limits:
+              cpu: "{{ .Values.scheduler.resources.limits.cpu }}"
+              memory: "{{ .Values.scheduler.resources.limits.memory }}"

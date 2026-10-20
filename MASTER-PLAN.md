@@ -4,7 +4,7 @@ Single tracking file for both projects. It links the two roadmaps, fixes the exe
 
 **Status legend:** `[ ]` not started · `[~]` in progress · `[x]` closed with a committed evidence record
 
-**Current position:** HamiCloud M6 — open.
+**Current position:** HamiCloud M6 — closed (HamiCloud v1.0 complete).
 
 ---
 
@@ -100,18 +100,11 @@ A closed milestone that later turns out to be wrong does not get its old checkli
 - **Closed Date:** 2026-10-20
 - **Evidence Record:** [`docs/evidence/M5.md`](docs/evidence/M5.md)
 
-## A.7 M6 — HamiCloud v1.0 `[ ]`
+## A.7 M6 — HamiCloud v1.0 `[x]`
 
-P6, 20–28 hours. Helm release, clean install/upgrade checks, CI promotion, documentation, demo, limitations, security review closure.
-
-- [ ] M0–M6 all have linked evidence; MVP journeys work from a clean installation.
-- [ ] Source-to-image-to-URL works for an approved connected repository.
-- [ ] Idempotency, retries, cancellation, DLQ inspection and rollback behave as documented.
-- [ ] Scheduler/worker failure tests preserve consistent logical state.
-- [ ] CI validates the release commit; the same image digests are promoted and smoke-tested.
-- [ ] No unresolved critical/high security finding without an explicit scoped assessment. Any cross-tenant exposure or host privilege escalation blocks release.
-- [ ] README, demo, release notes and limitations complete.
-- [ ] Evidence record committed.
+- **Status:** Closed
+- **Closed Date:** 2026-10-20
+- **Evidence Record:** [`docs/evidence/M6.md`](docs/evidence/M6.md)
 
 **Gate:** HamiKnowledge does not start before this box is ticked.
 

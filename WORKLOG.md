@@ -2079,3 +2079,19 @@ Following project review of `18a3a4e..816cc4a`, all required fixes were implemen
      - `go test -count=1 ./...` in `runtime/`: **100% pass across all 7 packages**.
      - `npx oxlint src && npm run build` in `apps/web`: **0 warnings, 0 errors**.
      - Next milestone: **M6 — HamiCloud v1.0**.
+
+### [2026-10-20T10:50:00Z] Phase 6 / Milestone M6: HamiCloud v1.0 Helm Release, Security Review Closure, Portfolio Case Study & Final Release Verification
+
+- **Status:** COMPLETED & VERIFIED (Milestone M6 formally CLOSED — HamiCloud v1.0 Complete)
+- **Milestone:** P6 / M6 — HamiCloud v1.0 (`[x]` Closed)
+- **Key Deliverables & Actions:**
+  1. **Production Helm Chart Release (`deploy/helm/hamicloud/`):**
+     - Created `Chart.yaml` (`apiVersion: v2`, `name: hamicloud`, `version: 1.0.0`, `appVersion: "1.0.0"`) and `values.yaml` (SHA-256 digest-pinned images for `api`, `scheduler`, and `executor`, resource requests/limits, and restricted pod/container securityContext defaults).
+     - Created Kubernetes templates (`templates/api-deployment.yaml`, `templates/api-service.yaml`, `templates/scheduler-deployment.yaml`, `templates/executor-deployment.yaml`, `templates/configmap.yaml`, `templates/rbac.yaml`) enforcing `runAsNonRoot: true`, `allowPrivilegeEscalation: false`, `readOnlyRootFilesystem: true`, `capabilities.drop: ["ALL"]`, and `seccompProfile: RuntimeDefault`.
+  2. **Release Artifacts, Security Closure & Case Study (`docs/release/`, `README.md`):**
+     - Published `docs/release/v1.0.0-release-notes.md`, `docs/release/security-review-v1.0.md` (`0` unresolved Critical/High findings), `docs/release/case-study.md` (`ADR-0001` through `ADR-0005` trade-offs and M3/M5 failure drill postmortems), and `docs/release/six-minute-demo-guide.md`.
+     - Updated `README.md` for `v1.0.0` with install/usage instructions, sample API requests, architecture overview, measured M5 benchmarks, and links to M0–M6 evidence records, ADRs, and runbooks.
+  3. **Automated M6 Release Verification (`apps/api/tests/test_m6_v1_release.py`, `scripts/demos/m6_v1_release_verification.ps1`):**
+     - Added `apps/api/tests/test_m6_v1_release.py` (**3 passed**) validating Helm chart structure/security posture, release documentation & security closure, and completeness of M0–M6 evidence records, ADRs, and runbooks.
+     - Executed `scripts/demos/m6_v1_release_verification.ps1`, archiving raw outputs in `docs/evidence/demos/raw/m6-v1-release/` (`01-helm-chart-validation.txt`, `02-pytest-full-suite.txt` with **132 passed**, `03-go-runtime-tests.txt` with **100% pass across all Go runtime packages**, and `m6_release_summary.json`).
+     - Published `docs/evidence/M6.md` and closed `A.7 M6` in `MASTER-PLAN.md` (`Current position: HamiCloud M6 — closed (HamiCloud v1.0 complete).`).

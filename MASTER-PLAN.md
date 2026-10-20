@@ -4,7 +4,7 @@ Single tracking file for both projects. It links the two roadmaps, fixes the exe
 
 **Status legend:** `[ ]` not started · `[~]` in progress · `[x]` closed with a committed evidence record
 
-**Current position:** HamiCloud M4 — open.
+**Current position:** HamiCloud M5 — open.
 
 ---
 
@@ -88,14 +88,11 @@ A closed milestone that later turns out to be wrong does not get its old checkli
 - **Closed Date:** 2026-10-20
 - **Evidence Record:** [`docs/evidence/M3.md`](docs/evidence/M3.md)
 
-## A.5 M4 — Multi-user readiness `[ ]`
+## A.5 M4 — Multi-user readiness `[x]`
 
-P4, 36–48 hours. Full RBAC, namespace policy, resource quotas, Redis rate limits, encrypted secrets, fair admission, audit export, network isolation.
-
-- [ ] Two-workspace negative tests pass across API, logs, artifacts, secrets and network.
-- [ ] A noisy workspace cannot bypass admission limits.
-- [ ] Evidence record committed.
-- [ ] **Gate:** until M4 passes, all execution stays in a private environment with trusted users and reviewed workloads.
+- **Status:** Closed
+- **Closed Date:** 2026-10-20
+- **Evidence Record:** [`docs/evidence/M4.md`](docs/evidence/M4.md)
 
 ## A.6 M5 — Operational evidence `[ ]`
 

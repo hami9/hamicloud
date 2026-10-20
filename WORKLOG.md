@@ -2023,3 +2023,29 @@ Following project review of `18a3a4e..816cc4a`, all required fixes were implemen
      - `pytest apps/api/tests/test_m3_source_to_url.py apps/api/tests/test_contracts.py`: **15 passed**.
      - `go test -count=1 ./...` in `runtime/`: **100% pass across all 7 packages**.
      - Next milestone: **M4 — Multi-user readiness**.
+
+### [2026-10-20T09:50:00Z] Phase 4 / Milestone M4: Multi-User Readiness, 4-Role RBAC, AES-256-GCM Secrets, Quotas, Fair Scheduler, Kubernetes Isolation & Milestone Closure
+
+- **Status:** COMPLETED & VERIFIED (Milestone M4 formally CLOSED)
+- **Milestone:** P4 / M4 — Multi-user readiness (`[x]` Closed)
+- **Key Deliverables & Actions:**
+  1. **Control Plane RBAC, Encrypted Secrets, Quotas, Rate Limits & Audit Export (`apps/api/app/`):**
+     - Added migration `migrations/versions/0008_add_admin_workspace_role.py` updating `ck_workspace_memberships_role` to 4 roles (`VIEWER < DEVELOPER < ADMIN < OWNER`) and upgraded both `hamicloud` and `hamicloud_test`.
+     - Hardened `apps/api/app/core/crypto.py` with `SecretDecryptionError` and `workspace_id:secret_name` AAD binding for AES-256-GCM secret encryption and key rotation (`secret.created`, `secret.rotated`, `secret.deleted` audit actions).
+     - Enforced `ADMIN` role on `DELETE /v1/workspaces/{workspace_id}/secrets/{secret_name}` (HTTP 204) and `GET /v1/workspaces/{workspace_id}/audit`.
+     - Published all M4 endpoints (`/members`, `/secrets`, `/quotas`, `/audit`) and schemas (`WorkspaceMemberResponse`, `SecretResponse`, `WorkspaceQuotaSummaryResponse`, `AuditEventListResponse`) in `contracts/openapi/v1.yaml`.
+  2. **Go Fair Scheduler & Kubernetes Tenant/Network Isolation (`runtime/internal/`):**
+     - Verified workspace round-robin fair job scanning (`ROW_NUMBER() OVER (PARTITION BY j.workspace_id ...)`), per-workspace active job concurrency limits (`MAX_CONCURRENT_JOBS_PER_WORKSPACE`), and transactional `quota_reservations` tracking + automatic release on terminal states (`runtime/internal/store/postgres.go`).
+     - Implemented `EnsureWorkspaceIsolation` and `hardenedContainerSecurityContext` in `runtime/internal/reconciler/kube_runner.go` reconciling per-workspace `NetworkPolicy` (`hc-netpol-{workspace_id}`), namespace `LimitRange` (`hc-workload-limits`), and restricted container `SecurityContext` (`allowPrivilegeEscalation: false`, `capabilities.drop: ["ALL"]`, `seccompProfile.type: RuntimeDefault`).
+  3. **Web Dashboard Governance & Security View (`apps/web/src/`):**
+     - Added **Governance & Security** tab to `apps/web/src/App.tsx` and typed API client methods in `apps/web/src/api.ts` for Workspace Quotas & Active Reservations, Encrypted Secrets (`AES-256-GCM`), 4-role Workspace Members RBAC, and Audit Trail Export.
+  4. **Automated M4 Test Suites & Live Kubernetes Multi-User Isolation Demo:**
+     - Added `apps/api/tests/test_m4_multi_user_readiness.py` (**4 passed**: two-workspace negative isolation matrix across 18 routes, 4-role RBAC + last-owner protection, AES-256-GCM + AAD tamper detection, noisy workspace quota & Redis rate limit isolation).
+     - Added `TestPostgresStore_FairScheduler_NoisyWorkspaceDoesNotStarveQuietWorkspace` in `runtime/internal/store/postgres_test.go` and `TestKubeWorkloadRunner_WorkspaceIsolation_NetworkPolicyAndSecurityContext` in `runtime/internal/reconciler/kube_runner_test.go`.
+     - Executed `scripts/demos/m4_multi_user_isolation.ps1` against live PostgreSQL, Redis, Go Scheduler/Executor, and Kind Kubernetes cluster, capturing 13 raw evidence artifacts in `docs/evidence/demos/raw/m4-multi-user-isolation/`.
+     - Committed `docs/evidence/M4.md` and closed `A.5 M4` in `MASTER-PLAN.md` (`Current position: HamiCloud M5 — open.`).
+  5. **Verification Gates:**
+     - `pytest apps/api/tests/test_m4_multi_user_readiness.py apps/api/tests/test_contracts.py apps/api/tests/test_phase3_contracts_idempotency.py`: **54 passed**.
+     - `go test -count=1 ./...` in `runtime/`: **100% pass across all 7 packages**.
+     - `npx oxlint src && npm run build` in `apps/web`: **0 warnings, 0 errors**.
+     - Next milestone: **M5 — Operational evidence**.

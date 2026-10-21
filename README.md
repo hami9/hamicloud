@@ -1,6 +1,6 @@
 # hamicloud
 
-Single-tenant cloud runtime and container orchestration platform built with FastAPI, Go, Kubernetes, and Next.js.
+Single-tenant cloud runtime and container orchestration platform built with FastAPI, Go, Kubernetes, and React.
 
 ## Install
 
@@ -20,7 +20,7 @@ alembic -c apps/api/alembic.ini upgrade head
 cd runtime && go build ./...
 ```
 
-Install and build the Next.js operator console:
+Install and build the React operator console:
 
 ```powershell
 cd apps/web
@@ -97,7 +97,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\demos\m6_v1_release_verificat
 
 - **Control Plane (`apps/api`):** Python 3.12, FastAPI, SQLAlchemy 2.0 (asyncpg), OIDC/Keycloak RBAC (`admin`, `developer`, `viewer`), AES-256-GCM envelope-encrypted secrets, transactional outbox, and Prometheus `/metrics`.
 - **Runtime Engine (`runtime`):** Go 1.23 scheduler, NATS JetStream consumer, Redis lease fencing (`SET NX PX` + monotonic fencing tokens), Kubernetes reconciler (`client-go`), Rootless BuildKit builder, and S3/MinIO log archiver.
-- **Operator Console (`apps/web`):** Next.js 15 / React 19 dashboard for workspaces, services, canary rollouts, one-click rollbacks, batch jobs, write-only secrets, audit trails, and quota telemetry.
+- **Operator Console (`apps/web`):** React 19 and Vite dashboard for workspaces, services, canary rollouts, one-click rollbacks, batch jobs, write-only secrets, audit trails, and quota telemetry.
 - **Helm Chart (`deploy/helm/hamicloud`):** Production Kubernetes manifests enforcing `PodSecurity: restricted:latest`, `runAsNonRoot: true`, `allowPrivilegeEscalation: false`, `capabilities.drop: ["ALL"]`, and default-deny `NetworkPolicy`.
 - **Runtime Health & Workload Security:** Workload pods default to non-root execution via `WORKLOAD_RUN_AS_NON_ROOT` in production while allowing unprivileged root demo containers in development. Scheduler and executor export HTTP `/healthz` (loop tick liveness) and `/readyz` (database ping & shutdown status) endpoints on `HEALTH_ADDR` (default `:8081`).
 
@@ -117,6 +117,7 @@ Measured against live PostgreSQL, Redis, NATS JetStream, MinIO, Rootless BuildKi
 
 ## Documentation
 
+- **Tenant Ecosystem:** [HamiKnowledge](https://github.com/hami9/HamiKnowledge) — multi-user RAG knowledge platform on HamiCloud
 - **Release Artifacts:** [v1.0.0 Release Notes](docs/release/v1.0.0-release-notes.md) | [Security Review v1.0](docs/release/security-review-v1.0.md) | [Architecture Case Study](docs/release/case-study.md) | [6-Minute Demo Guide](docs/release/six-minute-demo-guide.md)
 - **Milestone Evidence:** [M0](docs/evidence/M0.md) | [M1](docs/evidence/M1.md) | [M2](docs/evidence/M2.md) | [M3](docs/evidence/M3.md) | [M4](docs/evidence/M4.md) | [M5](docs/evidence/M5.md) | [M6](docs/evidence/M6.md)
 - **Architecture Decision Records:** [ADR-0001](docs/adr/ADR-0001-responsibility-split.md) | [ADR-0002](docs/adr/ADR-0002-durable-state-and-transactional-outbox.md) | [ADR-0003](docs/adr/ADR-0003-delivery-semantics-and-idempotent-execution.md) | [ADR-0004](docs/adr/ADR-0004-trust-model-and-tenant-isolation.md) | [ADR-0005](docs/adr/ADR-0005-technology-stack-and-compatibility-matrix.md)

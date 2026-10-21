@@ -1,7 +1,7 @@
 [project]
 name = "hamicloud-api"
-version = "0.1.0"
-description = "HamiCloud Control Plane API"
+version = "1.0.0"
+description = "Control plane API for HamiCloud single-tenant cloud runtime"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -53,3 +53,4 @@ select = ["E4", "E7", "E9", "F"]
 python_version = "3.12"
 strict = true
 ignore_missing_imports = true
+

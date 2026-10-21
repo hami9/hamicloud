@@ -118,6 +118,7 @@ Starts only after M6. Checklists here are exit criteria; expand each into a full
 
 - **Status:** Closed
 - **Closed Date:** 2026-10-21
+- **Repository:** [hami9/HamiKnowledge](https://github.com/hami9/HamiKnowledge)
 - **Evidence Record:** [`E:\project\HamiKnowledge\docs\evidence\A0.md`](file:///E:/project/HamiKnowledge/docs/evidence/A0.md)
 
 R0, 8–10 hours. Licensed corpus, task boundaries, dataset split, quality rubric, model/license selection, CPU feasibility check.

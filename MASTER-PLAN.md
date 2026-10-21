@@ -114,13 +114,17 @@ A closed milestone that later turns out to be wrong does not get its old checkli
 
 Starts only after M6. Checklists here are exit criteria; expand each into a full review list when you reach it, the way M0 was expanded.
 
-## B.1 A0 — Evaluation baseline defined `[ ]`
+## B.1 A0 — Evaluation baseline defined `[x]`
+
+- **Status:** Closed
+- **Closed Date:** 2026-10-21
+- **Evidence Record:** [`E:\project\HamiKnowledge\docs\evidence\A0.md`](file:///E:/project/HamiKnowledge/docs/evidence/A0.md)
 
 R0, 8–10 hours. Licensed corpus, task boundaries, dataset split, quality rubric, model/license selection, CPU feasibility check.
 
-- [ ] Development data and frozen test manifest committed.
-- [ ] Test queries, relevance labels and answer rubrics are excluded from retrieval and tuning.
-- [ ] Embedding and reranker model revisions pinned.
+- [x] Development data and frozen test manifest committed.
+- [x] Test queries, relevance labels and answer rubrics are excluded from retrieval and tuning.
+- [x] Embedding and reranker model revisions pinned.
 
 ## B.2 A1 — Searchable workspace `[ ]`
 

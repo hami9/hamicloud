@@ -127,13 +127,17 @@ R0, 8–10 hours. Licensed corpus, task boundaries, dataset split, quality rubri
 - [x] Test queries, relevance labels and answer rubrics are excluded from retrieval and tuning.
 - [x] Embedding and reranker model revisions pinned.
 
-## B.2 A1 — Searchable workspace `[ ]`
+## B.2 A1 — Searchable workspace `[x]`
+
+- **Status:** Closed
+- **Closed Date:** 2026-10-29
+- **Evidence Record:** [`E:\project\HamiKnowledge\docs\evidence\A1.md`](file:///E:/project/HamiKnowledge/docs/evidence/A1.md)
 
 R1, 14–18 hours. Auth, workspaces, uploads, parsing, chunks, source versions, ingestion jobs, lexical search, basic UI.
 
-- [ ] Two users ingest separate content; duplicates and failures behave predictably.
-- [ ] Evidence record committed.
-- [ ] **Re-estimate remaining phases using actual time spent.**
+- [x] Two users ingest separate content; duplicates and failures behave predictably.
+- [x] Evidence record committed.
+- [x] **Re-estimate remaining phases using actual time spent.**
 
 ## B.3 A2 — RAG MVP candidate `[ ]`
 

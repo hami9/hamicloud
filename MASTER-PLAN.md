@@ -4,7 +4,7 @@ Single tracking file for both projects. It links the two roadmaps, fixes the exe
 
 **Status legend:** `[ ]` not started · `[~]` in progress · `[x]` closed with a committed evidence record
 
-**Current position:** HamiCloud M6 — closed (HamiCloud v1.0 complete).
+**Current position:** Both HamiCloud (v1.0) and HamiKnowledge (v1.0) complete with all milestones closed.
 
 ---
 
@@ -139,39 +139,59 @@ R1, 14–18 hours. Auth, workspaces, uploads, parsing, chunks, source versions, 
 - [x] Evidence record committed.
 - [x] **Re-estimate remaining phases using actual time spent.**
 
-## B.3 A2 — RAG MVP candidate `[ ]`
+## B.3 A2 — RAG MVP candidate `[x]`
+
+- **Status:** Closed
+- **Closed Date:** 2026-11-01
+- **Repository:** [hami9/HamiKnowledge](https://github.com/hami9/HamiKnowledge)
+- **Evidence Record:** [`docs/evidence/A2.md`](https://github.com/hami9/HamiKnowledge/blob/main/docs/evidence/A2.md)
 
 R2, 14–20 hours. Embeddings, vector search, RRF hybrid retrieval, cross-encoder reranking, cited answers, abstention.
 
-- [ ] A question opens its supporting passage at the correct source location.
-- [ ] All retrieval variants produce evaluation output from the same framework.
-- [ ] An unsupported question produces an explicit insufficient-evidence response.
+- [x] A question opens its supporting passage at the correct source location.
+- [x] All retrieval variants produce evaluation output from the same framework.
+- [x] An unsupported question produces an explicit insufficient-evidence response.
 
-## B.4 A3 — Evaluated MVP `[ ]`
+## B.4 A3 — Evaluated MVP `[x]`
+
+- **Status:** Closed
+- **Closed Date:** 2026-11-06
+- **Repository:** [hami9/HamiKnowledge](https://github.com/hami9/HamiKnowledge)
+- **Evidence Record:** [`docs/evidence/A3.md`](https://github.com/hami9/HamiKnowledge/blob/main/docs/evidence/A3.md)
 
 R3, 16–22 hours. Frozen eval run, ablations, latency/cost measurement, tracing, budgets, regression policy.
 
-- [ ] B0–B3 compared on the same corpus, queries, model and rubric.
-- [ ] Per-language results published with paired confidence intervals.
-- [ ] The chosen default is justified by evidence, including negative results.
-- [ ] Each query shows latency and usage/cost.
+- [x] B0–B3 compared on the same corpus, queries, model and rubric.
+- [x] Per-language results published with paired confidence intervals.
+- [x] The chosen default is justified by evidence, including negative results.
+- [x] Each query shows latency and usage/cost.
 
-## B.5 A4 — Multi-user v1 candidate `[ ]`
+## B.5 A4 — Multi-user v1 candidate `[x]`
+
+- **Status:** Closed
+- **Closed Date:** 2026-11-06
+- **Repository:** [hami9/HamiKnowledge](https://github.com/hami9/HamiKnowledge)
+- **Evidence Record:** [`docs/evidence/A4.md`](https://github.com/hami9/HamiKnowledge/blob/main/docs/evidence/A4.md)
 
 R4, 10–15 hours. Deletion/reindex/revocation, concurrent budget tests, injection tests, bounded read-only tools.
 
-- [ ] Revoked content is excluded from queries, previews and scoped caches.
-- [ ] No cross-workspace exposure in the test matrix. Any confirmed exposure blocks release.
-- [ ] The tool loop respects scope, step count, deadline and budget.
-- [ ] Budgets hold under concurrent requests; no unreserved provider call.
+- [x] Revoked content is excluded from queries, previews and scoped caches.
+- [x] No cross-workspace exposure in the test matrix. Any confirmed exposure blocks release.
+- [x] The tool loop respects scope, step count, deadline and budget.
+- [x] Budgets hold under concurrent requests; no unreserved provider call.
 
-## B.6 A5 — HamiKnowledge v1.0 `[ ]`
+## B.6 A5 — HamiKnowledge v1.0 `[x]`
+
+- **Status:** Closed
+- **Closed Date:** 2026-11-06
+- **Repository:** [hami9/HamiKnowledge](https://github.com/hami9/HamiKnowledge)
+- **Evidence Record:** [`docs/evidence/A5.md`](https://github.com/hami9/HamiKnowledge/blob/main/docs/evidence/A5.md)
 
 R5, 8–10 hours. HamiCloud deployment, CI quality gates, clean quickstart, release notes, model/data documentation, demo.
 
-- [ ] HamiCloud deployment and the independent developer quickstart both work.
-- [ ] Model/data documentation, traces, measured cost/latency, CI results and demo complete.
-- [ ] Evidence record committed.
+- [x] HamiCloud deployment and the independent developer quickstart both work.
+- [x] Model/data documentation, traces, measured cost/latency, CI results and demo complete.
+- [x] Evidence record committed.
 
 ---
 

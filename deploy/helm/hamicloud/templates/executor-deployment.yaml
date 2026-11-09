@@ -24,7 +24,7 @@ spec:
     spec:
       serviceAccountName: hamicloud-executor
       automountServiceAccountToken: true
-      terminationGracePeriodSeconds: {{ .Values.executor.terminationGracePeriodSeconds | default 45 }}
+      terminationGracePeriodSeconds: 45
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
@@ -38,7 +38,7 @@ spec:
           imagePullPolicy: "{{ .Values.executor.image.pullPolicy }}"
           ports:
             - name: health
-              containerPort: {{ .Values.executor.healthPort | default 8081 }}
+              containerPort: 8081
               protocol: TCP
           envFrom:
             - configMapRef:
@@ -47,14 +47,14 @@ spec:
             - name: RUNTIME_DATABASE_URL
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.secret.existingSecret | default "hamicloud-secret" | quote }}
+                  name: "{{ .Values.secret.existingSecret | default \"hamicloud-secret\" }}"
                   key: RUNTIME_DATABASE_URL
             - name: HEALTH_ADDR
-              value: ":{{ .Values.executor.healthPort | default 8081 }}"
+              value: ":8081"
             - name: SHUTDOWN_TIMEOUT
-              value: {{ .Values.executor.shutdownTimeout | default "30s" | quote }}
+              value: "{{ .Values.executor.shutdownTimeout | default \"30s\" }}"
             - name: WORKLOAD_RUN_AS_NON_ROOT
-              value: {{ .Values.workload.runAsNonRoot | quote }}
+              value: "{{ .Values.workload.runAsNonRoot }}"
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -75,7 +75,7 @@ spec:
             periodSeconds: 10
           volumeMounts:
             - name: artifacts
-              mountPath: {{ .Values.config.artifactsDir | default "/var/artifacts" }}
+              mountPath: "{{ .Values.config.artifactsDir | default \"/var/artifacts\" }}"
             - name: tmp
               mountPath: /tmp
           resources:

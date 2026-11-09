@@ -93,6 +93,18 @@ Run the end-to-end v1.0 release verification suite:
 powershell -ExecutionPolicy Bypass -File .\scripts\demos\m6_v1_release_verification.ps1
 ```
 
+## Live Operator Console & Tenant Ecosystem
+
+### 1. HamiCloud Operator Console
+React 19 & Vite control console (`http://localhost:3000/`) for managing isolated workspaces, HTTP service releases, canary deployments, finite batch jobs, dead-letter queue (DLQ) records, and governance:
+
+![HamiCloud Operator Console](docs/assets/screenshots/hamicloud-operator-console.png)
+
+### 2. Live Tenant Application: HamiKnowledge RAG Platform
+HamiKnowledge running on HamiCloud (`http://localhost:8001/`) demonstrating multi-tenant isolated knowledge retrieval, verified citations, and per-query ledger accounting:
+
+![HamiKnowledge Interactive RAG Studio](docs/assets/screenshots/hamiknowledge-rag-studio.png)
+
 ## Architecture
 
 - **Control Plane (`apps/api`):** Python 3.12, FastAPI, SQLAlchemy 2.0 (asyncpg), OIDC/Keycloak RBAC (`admin`, `developer`, `viewer`), AES-256-GCM envelope-encrypted secrets, transactional outbox, and Prometheus `/metrics`.
